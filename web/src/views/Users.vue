@@ -23,11 +23,13 @@ async function load() {
       api('/api/admin/users'),
       api('/api/admin/routes'),
     ])
-    users.value = us
-    routes.value = rs
+    users.value = Array.isArray(us) ? us : []
+    routes.value = Array.isArray(rs) ? rs : []
     error.value = ''
   } catch (e) {
     error.value = e.message
+    users.value = []
+    routes.value = []
   }
 }
 

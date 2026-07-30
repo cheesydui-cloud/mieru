@@ -19,10 +19,12 @@ const form = reactive({
 
 async function load() {
   try {
-    nodes.value = await api('/api/admin/nodes')
+    const ns = await api('/api/admin/nodes')
+    nodes.value = Array.isArray(ns) ? ns : []
     error.value = ''
   } catch (e) {
     error.value = e.message
+    nodes.value = []
   }
 }
 

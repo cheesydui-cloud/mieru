@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.5] - 2026-07-30
+
+### Fixed
+- Routes page blank: empty `ListRoutes`/`ListNodes` returned JSON `null`, Vue crashed on `.length`. Now always `[]`.
+- Routes empty state + create modal clearer; frontend guards `Array.isArray`.
+
+### Changed
+- Install scripts default `v0.1.5`.
+
 ## [0.1.4] - 2026-07-30
 
 ### Fixed

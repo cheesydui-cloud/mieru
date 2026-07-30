@@ -14,8 +14,8 @@ import (
 	"github.com/cheesydui-cloud/mieru/internal/store"
 )
 
-// set by -ldflags "-X main.Version=v0.1.4"
-var Version = "v0.1.4"
+// set by -ldflags "-X main.Version=v0.1.5"
+var Version = "v0.1.5"
 
 func main() {
 	resetAdmin := flag.Bool("reset-admin", false, "reset admin password from PANEL_ADMIN_* env and exit")

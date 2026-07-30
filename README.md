@@ -49,7 +49,7 @@ curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/
 
 ```bash
 curl -s http://127.0.0.1:8080/api/version
-# 期望含 "version":"v0.1.4" 和 "ui":"embedded"
+# 期望含 "version":"v0.1.5" 和 "ui":"embedded"
 
 curl -sI http://127.0.0.1:8080/ | head -3
 # 期望 HTTP/1.1 200
@@ -122,8 +122,8 @@ curl -s http://127.0.0.1:8080/api/version
 
 ## 发布包（仅 Linux）
 
-- [linux-amd64](https://github.com/cheesydui-cloud/mieru/releases/download/v0.1.4/mieru-panel-v0.1.4-linux-amd64.tar.gz)
-- [linux-arm64](https://github.com/cheesydui-cloud/mieru/releases/download/v0.1.4/mieru-panel-v0.1.4-linux-arm64.tar.gz)
+- [linux-amd64](https://github.com/cheesydui-cloud/mieru/releases/download/v0.1.5/mieru-panel-v0.1.5-linux-amd64.tar.gz)
+- [linux-arm64](https://github.com/cheesydui-cloud/mieru/releases/download/v0.1.5/mieru-panel-v0.1.5-linux-arm64.tar.gz)
 
 ## License
 

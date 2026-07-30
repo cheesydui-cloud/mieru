@@ -287,7 +287,7 @@ func (s *Store) ListNodes() ([]model.Node, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []model.Node
+	out := make([]model.Node, 0)
 	for rows.Next() {
 		n, err := scanNodeRows(rows)
 		if err != nil {
@@ -381,7 +381,7 @@ func (s *Store) ListRoutes() ([]model.Route, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []model.Route
+	out := make([]model.Route, 0)
 	for rows.Next() {
 		var r model.Route
 		var en int
@@ -493,7 +493,7 @@ func (s *Store) ListUsers() ([]model.User, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []model.User
+	out := make([]model.User, 0)
 	for rows.Next() {
 		u, err := scanUser(rows)
 		if err != nil {
@@ -553,7 +553,7 @@ func (s *Store) ListActiveProxyUsers() ([]model.User, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []model.User
+	out := make([]model.User, 0)
 	for rows.Next() {
 		u, err := scanUser(rows)
 		if err != nil {
@@ -645,7 +645,7 @@ func (s *Store) ListAudit(limit int) ([]model.AuditLog, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []model.AuditLog
+	out := make([]model.AuditLog, 0)
 	for rows.Next() {
 		var a model.AuditLog
 		var c string
