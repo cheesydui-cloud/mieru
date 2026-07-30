@@ -1,0 +1,187 @@
+package model
+
+import "time"
+
+// Node roles are generic — not bound to any cloud vendor.
+const (
+	RoleEntry  = "entry"
+	RoleRelay  = "relay"
+	RoleExit   = "exit"
+	RoleHybrid = "hybrid"
+)
+
+const (
+	StatusActive   = "active"
+	StatusDisabled = "disabled"
+	StatusExpired  = "expired"
+	StatusOverQuota = "over_quota"
+	StatusOffline  = "offline"
+	StatusOnline   = "online"
+	StatusDegraded = "degraded"
+)
+
+type Admin struct {
+	ID           int64     `json:"id"`
+	Username     string    `json:"username"`
+	PasswordHash string    `json:"-"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+type Node struct {
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Role         string    `json:"role"` // entry|relay|exit|hybrid
+	Region       string    `json:"region"`
+	Tags         string    `json:"tags"` // comma-separated
+	PublicIP     string    `json:"public_ip"`
+	Hostname     string    `json:"hostname"` // domain preferred for clients
+	AltHostnames string    `json:"alt_hostnames"`
+	AgentToken   string    `json:"-"`
+	Status       string    `json:"status"`
+	LastSeen     *time.Time `json:"last_seen,omitempty"`
+	ConfigVersion int64    `json:"config_version"`
+	MetaJSON     string    `json:"meta_json"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+type Capability struct {
+	ID       int64  `json:"id"`
+	NodeID   string `json:"node_id"`
+	Type     string `json:"type"` // nft_forward|mieru_client|mita_server|socks_in
+	Enabled  bool   `json:"enabled"`
+	Listen   string `json:"listen"`
+	ConfigJSON string `json:"config_json"`
+}
+
+// Route is an ordered hop chain — generic multi-hop, not vendor-specific.
+type Route struct {
+	ID        int64     `json:"id"`
+	Name      string    `json:"name"`
+	Enabled   bool      `json:"enabled"`
+	Strategy  string    `json:"strategy"` // sticky|wrr|failover
+	HopsJSON  string    `json:"hops_json"` // [{node_id, order, capability_type}]
+	Weight    int       `json:"weight"`
+	Health    string    `json:"health"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type Hop struct {
+	NodeID         string `json:"node_id"`
+	Order          int    `json:"order"`
+	CapabilityType string `json:"capability_type"`
+}
+
+type User struct {
+	ID               int64      `json:"id"`
+	Username         string     `json:"username"`
+	PasswordHash     string     `json:"-"`
+	ProxyPassword    string     `json:"proxy_password,omitempty"` // plain returned only on create/reset
+	Status           string     `json:"status"`
+	ExpireAt         *time.Time `json:"expire_at,omitempty"`
+	TrafficLimitBytes int64     `json:"traffic_limit_bytes"`
+	TrafficUsedBytes  int64     `json:"traffic_used_bytes"`
+	SpeedLimitBps    int64      `json:"speed_limit_bps"`
+	MaxSessions      int        `json:"max_sessions"`
+	StickyExitID     string     `json:"sticky_exit_id,omitempty"`
+	SubToken         string     `json:"sub_token,omitempty"`
+	RouteID          *int64     `json:"route_id,omitempty"`
+	Note             string     `json:"note"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+}
+
+type TrafficHourly struct {
+	ID         int64     `json:"id"`
+	UserID     int64     `json:"user_id"`
+	ExitNodeID string    `json:"exit_node_id"`
+	RouteID    *int64    `json:"route_id,omitempty"`
+	Hour       time.Time `json:"hour"`
+	UpBytes    int64     `json:"up_bytes"`
+	DownBytes  int64     `json:"down_bytes"`
+}
+
+type TrafficSample struct {
+	UserID    int64   `json:"user_id"`
+	UpBps     int64   `json:"up_bps"`
+	DownBps   int64   `json:"down_bps"`
+	UpBytes   int64   `json:"up_bytes"`
+	DownBytes int64   `json:"down_bytes"`
+	TS        int64   `json:"ts"`
+}
+
+type AuditLog struct {
+	ID        int64     `json:"id"`
+	Actor     string    `json:"actor"`
+	Action    string    `json:"action"`
+	Target    string    `json:"target"`
+	Detail    string    `json:"detail"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// AgentDesiredConfig is what the panel pushes/pulls to agents.
+type AgentDesiredConfig struct {
+	Version  int64                    `json:"version"`
+	NodeID   string                   `json:"node_id"`
+	Role     string                   `json:"role"`
+	Plugins  []map[string]interface{} `json:"plugins"`
+	Users    []AgentUser              `json:"users,omitempty"` // exit: mita users; entry: allowlist
+	ACL      map[string]interface{}   `json:"acl,omitempty"`
+	Forwards []ForwardRule            `json:"forwards,omitempty"`
+}
+
+type AgentUser struct {
+	UserID   int64  `json:"user_id"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Enabled  bool   `json:"enabled"`
+	// Exit metering identity
+	MitaUser string `json:"mita_user,omitempty"`
+}
+
+type ForwardRule struct {
+	ListenPort int    `json:"listen_port"`
+	TargetHost string `json:"target_host"`
+	TargetPort int    `json:"target_port"`
+	Protocol   string `json:"protocol"` // tcp
+	Comment    string `json:"comment"`
+}
+
+type HeartbeatRequest struct {
+	NodeID        string  `json:"node_id"`
+	Token         string  `json:"token"`
+	Role          string  `json:"role"`
+	ConfigVersion int64   `json:"config_version"`
+	CPU           float64 `json:"cpu"`
+	MemPct        float64 `json:"mem_pct"`
+	AgentVersion  string  `json:"agent_version"`
+	PublicIP      string  `json:"public_ip"`
+	Hostname      string  `json:"hostname"`
+	Message       string  `json:"message"`
+}
+
+type TrafficReport struct {
+	NodeID  string                `json:"node_id"`
+	Token   string                `json:"token"`
+	Samples []TrafficReportSample `json:"samples"`
+}
+
+type TrafficReportSample struct {
+	UserID    int64 `json:"user_id"`
+	UpDelta   int64 `json:"up_delta"`
+	DownDelta int64 `json:"down_delta"`
+	UpBps     int64 `json:"up_bps"`
+	DownBps   int64 `json:"down_bps"`
+	TS        int64 `json:"ts"`
+}
+
+type DashboardStats struct {
+	OnlineNodes   int   `json:"online_nodes"`
+	TotalNodes    int   `json:"total_nodes"`
+	ActiveUsers   int   `json:"active_users"`
+	TotalUsers    int   `json:"total_users"`
+	TodayUp       int64 `json:"today_up"`
+	TodayDown     int64 `json:"today_down"`
+	UnhealthyNodes int  `json:"unhealthy_nodes"`
+}
