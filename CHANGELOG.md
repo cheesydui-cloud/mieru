@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.8] - 2026-07-30
+
+### Fixed
+- Agent stayed **offline** until first ticker: now sends heartbeat immediately on start.
+- Install-agent prints heartbeat probe result (connect / 401 / OK).
+- Clipboard copy works on plain HTTP panels (execCommand fallback).
+- Nodes list auto-refreshes every 5s so online status appears without manual reload.
+
 ## [0.1.7] - 2026-07-30
 
 ### Changed

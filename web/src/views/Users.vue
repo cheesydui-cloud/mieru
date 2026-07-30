@@ -1,6 +1,6 @@
 <script setup>
 import { onMounted, onUnmounted, reactive, ref } from 'vue'
-import { api, formatBytes, formatBps, statusBadge } from '../api'
+import { api, copyText, formatBytes, formatBps, statusBadge } from '../api'
 
 const users = ref([])
 const routes = ref([])
@@ -82,8 +82,12 @@ async function remove(id) {
 }
 
 async function copy(text) {
-  await navigator.clipboard.writeText(text)
-  toast.value = '已复制'
+  try {
+    await copyText(text)
+    toast.value = '已复制到剪贴板'
+  } catch {
+    toast.value = '自动复制失败：请手动选中复制'
+  }
 }
 
 function subURL(tokenPath) {

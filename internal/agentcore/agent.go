@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/cheesydui-cloud/mieru/internal/config"
@@ -21,7 +22,7 @@ import (
 	"github.com/cheesydui-cloud/mieru/internal/plugins/socksin"
 )
 
-const AgentVersion = "0.1.0"
+const AgentVersion = "0.1.8"
 
 type Agent struct {
 	cfg      config.AgentConfig
@@ -67,9 +68,22 @@ func (a *Agent) Run(ctx context.Context) error {
 		a.version = v
 	}
 
+	panel := strings.TrimRight(strings.TrimSpace(a.cfg.PanelURL), "/")
+	if panel == "" {
+		return fmt.Errorf("AGENT_PANEL_URL is required")
+	}
+	a.cfg.PanelURL = panel
 	log.Printf("agent starting node=%s role=%s panel=%s", a.cfg.NodeID, a.cfg.Role, a.cfg.PanelURL)
 
-	// initial pull
+	// Immediate heartbeat so panel shows online without waiting for first ticker.
+	if err := a.heartbeat(ctx); err != nil {
+		log.Printf("initial heartbeat FAILED: %v", err)
+		log.Printf("check: 1) panel reachable from this host  2) node_id/token match  3) firewall allows panel :8080")
+	} else {
+		log.Printf("initial heartbeat OK — panel should show this node online")
+	}
+
+	// initial pull (non-fatal)
 	if err := a.pullAndApply(ctx); err != nil {
 		log.Printf("initial config pull: %v (continuing with last_good if any)", err)
 	}

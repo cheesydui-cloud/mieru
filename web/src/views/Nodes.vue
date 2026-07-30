@@ -1,6 +1,6 @@
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
-import { api, statusBadge } from '../api'
+import { onMounted, onUnmounted, reactive, ref } from 'vue'
+import { api, copyText, statusBadge } from '../api'
 
 const nodes = ref([])
 const error = ref('')
@@ -193,11 +193,23 @@ async function rebuild() {
 }
 
 async function copy(text) {
-  await navigator.clipboard.writeText(text)
-  toast.value = '已复制'
+  try {
+    await copyText(text)
+    toast.value = '已复制到剪贴板'
+  } catch {
+    // last resort: select the textarea if present
+    toast.value = '自动复制失败：请在文本框内 Ctrl/Cmd+C 手动复制'
+  }
 }
 
-onMounted(load)
+let refreshTimer
+onMounted(() => {
+  load()
+  refreshTimer = setInterval(load, 5000)
+})
+onUnmounted(() => {
+  if (refreshTimer) clearInterval(refreshTimer)
+})
 </script>
 
 <template>

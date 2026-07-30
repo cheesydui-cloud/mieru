@@ -5,7 +5,7 @@
 set -euo pipefail
 
 REPO="${MIERU_REPO:-cheesydui-cloud/mieru}"
-VERSION="${MIERU_VERSION:-v0.1.7}"
+VERSION="${MIERU_VERSION:-v0.1.8}"
 PREFIX="${MIERU_PREFIX:-/usr/local}"
 INSTALL_DIR="${MIERU_INSTALL_DIR:-/opt/mieru-panel}"
 DATA_DIR="${MIERU_AGENT_DATA:-/var/lib/mieru-agent}"
@@ -105,15 +105,37 @@ EOF
   $SUDO systemctl daemon-reload
   $SUDO systemctl enable mieru-agent >/dev/null 2>&1 || true
   $SUDO systemctl restart mieru-agent
-  sleep 1
+  sleep 2
   $SUDO systemctl --no-pager --full status mieru-agent || true
+fi
+
+# Connectivity probe from this node → panel
+PANEL_URL="${PANEL_URL%/}"
+echo "==> 探测面板连通性 ${PANEL_URL}"
+HB_CODE=$(curl -s -o /tmp/mieru-hb.out -w "%{http_code}" --max-time 8 \
+  -X POST "${PANEL_URL}/api/agent/heartbeat" \
+  -H 'Content-Type: application/json' \
+  -d "{\"node_id\":\"${NODE_ID}\",\"token\":\"${TOKEN}\",\"role\":\"${ROLE}\",\"agent_version\":\"install\"}" \
+  2>/dev/null || echo "000")
+HB_BODY=$(cat /tmp/mieru-hb.out 2>/dev/null || true)
+if [[ "$HB_CODE" == "200" ]]; then
+  HB_RESULT="OK (HTTP 200) — 面板应显示 online"
+elif [[ "$HB_CODE" == "401" ]]; then
+  HB_RESULT="FAIL 401 unauthorized — node_id 或 token 不匹配，请重新复制安装命令"
+elif [[ "$HB_CODE" == "000" ]]; then
+  HB_RESULT="FAIL 无法连接面板 — 检查面板地址/防火墙/安全组是否放行 8080"
+else
+  HB_RESULT="FAIL HTTP ${HB_CODE} body=${HB_BODY}"
 fi
 
 echo
 echo "============================================"
 echo " Agent 已安装/升级  ${VERSION}"
-echo " role  : ${ROLE}"
-echo " panel : ${PANEL_URL}"
-echo " node  : ${NODE_ID}"
-echo " env   : ${ENV_FILE}"
+echo " role     : ${ROLE}"
+echo " panel    : ${PANEL_URL}"
+echo " node     : ${NODE_ID}"
+echo " env      : ${ENV_FILE}"
+echo " 心跳探测 : ${HB_RESULT}"
+echo " 日志     : journalctl -u mieru-agent -f"
+echo " 状态     : systemctl status mieru-agent"
 echo "============================================"
