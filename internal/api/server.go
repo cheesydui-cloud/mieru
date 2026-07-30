@@ -3,18 +3,23 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"io/fs"
 	"net/http"
+	"os"
+	"path"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/gin-contrib/cors"
-	"github.com/gin-gonic/gin"
 	"github.com/cheesydui-cloud/mieru/internal/auth"
 	"github.com/cheesydui-cloud/mieru/internal/config"
 	"github.com/cheesydui-cloud/mieru/internal/configgen"
 	"github.com/cheesydui-cloud/mieru/internal/model"
 	"github.com/cheesydui-cloud/mieru/internal/store"
+	"github.com/cheesydui-cloud/mieru/web"
+	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/gin"
 )
 
 type Server struct {
@@ -103,16 +108,87 @@ func (s *Server) Router() *gin.Engine {
 		portal.GET("/rates", s.myRate)
 	}
 
-	r.Static("/assets", "./web/dist/assets")
+	// SPA frontend: prefer embedded dist (one-binary install), fallback to on-disk ./web/dist
+	dist, err := fs.Sub(web.Dist, "dist")
+	if err != nil {
+		dist = web.Dist
+	}
+	r.GET("/assets/*filepath", func(c *gin.Context) {
+		serveStatic(c, dist, path.Join("assets", strings.TrimPrefix(c.Param("filepath"), "/")))
+	})
 	r.NoRoute(func(c *gin.Context) {
-		if strings.HasPrefix(c.Request.URL.Path, "/api") || strings.HasPrefix(c.Request.URL.Path, "/sub/") {
+		p := c.Request.URL.Path
+		if strings.HasPrefix(p, "/api") || strings.HasPrefix(p, "/sub/") {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return
 		}
-		c.File("./web/dist/index.html")
+		// try exact file from embed or disk (e.g. /favicon.ico)
+		rel := strings.TrimPrefix(p, "/")
+		if rel != "" && !strings.Contains(rel, "..") {
+			if serveStatic(c, dist, rel) {
+				return
+			}
+		}
+		// SPA fallback
+		if serveStatic(c, dist, "index.html") {
+			return
+		}
+		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(fallbackHTML))
 	})
 
 	return r
+}
+
+const fallbackHTML = `<!doctype html><html><head><meta charset="utf-8"><title>Mieru Panel</title>
+<style>body{font-family:system-ui;background:#0b0f14;color:#e8eef6;display:grid;place-items:center;min-height:100vh;margin:0}
+main{max-width:520px;padding:32px;border:1px solid #243041;border-radius:16px;background:#121820}
+code{background:#1a222d;padding:2px 6px;border-radius:6px}</style></head><body><main>
+<h1>Mieru Panel</h1><p>API is running, but UI assets are missing.</p>
+<p>Upgrade to a release with embedded UI, or place <code>web/dist</code> next to the binary.</p>
+<p>Health: <a href="/api/health" style="color:#5b8cff">/api/health</a></p>
+</main></body></html>`
+
+func serveStatic(c *gin.Context, dist fs.FS, rel string) bool {
+	// 1) embedded
+	if f, err := dist.Open(rel); err == nil {
+		defer f.Close()
+		stat, err := f.Stat()
+		if err == nil && !stat.IsDir() {
+			if rs, ok := f.(io.ReadSeeker); ok {
+				http.ServeContent(c.Writer, c.Request, path.Base(rel), stat.ModTime(), rs)
+				return true
+			}
+			data, err := io.ReadAll(f)
+			if err == nil {
+				c.Data(http.StatusOK, contentType(rel), data)
+				return true
+			}
+		}
+	}
+	// 2) on-disk fallback for local dev
+	disk := path.Join("web", "dist", rel)
+	if st, err := os.Stat(disk); err == nil && !st.IsDir() {
+		c.File(disk)
+		return true
+	}
+	return false
+}
+
+func contentType(name string) string {
+	switch {
+	case strings.HasSuffix(name, ".html"):
+		return "text/html; charset=utf-8"
+	case strings.HasSuffix(name, ".js"):
+		return "application/javascript; charset=utf-8"
+	case strings.HasSuffix(name, ".css"):
+		return "text/css; charset=utf-8"
+	case strings.HasSuffix(name, ".svg"):
+		return "image/svg+xml"
+	case strings.HasSuffix(name, ".json"):
+		return "application/json"
+	default:
+		return "application/octet-stream"
+	}
 }
 
 func (s *Server) requireAdmin() gin.HandlerFunc {

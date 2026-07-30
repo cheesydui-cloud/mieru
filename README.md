@@ -50,7 +50,7 @@ curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | \
-  PANEL_ADMIN_PASS='your-strong-pass' MIERU_VERSION=v0.1.0 bash
+  PANEL_ADMIN_PASS='your-strong-pass' MIERU_VERSION=v0.1.1 bash
 ```
 
 装完后终端会打印 **admin 账号密码** 和监听地址。默认：
@@ -96,19 +96,19 @@ curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/
 ### Windows（PowerShell 一行）
 
 ```powershell
-irm https://github.com/cheesydui-cloud/mieru/releases/download/v0.1.0/mieru-panel-v0.1.0-windows-amd64.zip -OutFile $env:TEMP\mieru.zip; Expand-Archive $env:TEMP\mieru.zip $env:USERPROFILE\mieru-panel -Force; & "$env:USERPROFILE\mieru-panel\mieru-panel-v0.1.0-windows-amd64\panel.exe"
+irm https://github.com/cheesydui-cloud/mieru/releases/download/v0.1.1/mieru-panel-v0.1.1-windows-amd64.zip -OutFile $env:TEMP\mieru.zip; Expand-Archive $env:TEMP\mieru.zip $env:USERPROFILE\mieru-panel -Force; & "$env:USERPROFILE\mieru-panel\mieru-panel-v0.1.1-windows-amd64\panel.exe"
 ```
 
 ### 预编译包直链（手动下载）
 
 | 平台 | 资源 |
 |------|------|
-| Linux x86_64 | [tar.gz](https://github.com/cheesydui-cloud/mieru/releases/download/v0.1.0/mieru-panel-v0.1.0-linux-amd64.tar.gz) |
-| Linux arm64 | [tar.gz](https://github.com/cheesydui-cloud/mieru/releases/download/v0.1.0/mieru-panel-v0.1.0-linux-arm64.tar.gz) |
-| macOS Apple Silicon | [tar.gz](https://github.com/cheesydui-cloud/mieru/releases/download/v0.1.0/mieru-panel-v0.1.0-darwin-arm64.tar.gz) |
-| macOS Intel | [tar.gz](https://github.com/cheesydui-cloud/mieru/releases/download/v0.1.0/mieru-panel-v0.1.0-darwin-amd64.tar.gz) |
-| Windows x64 | [zip](https://github.com/cheesydui-cloud/mieru/releases/download/v0.1.0/mieru-panel-v0.1.0-windows-amd64.zip) |
-| 校验和 | [SHA256SUMS.txt](https://github.com/cheesydui-cloud/mieru/releases/download/v0.1.0/SHA256SUMS.txt) |
+| Linux x86_64 | [tar.gz](https://github.com/cheesydui-cloud/mieru/releases/download/v0.1.1/mieru-panel-v0.1.1-linux-amd64.tar.gz) |
+| Linux arm64 | [tar.gz](https://github.com/cheesydui-cloud/mieru/releases/download/v0.1.1/mieru-panel-v0.1.1-linux-arm64.tar.gz) |
+| macOS Apple Silicon | [tar.gz](https://github.com/cheesydui-cloud/mieru/releases/download/v0.1.1/mieru-panel-v0.1.1-darwin-arm64.tar.gz) |
+| macOS Intel | [tar.gz](https://github.com/cheesydui-cloud/mieru/releases/download/v0.1.1/mieru-panel-v0.1.1-darwin-amd64.tar.gz) |
+| Windows x64 | [zip](https://github.com/cheesydui-cloud/mieru/releases/download/v0.1.1/mieru-panel-v0.1.1-windows-amd64.zip) |
+| 校验和 | [SHA256SUMS.txt](https://github.com/cheesydui-cloud/mieru/releases/download/v0.1.1/SHA256SUMS.txt) |
 
 ### 从源码安装
 

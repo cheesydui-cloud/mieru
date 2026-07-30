@@ -4,7 +4,7 @@
 set -euo pipefail
 
 REPO="${MIERU_REPO:-cheesydui-cloud/mieru}"
-VERSION="${MIERU_VERSION:-v0.1.0}"
+VERSION="${MIERU_VERSION:-v0.1.1}"
 PREFIX="${MIERU_PREFIX:-/usr/local}"
 INSTALL_DIR="${MIERU_INSTALL_DIR:-/opt/mieru-panel}"
 DATA_DIR="${MIERU_DATA_DIR:-/var/lib/mieru-panel}"
@@ -50,22 +50,7 @@ $SUDO mkdir -p "$INSTALL_DIR" "$DATA_DIR" "${PREFIX}/bin"
 $SUDO tar -xzf "$TMP/$ASSET" -C "$INSTALL_DIR" --strip-components=1
 $SUDO install -m 755 "$INSTALL_DIR/panel" "${PREFIX}/bin/mieru-panel"
 $SUDO install -m 755 "$INSTALL_DIR/agent" "${PREFIX}/bin/mieru-agent"
-
-# optional: fetch web dist from source archive if missing
-if [[ ! -d "$INSTALL_DIR/web/dist" ]]; then
-  echo "==> fetching frontend (web/dist) from source tag ${VERSION}"
-  if command -v npm >/dev/null 2>&1; then
-    curl -fsSL "https://github.com/${REPO}/archive/refs/tags/${VERSION}.tar.gz" -o "$TMP/src.tgz"
-    mkdir -p "$TMP/src"
-    tar -xzf "$TMP/src.tgz" -C "$TMP/src" --strip-components=1
-    (cd "$TMP/src/web" && npm ci --silent && npm run build --silent)
-    $SUDO mkdir -p "$INSTALL_DIR/web"
-    $SUDO cp -a "$TMP/src/web/dist" "$INSTALL_DIR/web/"
-  else
-    echo "!! npm not found; panel UI needs ./web/dist under WorkingDirectory"
-    echo "   later: clone repo, cd web && npm ci && npm run build, copy dist to ${INSTALL_DIR}/web/dist"
-  fi
-fi
+# UI is embedded in panel binary since v0.1.1 — no separate web/dist required
 
 JWT_SECRET="${PANEL_JWT_SECRET:-$(openssl rand -hex 24 2>/dev/null || head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')}"
 ADMIN_USER="${PANEL_ADMIN_USER:-admin}"

@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.1] - 2026-07-30
+
+### Fixed
+- **404 page not found** after one-line install: Vue UI is now **embedded** into the `panel` binary via `go:embed`. Opening `http://IP:8080/` serves the login page without a separate `web/dist` directory.
+- Install scripts default to `v0.1.1`.
+
+### Changed
+- Static assets served from embed FS first, with on-disk `./web/dist` as dev fallback.
+
 ## [0.1.0] - 2026-07-30
 
 ### Added
