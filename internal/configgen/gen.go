@@ -2,15 +2,17 @@ package configgen
 
 import (
 	"encoding/json"
-	"fmt"
 
 	"github.com/cheesydui-cloud/mieru/internal/model"
 	"github.com/cheesydui-cloud/mieru/internal/store"
 )
 
 // Builder builds per-node desired configs from routes + users.
-// Exit nodes get mita users (metering authority).
-// Entry/relay get forward hints and allowlists.
+// Data plane:
+//
+//	Exit  → mita_server (real process)
+//	Relay → mieru_client (→ exit) + socks_in (public, upstream local mieru socks5)
+//	Entry → socks_in (public, upstream next hop public socks)
 type Builder struct {
 	Store *store.Store
 }
@@ -33,6 +35,15 @@ func (b *Builder) RebuildAll() error {
 		routeByID[r.ID] = r
 	}
 
+	// backbone credentials for Relay mieru → Exit mita
+	linkUser, linkPass := "", ""
+	for _, u := range users {
+		if u.Username != "" && u.ProxyPassword != "" {
+			linkUser, linkPass = u.Username, u.ProxyPassword
+			break
+		}
+	}
+
 	for _, n := range nodes {
 		cfg := model.AgentDesiredConfig{
 			NodeID:  n.ID,
@@ -43,9 +54,8 @@ func (b *Builder) RebuildAll() error {
 		}
 
 		switch n.Role {
-		case model.RoleExit, model.RoleHybrid:
+		case model.RoleExit:
 			for _, u := range users {
-				// sticky exit filter if set
 				if u.StickyExitID != "" && u.StickyExitID != n.ID {
 					continue
 				}
@@ -57,17 +67,64 @@ func (b *Builder) RebuildAll() error {
 					MitaUser: u.Username,
 				})
 			}
-				pmin, pmax := n.EffectivePortRange()
+			pmin, pmax := n.EffectivePortRange()
+			cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
+				"type": "mita_server",
+				"config": map[string]interface{}{
+					"listen_port": n.EffectiveListenPort(),
+					"port_min":    pmin,
+					"port_max":    pmax,
+				},
+			})
+
+		case model.RoleHybrid:
+			// hybrid = exit mita + public socks for entry use
+			for _, u := range users {
+				if u.StickyExitID != "" && u.StickyExitID != n.ID {
+					continue
+				}
+				cfg.Users = append(cfg.Users, model.AgentUser{
+					UserID:   u.ID,
+					Username: u.Username,
+					Password: u.ProxyPassword,
+					Enabled:  u.Status == model.StatusActive,
+					MitaUser: u.Username,
+				})
+			}
+			pmin, pmax := n.EffectivePortRange()
+			// mita on listen_port; socks on listen_port+1 to avoid conflict
+			mitaPort := n.EffectiveListenPort()
+			socksPort := mitaPort
+			if pmax > pmin {
+				socksPort = pmin
+				mitaPort = pmin + 1
+				if mitaPort > pmax {
+					mitaPort = pmax
+				}
+			} else {
+				// single port: only mita; socks shares not possible
+				socksPort = 0
+			}
+			cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
+				"type": "mita_server",
+				"config": map[string]interface{}{
+					"listen_port": mitaPort,
+					"port_min":    mitaPort,
+					"port_max":    mitaPort,
+				},
+			})
+			if socksPort > 0 && socksPort != mitaPort {
 				cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
-					"type": "mita_server",
+					"type": "socks_in",
 					"config": map[string]interface{}{
-						"users_from":  "panel",
-						"metering":    "local",
-						"listen_port": n.EffectiveListenPort(),
-						"port_min":    pmin,
-						"port_max":    pmax,
+						"auth":        "users",
+						"listen_port": socksPort,
+						"port_min":    socksPort,
+						"port_max":    socksPort,
 					},
 				})
+			}
+
 		case model.RoleEntry:
 			for _, u := range users {
 				cfg.Users = append(cfg.Users, model.AgentUser{
@@ -77,18 +134,26 @@ func (b *Builder) RebuildAll() error {
 					Enabled:  true,
 				})
 			}
-			// derive simple forwards: this entry → next agent hop on assigned routes
-			forwards := []model.ForwardRule{}
-			for _, u := range users {
-				if u.RouteID == nil {
-					continue
-				}
-				r, ok := routeByID[*u.RouteID]
-				if !ok || !r.Enabled {
+			upHost, upPort := "", 0
+			// find next hop from routes involving this entry
+			for _, r := range routes {
+				if !r.Enabled {
 					continue
 				}
 				var hops []model.Hop
 				_ = json.Unmarshal([]byte(r.HopsJSON), &hops)
+				// match if any hop is this entry, or first non-external is this
+				involved := false
+				for _, h := range hops {
+					if h.NodeID == n.ID {
+						involved = true
+						break
+					}
+				}
+				if !involved {
+					// also if users bound to this route and entry is first agent hop missing — skip
+					continue
+				}
 				next := b.nextAgentHopAfter(hops, n.ID)
 				if next == nil {
 					continue
@@ -97,58 +162,79 @@ func (b *Builder) RebuildAll() error {
 				if host == "" {
 					host = next.Hostname
 				}
-				if host == "" {
-					continue
+				if host != "" {
+					upHost = host
+					upPort = next.EffectiveListenPort()
+					break
 				}
-				lp := n.PortInRange(u.ID)
-				tp := next.PortInRange(u.ID)
-				forwards = append(forwards, model.ForwardRule{
-					ListenPort: lp,
-					TargetHost: host,
-					TargetPort: tp,
-					Protocol:   "tcp",
-					Comment:    fmt.Sprintf("user %s -> %s", u.Username, next.Name),
-				})
 			}
-			cfg.Forwards = forwards
-			emin, emax := n.EffectivePortRange()
-			cfg.Plugins = append(cfg.Plugins,
-				map[string]interface{}{
-					"type": "socks_in",
-					"config": map[string]interface{}{
-						"auth":        "users",
-						"listen_port": n.EffectiveListenPort(),
-						"port_min":    emin,
-						"port_max":    emax,
-					},
-				},
-				map[string]interface{}{"type": "nft_forward", "config": map[string]interface{}{"rules_from": "forwards"}},
-			)
-		case model.RoleRelay:
-			// If a route starts with external entry and this relay is the first agent hop,
-			// accept client SOCKS here (merchant DNAT lands on this machine).
-			if routeHasExternalEntryTo(routes, n.ID) {
+			// fallback: any user route next hop
+			if upHost == "" {
 				for _, u := range users {
-					cfg.Users = append(cfg.Users, model.AgentUser{
-						UserID:   u.ID,
-						Username: u.Username,
-						Password: u.ProxyPassword,
-						Enabled:  true,
-					})
+					if u.RouteID == nil {
+						continue
+					}
+					r, ok := routeByID[*u.RouteID]
+					if !ok || !r.Enabled {
+						continue
+					}
+					var hops []model.Hop
+					_ = json.Unmarshal([]byte(r.HopsJSON), &hops)
+					next := b.nextAgentHopAfter(hops, n.ID)
+					if next == nil && len(hops) > 0 {
+						// entry may not be in hops (external only) — use first agent hop as upstream target for pure entry node unused
+						for _, h := range hops {
+							if h.NodeID == "" || h.External {
+								continue
+							}
+							if nn, err := b.Store.GetNode(h.NodeID); err == nil {
+								next = nn
+								break
+							}
+						}
+					}
+					if next == nil {
+						continue
+					}
+					host := next.PublicIP
+					if host == "" {
+						host = next.Hostname
+					}
+					if host != "" {
+						upHost = host
+						upPort = next.EffectiveListenPort()
+						break
+					}
 				}
-				pmin, pmax := n.EffectivePortRange()
-				cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
-					"type": "socks_in",
-					"config": map[string]interface{}{
-						"auth":        "users",
-						"listen_port": n.EffectiveListenPort(),
-						"port_min":    pmin,
-						"port_max":    pmax,
-						"via":         "external_entry",
-					},
+			}
+
+			emin, emax := n.EffectivePortRange()
+			socksCfg := map[string]interface{}{
+				"auth":        "users",
+				"listen_port": n.EffectiveListenPort(),
+				"port_min":    emin,
+				"port_max":    emax,
+			}
+			if upHost != "" && upPort > 0 {
+				socksCfg["upstream_host"] = upHost
+				socksCfg["upstream_port"] = upPort
+			}
+			cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
+				"type":   "socks_in",
+				"config": socksCfg,
+			})
+
+		case model.RoleRelay:
+			for _, u := range users {
+				cfg.Users = append(cfg.Users, model.AgentUser{
+					UserID:   u.ID,
+					Username: u.Username,
+					Password: u.ProxyPassword,
+					Enabled:  true,
+					MitaUser: u.Username,
 				})
 			}
-			// mieru client toward exits found in routes
+
 			exits := map[string]model.Node{}
 			for _, r := range routes {
 				if !r.Enabled {
@@ -167,133 +253,133 @@ func (b *Builder) RebuildAll() error {
 					}
 				}
 			}
+
 			pmin, pmax := n.EffectivePortRange()
+			socksPortLocal := 19080
+
 			for _, ex := range exits {
 				host := ex.PublicIP
 				if host == "" {
 					host = ex.Hostname
 				}
-				cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
-					"type": "mieru_client",
-					"config": map[string]interface{}{
-						"server":      host,
-						"port":        ex.EffectiveListenPort(),
-						"exit_id":     ex.ID,
-						"listen_port": n.EffectiveListenPort(),
-						"port_min":    pmin,
-						"port_max":    pmax,
-					},
-				})
-			}
-			for _, u := range users {
-				// avoid duplicate users if already filled for external entry socks
-				dup := false
-				for _, existing := range cfg.Users {
-					if existing.UserID == u.ID {
-						dup = true
-						break
-					}
-				}
-				if dup {
+				if host == "" {
 					continue
 				}
-				cfg.Users = append(cfg.Users, model.AgentUser{
-					UserID:   u.ID,
-					Username: u.Username,
-					Password: u.ProxyPassword,
-					Enabled:  true,
-					MitaUser: u.Username,
+				mcfg := map[string]interface{}{
+					"server":      host,
+					"port":        ex.EffectiveListenPort(),
+					"exit_id":     ex.ID,
+					"socks5_port": socksPortLocal,
+					"rpc_port":    8964,
+				}
+				if linkUser != "" {
+					mcfg["link_user"] = linkUser
+					mcfg["link_password"] = linkPass
+				}
+				cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
+					"type":   "mieru_client",
+					"config": mcfg,
 				})
+				break
 			}
+
+			socksCfg := map[string]interface{}{
+				"auth":        "users",
+				"listen_port": n.EffectiveListenPort(),
+				"port_min":    pmin,
+				"port_max":    pmax,
+			}
+			if len(exits) > 0 {
+				socksCfg["upstream_host"] = "127.0.0.1"
+				socksCfg["upstream_port"] = socksPortLocal
+				socksCfg["via"] = "mieru_client"
+			}
+			if routeHasExternalEntryTo(routes, n.ID) {
+				socksCfg["via_external"] = true
+			}
+			cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
+				"type":   "socks_in",
+				"config": socksCfg,
+			})
 		}
 
-		raw, _ := json.Marshal(cfg)
 		ver, err := b.Store.BumpNodeConfigVersion(n.ID)
 		if err != nil {
 			return err
 		}
 		cfg.Version = ver
-		raw, _ = json.Marshal(cfg)
+		raw, _ := json.Marshal(cfg)
 		if err := b.Store.SaveDesiredConfig(n.ID, ver, string(raw)); err != nil {
 			return err
 		}
 	}
+	return nil
+}
+
+func (b *Builder) nextAgentHopAfter(hops []model.Hop, nodeID string) *model.Node {
+	return nextAgentHopAfterStore(b.Store, hops, nodeID)
+}
+
+func nextAgentHopAfterStore(st *store.Store, hops []model.Hop, nodeID string) *model.Node {
+	if st == nil || len(hops) == 0 {
 		return nil
 	}
-
-	// nextAgentHopAfter returns the first non-external hop after the hop matching nodeID
-	// (or after an external entry if nodeID is empty). Looks up the node from store.
-	func (b *Builder) nextAgentHopAfter(hops []model.Hop, nodeID string) *model.Node {
-		return nextAgentHopAfterStore(b.Store, hops, nodeID)
-	}
-
-	func nextAgentHopAfterStore(st *store.Store, hops []model.Hop, nodeID string) *model.Node {
-		if st == nil || len(hops) == 0 {
+	start := -1
+	if nodeID == "" {
+		for i, h := range hops {
+			if h.External || h.NodeID == "" {
+				start = i
+				break
+			}
+		}
+	} else {
+		for i, h := range hops {
+			if h.NodeID == nodeID {
+				start = i
+				break
+			}
+		}
+		if start < 0 {
 			return nil
 		}
-		start := -1
-		if nodeID == "" {
-			// first external or start of chain
-			for i, h := range hops {
-				if h.External || h.NodeID == "" {
-					start = i
-					break
-				}
-			}
-			if start < 0 {
-				start = -1 // will look from 0
-			}
-		} else {
-			for i, h := range hops {
-				if h.NodeID == nodeID {
-					start = i
-					break
-				}
-			}
-			if start < 0 {
-				return nil
-			}
-		}
-		for j := start + 1; j < len(hops); j++ {
-			h := hops[j]
-			if h.External || h.NodeID == "" {
-				continue
-			}
-			n, err := st.GetNode(h.NodeID)
-			if err != nil {
-				continue
-			}
-			return n
-		}
-		return nil
 	}
+	for j := start + 1; j < len(hops); j++ {
+		h := hops[j]
+		if h.External || h.NodeID == "" {
+			continue
+		}
+		n, err := st.GetNode(h.NodeID)
+		if err != nil {
+			continue
+		}
+		return n
+	}
+	return nil
+}
 
-	// routeHasExternalEntryTo reports whether any enabled route has an external
-	// entry hop whose next agent hop is nodeID (merchant DNAT lands on this node).
-	func routeHasExternalEntryTo(routes []model.Route, nodeID string) bool {
-		for _, r := range routes {
-			if !r.Enabled {
+func routeHasExternalEntryTo(routes []model.Route, nodeID string) bool {
+	for _, r := range routes {
+		if !r.Enabled {
+			continue
+		}
+		var hops []model.Hop
+		if err := json.Unmarshal([]byte(r.HopsJSON), &hops); err != nil {
+			continue
+		}
+		for i, h := range hops {
+			if !h.External && h.NodeID != "" {
 				continue
 			}
-			var hops []model.Hop
-			if err := json.Unmarshal([]byte(r.HopsJSON), &hops); err != nil {
-				continue
-			}
-			for i, h := range hops {
-				if !h.External && h.NodeID != "" {
+			for j := i + 1; j < len(hops); j++ {
+				if hops[j].External || hops[j].NodeID == "" {
 					continue
 				}
-				// external entry at i — next agent hop
-				for j := i + 1; j < len(hops); j++ {
-					if hops[j].External || hops[j].NodeID == "" {
-						continue
-					}
-					if hops[j].NodeID == nodeID {
-						return true
-					}
-					break
+				if hops[j].NodeID == nodeID {
+					return true
 				}
+				break
 			}
 		}
-		return false
 	}
+	return false
+}

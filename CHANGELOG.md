@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.2.0] - 2026-07-30
+
+### Breaking / Data plane
+- **Real proxy path**: Agent no longer only writes JSON files.
+- **Exit**: starts **mita** (`mita apply/start`) on node listen port; auto-downloads mita binary if missing.
+- **Relay**: starts **mieru client** to Exit, exposes local SOCKS5; public `socks_in` upstreams via mieru.
+- **Entry / external entry landing on Relay**: in-process **SOCKS5** (user/pass) listens on node port range start.
+
+### Topology
+```
+Client → (external entry DNAT) → Relay:socks_in → 127.0.0.1:mieru → Exit:mita → Internet
+```
+
+### Notes
+- Need at least one active panel user (credentials shared on mieru↔mita backbone).
+- Open firewall for node listen ports (e.g. 10401 on relay, 10001 on exit).
+- First apply may download mieru/mita from GitHub releases (~few MB).
+
+
 All notable changes to this project will be documented in this file.
 
 ## [0.1.11] - 2026-07-30

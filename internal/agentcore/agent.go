@@ -22,7 +22,7 @@ import (
 	"github.com/cheesydui-cloud/mieru/internal/plugins/socksin"
 )
 
-const AgentVersion = "0.1.11"
+const AgentVersion = "0.2.0"
 
 type Agent struct {
 	cfg      config.AgentConfig
@@ -40,9 +40,10 @@ type userCounter struct {
 func New(cfg config.AgentConfig) *Agent {
 	reg := plugins.NewRegistry()
 	data := cfg.DataDir
+	binDir := filepath.Join(data, "bin")
 	reg.Register(&nftables.Plugin{DataDir: filepath.Join(data, "nft"), DryRun: os.Getenv("AGENT_NFT_DRYRUN") != "0"})
-	reg.Register(&mieru.Plugin{DataDir: filepath.Join(data, "mieru")})
-	reg.Register(&mita.Plugin{DataDir: filepath.Join(data, "mita")})
+	reg.Register(&mieru.Plugin{DataDir: filepath.Join(data, "mieru"), BinDir: binDir})
+	reg.Register(&mita.Plugin{DataDir: filepath.Join(data, "mita"), BinDir: binDir})
 	reg.Register(&socksin.Plugin{DataDir: filepath.Join(data, "socks")})
 
 	return &Agent{
@@ -178,8 +179,25 @@ func (a *Agent) pullAndApply(ctx context.Context) error {
 }
 
 func (a *Agent) apply(ctx context.Context, cfg *model.AgentDesiredConfig) error {
-	// materialize forwards into nft plugin config
-	for _, p := range cfg.Plugins {
+	// Apply order: mita/mieru processes first, then socks_in (may use local mieru upstream), then nft.
+	order := map[string]int{
+		"mita_server":  10,
+		"mieru_client": 20,
+		"socks_in":     30,
+		"nft_forward":  40,
+	}
+	plugins := append([]map[string]interface{}{}, cfg.Plugins...)
+	for i := 0; i < len(plugins); i++ {
+		for j := i + 1; j < len(plugins); j++ {
+			ti, _ := plugins[i]["type"].(string)
+			tj, _ := plugins[j]["type"].(string)
+			if order[ti] > order[tj] {
+				plugins[i], plugins[j] = plugins[j], plugins[i]
+			}
+		}
+	}
+
+	for _, p := range plugins {
 		typ, _ := p["type"].(string)
 		pluginCfg, _ := p["config"].(map[string]interface{})
 		if pluginCfg == nil {
