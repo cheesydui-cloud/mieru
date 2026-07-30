@@ -15,6 +15,8 @@ import (
 )
 
 // Plugin manages mieru client on Relay (connects to Exit mita).
+// Official flow: apply config → stop → start (client has no separate `run` daemon requirement;
+// `mieru start` backgrounds the client).
 type Plugin struct {
 	DataDir string
 	BinDir  string
@@ -46,30 +48,13 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 	linkUser, _ := cfg["link_user"].(string)
 	linkPass, _ := cfg["link_password"].(string)
 	if linkUser == "" || linkPass == "" {
-		if u, ok := cfg["users"].([]interface{}); ok {
-			for _, it := range u {
-				m, ok := it.(map[string]interface{})
-				if !ok {
-					continue
-				}
-				name, _ := m["username"].(string)
-				if name == "" {
-					name, _ = m["name"].(string)
-				}
-				pass, _ := m["password"].(string)
-				enabled := true
-				if e, ok := m["enabled"].(bool); ok {
-					enabled = e
-				}
-				if name != "" && pass != "" && enabled {
-					linkUser, linkPass = name, pass
-					break
-				}
-			}
+		for _, u := range extractUsers(cfg["users"]) {
+			linkUser, linkPass = u["name"], u["password"]
+			break
 		}
 	}
 	if linkUser == "" || linkPass == "" {
-		return fmt.Errorf("mieru_client: no tunnel user/password (need users or link_user)")
+		return fmt.Errorf("mieru_client: no tunnel user/password (need active panel user or link_user)")
 	}
 
 	mieruCfg := map[string]interface{}{
@@ -125,25 +110,108 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 		return fmt.Errorf("mieru binary: %w", err)
 	}
 
-	if out, err := procutil.RunCapture(bin, "apply", "config", cfgPath); err != nil {
-		log.Printf("[mieru_client] apply: %v (%s)", err, strings.TrimSpace(out))
-	} else {
-		log.Printf("[mieru_client] apply ok: %s", strings.TrimSpace(out))
+	// Prefer explicit config path via env so apply is reliable for non-interactive agent user.
+	env := []string{
+		"MIERU_CONFIG_JSON_FILE=" + cfgPath,
 	}
 
+	// apply (merge into client config store)
+	var applyOut string
+	var applyErr error
+	for i := 0; i < 3; i++ {
+		applyOut, applyErr = procutil.RunCaptureEnv(env, bin, "apply", "config", cfgPath)
+		if applyErr == nil {
+			log.Printf("[mieru_client] apply ok: %s", strings.TrimSpace(applyOut))
+			break
+		}
+		// fallback without env
+		applyOut, applyErr = procutil.RunCapture(bin, "apply", "config", cfgPath)
+		if applyErr == nil {
+			log.Printf("[mieru_client] apply ok (no env): %s", strings.TrimSpace(applyOut))
+			break
+		}
+		log.Printf("[mieru_client] apply attempt %d: %v (%s)", i+1, applyErr, strings.TrimSpace(applyOut))
+		time.Sleep(time.Second)
+	}
+	if applyErr != nil {
+		return fmt.Errorf("mieru apply: %w (%s)", applyErr, strings.TrimSpace(applyOut))
+	}
+
+	_, _ = procutil.RunCaptureEnv(env, bin, "stop")
 	_, _ = procutil.RunCapture(bin, "stop")
-	time.Sleep(300 * time.Millisecond)
-	if out, err := procutil.RunCapture(bin, "start"); err != nil {
-		return fmt.Errorf("mieru start: %w (%s)", err, strings.TrimSpace(out))
-	}
-	log.Printf("[mieru_client] started socks5 127.0.0.1:%d → %s:%d", socksPort, server, port)
+	time.Sleep(400 * time.Millisecond)
 
-	if out, err := procutil.RunCapture(bin, "test"); err != nil {
-		log.Printf("[mieru_client] test (non-fatal): %v (%s)", err, strings.TrimSpace(out))
+	var startOut string
+	var startErr error
+	for i := 0; i < 5; i++ {
+		startOut, startErr = procutil.RunCaptureEnv(env, bin, "start")
+		if startErr != nil {
+			startOut, startErr = procutil.RunCapture(bin, "start")
+		}
+		if startErr == nil {
+			break
+		}
+		log.Printf("[mieru_client] start attempt %d: %v (%s)", i+1, startErr, strings.TrimSpace(startOut))
+		time.Sleep(time.Duration(i+1) * 500 * time.Millisecond)
+	}
+	if startErr != nil {
+		return fmt.Errorf("mieru start: %w (%s)", startErr, strings.TrimSpace(startOut))
+	}
+	log.Printf("[mieru_client] started socks5 127.0.0.1:%d → %s:%d (%s)", socksPort, server, port, strings.TrimSpace(startOut))
+
+	// non-fatal connectivity test (exit may not be up yet)
+	if out, err := procutil.RunCaptureEnv(env, bin, "test"); err != nil {
+		if out2, err2 := procutil.RunCapture(bin, "test"); err2 != nil {
+			log.Printf("[mieru_client] test (non-fatal): %v (%s)", err2, strings.TrimSpace(out2))
+		} else {
+			log.Printf("[mieru_client] test ok: %s", strings.TrimSpace(out2))
+		}
+		_ = out
 	} else {
 		log.Printf("[mieru_client] test ok: %s", strings.TrimSpace(out))
 	}
 	return nil
+}
+
+func extractUsers(v interface{}) []map[string]string {
+	out := []map[string]string{}
+	appendOne := func(m map[string]interface{}) {
+		name, _ := m["username"].(string)
+		if name == "" {
+			name, _ = m["name"].(string)
+		}
+		pass, _ := m["password"].(string)
+		enabled := true
+		if e, ok := m["enabled"].(bool); ok {
+			enabled = e
+		}
+		if name != "" && pass != "" && enabled {
+			out = append(out, map[string]string{"name": name, "password": pass})
+		}
+	}
+	switch t := v.(type) {
+	case []interface{}:
+		for _, it := range t {
+			if m, ok := it.(map[string]interface{}); ok {
+				appendOne(m)
+			}
+		}
+	default:
+		if v == nil {
+			return out
+		}
+		b, err := json.Marshal(v)
+		if err != nil {
+			return out
+		}
+		var arr []map[string]interface{}
+		if json.Unmarshal(b, &arr) == nil {
+			for _, m := range arr {
+				appendOne(m)
+			}
+		}
+	}
+	return out
 }
 
 func toInt(v interface{}) int {

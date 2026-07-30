@@ -22,7 +22,7 @@ import (
 	"github.com/cheesydui-cloud/mieru/internal/plugins/socksin"
 )
 
-const AgentVersion = "0.2.0"
+const AgentVersion = "0.2.1"
 
 type Agent struct {
 	cfg      config.AgentConfig
@@ -197,6 +197,11 @@ func (a *Agent) apply(ctx context.Context, cfg *model.AgentDesiredConfig) error 
 		}
 	}
 
+	// Convert typed users → []map so plugins' type asserts always work after JSON round-trips too.
+	usersMaps := usersToMaps(cfg.Users)
+
+	var firstErr error
+	okCount := 0
 	for _, p := range plugins {
 		typ, _ := p["type"].(string)
 		pluginCfg, _ := p["config"].(map[string]interface{})
@@ -215,12 +220,8 @@ func (a *Agent) apply(ctx context.Context, cfg *model.AgentDesiredConfig) error 
 				})
 			}
 			pluginCfg["rules"] = rules
-		case "mita_server":
-			pluginCfg["users"] = cfg.Users
-		case "socks_in":
-			pluginCfg["users"] = cfg.Users
-		case "mieru_client":
-			pluginCfg["users"] = cfg.Users
+		case "mita_server", "socks_in", "mieru_client":
+			pluginCfg["users"] = usersMaps
 		}
 		pl, ok := a.registry.Get(typ)
 		if !ok {
@@ -228,9 +229,15 @@ func (a *Agent) apply(ctx context.Context, cfg *model.AgentDesiredConfig) error 
 			continue
 		}
 		if err := pl.Apply(ctx, pluginCfg); err != nil {
-			// keep last_good behavior: report error but don't crash loop
-			return fmt.Errorf("plugin %s: %w", typ, err)
+			// Continue remaining plugins so public listeners (socks_in) still come up
+			// even if mita/mieru fail (e.g. download race). Retry next pull if all fail.
+			log.Printf("plugin %s apply error: %v", typ, err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("plugin %s: %w", typ, err)
+			}
+			continue
 		}
+		okCount++
 	}
 	// seed counters for known users on exit
 	for _, u := range cfg.Users {
@@ -238,7 +245,31 @@ func (a *Agent) apply(ctx context.Context, cfg *model.AgentDesiredConfig) error 
 			a.counters[u.UserID] = &userCounter{}
 		}
 	}
+	if okCount == 0 && firstErr != nil {
+		return firstErr
+	}
+	if firstErr != nil {
+		// partial success — advance version to avoid restarting healthy listeners every pull
+		log.Printf("partial apply: %v (ok=%d) — will not block version bump", firstErr, okCount)
+	}
 	return nil
+}
+
+// usersToMaps converts AgentUser slice to []map[string]interface{} for plugin configs.
+// Plugins previously did cfg["users"].([]interface{}) which fails for []model.AgentUser.
+func usersToMaps(users []model.AgentUser) []map[string]interface{} {
+	out := make([]map[string]interface{}, 0, len(users))
+	for _, u := range users {
+		out = append(out, map[string]interface{}{
+			"user_id":   u.UserID,
+			"username":  u.Username,
+			"name":      u.Username,
+			"password":  u.Password,
+			"enabled":   u.Enabled,
+			"mita_user": u.MitaUser,
+		})
+	}
+	return out
 }
 
 // reportTraffic sends deltas. MVP uses tiny synthetic idle zeros unless

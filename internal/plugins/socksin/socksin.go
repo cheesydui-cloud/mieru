@@ -47,27 +47,7 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 	if port <= 0 {
 		port = 1080
 	}
-	users := map[string]string{}
-	if u, ok := cfg["users"].([]interface{}); ok {
-		for _, it := range u {
-			m, ok := it.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			name, _ := m["username"].(string)
-			if name == "" {
-				name, _ = m["name"].(string)
-			}
-			pass, _ := m["password"].(string)
-			enabled := true
-			if e, ok := m["enabled"].(bool); ok {
-				enabled = e
-			}
-			if name != "" && pass != "" && enabled {
-				users[name] = pass
-			}
-		}
-	}
+		users := extractUsersMap(cfg["users"])
 
 	upHost, _ := cfg["upstream_host"].(string)
 	upPort := toInt(cfg["upstream_port"])
@@ -326,6 +306,51 @@ func dialViaSocks5(proxyAddr, target, user, pass string, timeout time.Duration) 
 	}
 	_ = conn.SetDeadline(time.Time{})
 	return conn, nil
+}
+
+func extractUsersMap(v interface{}) map[string]string {
+	users := map[string]string{}
+	appendOne := func(m map[string]interface{}) {
+		name, _ := m["username"].(string)
+		if name == "" {
+			name, _ = m["name"].(string)
+		}
+		pass, _ := m["password"].(string)
+		enabled := true
+		if e, ok := m["enabled"].(bool); ok {
+			enabled = e
+		}
+		if name != "" && pass != "" && enabled {
+			users[name] = pass
+		}
+	}
+	switch t := v.(type) {
+	case []interface{}:
+		for _, it := range t {
+			if m, ok := it.(map[string]interface{}); ok {
+				appendOne(m)
+			}
+		}
+	case []map[string]interface{}:
+		for _, m := range t {
+			appendOne(m)
+		}
+	default:
+		if v == nil {
+			return users
+		}
+		b, err := json.Marshal(v)
+		if err != nil {
+			return users
+		}
+		var arr []map[string]interface{}
+		if json.Unmarshal(b, &arr) == nil {
+			for _, m := range arr {
+				appendOne(m)
+			}
+		}
+	}
+	return users
 }
 
 func toInt(v interface{}) int {

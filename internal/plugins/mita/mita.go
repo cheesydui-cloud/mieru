@@ -9,11 +9,15 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/cheesydui-cloud/mieru/internal/plugins/procutil"
 )
 
 // Plugin manages mita (mieru server) on Exit nodes.
+// Lifecycle mirrors ike-sh/mieru-OneClick + official docs:
+//
+//	ensure daemon (`mita run` via systemd or managed) → apply config → start → status RUNNING
 type Plugin struct {
 	DataDir string
 	BinDir  string
@@ -34,32 +38,10 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 	pmin := toInt(cfg["port_min"])
 	pmax := toInt(cfg["port_max"])
 
-	users := []map[string]string{}
-	if u, ok := cfg["users"].([]interface{}); ok {
-		for _, it := range u {
-			m, ok := it.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			name, _ := m["username"].(string)
-			if name == "" {
-				name, _ = m["name"].(string)
-			}
-			if name == "" {
-				name, _ = m["mita_user"].(string)
-			}
-			pass, _ := m["password"].(string)
-			enabled := true
-			if e, ok := m["enabled"].(bool); ok {
-				enabled = e
-			}
-			if name != "" && pass != "" && enabled {
-				users = append(users, map[string]string{"name": name, "password": pass})
-			}
-		}
-	}
+	users := extractUsers(cfg["users"])
 	if len(users) == 0 {
-		log.Printf("[mita_server] warning: no users in config")
+		// still start listener so TCP probe works; warn for real traffic
+		log.Printf("[mita_server] warning: no users — mita will listen but clients cannot auth")
 	}
 
 	portBindings := []map[string]interface{}{}
@@ -102,36 +84,129 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 		return fmt.Errorf("mita binary: %w", err)
 	}
 
-	if out, err := procutil.RunCapture(bin, "apply", "config", cfgPath); err != nil {
-		log.Printf("[mita_server] apply config: %v (%s)", err, strings.TrimSpace(out))
-	} else {
-		log.Printf("[mita_server] apply ok: %s", strings.TrimSpace(out))
+	rt, err := procutil.EnsureMitaDaemon(bin, p.DataDir)
+	if err != nil {
+		return fmt.Errorf("mita daemon: %w", err)
 	}
 
-	status, _ := procutil.RunCapture(bin, "status")
-	status = strings.TrimSpace(status)
-	log.Printf("[mita_server] status: %s", status)
+	// apply config with retries (OneClick apply_config)
+	var applyOut string
+	var applyErr error
+	for i := 0; i < 5; i++ {
+		applyOut, applyErr = rt.MitaCmd("apply", "config", cfgPath)
+		if applyErr == nil {
+			log.Printf("[mita_server] apply ok: %s", strings.TrimSpace(applyOut))
+			break
+		}
+		log.Printf("[mita_server] apply attempt %d: %v (%s)", i+1, applyErr, strings.TrimSpace(applyOut))
+		// re-ensure daemon
+		if rt2, e2 := procutil.EnsureMitaDaemon(bin, p.DataDir); e2 == nil {
+			rt = rt2
+		}
+		time.Sleep(time.Duration(i+1) * time.Second)
+	}
+	if applyErr != nil {
+		return fmt.Errorf("mita apply config: %w (%s)", applyErr, strings.TrimSpace(applyOut))
+	}
 
-	if strings.Contains(strings.ToUpper(status), "RUNNING") {
-		if out, err := procutil.RunCapture(bin, "reload"); err != nil {
-			log.Printf("[mita_server] reload: %v (%s) — restarting", err, strings.TrimSpace(out))
-			_, _ = procutil.RunCapture(bin, "stop")
-			if out2, err2 := procutil.RunCapture(bin, "start"); err2 != nil {
-				return fmt.Errorf("mita start: %w (%s)", err2, strings.TrimSpace(out2))
+	// stop then start so portBindings take effect (official: apply needs restart except users-only)
+	_, _ = rt.MitaCmd("stop")
+	time.Sleep(400 * time.Millisecond)
+
+	var startOut string
+	var startErr error
+	for i := 0; i < 5; i++ {
+		startOut, startErr = rt.MitaCmd("start")
+		if startErr == nil {
+			break
+		}
+		log.Printf("[mita_server] start attempt %d: %v (%s)", i+1, startErr, strings.TrimSpace(startOut))
+		if rt2, e2 := procutil.EnsureMitaDaemon(bin, p.DataDir); e2 == nil {
+			rt = rt2
+		}
+		time.Sleep(time.Duration(i+1) * time.Second)
+	}
+	if startErr != nil {
+		return fmt.Errorf("mita start: %w (%s)", startErr, strings.TrimSpace(startOut))
+	}
+	log.Printf("[mita_server] start ok: %s", strings.TrimSpace(startOut))
+
+	// verify RUNNING
+	for i := 0; i < 8; i++ {
+		time.Sleep(500 * time.Millisecond)
+		status, _ := rt.MitaCmd("status")
+		status = strings.TrimSpace(status)
+		log.Printf("[mita_server] status: %s", status)
+		if strings.Contains(strings.ToUpper(status), "RUNNING") {
+			return nil
+		}
+		_, _ = rt.MitaCmd("start")
+	}
+	status, _ := rt.MitaCmd("status")
+	return fmt.Errorf("mita not RUNNING after start (status=%s)", strings.TrimSpace(status))
+}
+
+// extractUsers accepts []interface{}, []map, or JSON-like maps from agent injection.
+func extractUsers(v interface{}) []map[string]string {
+	out := []map[string]string{}
+	appendOne := func(m map[string]interface{}) {
+		name, _ := m["username"].(string)
+		if name == "" {
+			name, _ = m["name"].(string)
+		}
+		if name == "" {
+			name, _ = m["mita_user"].(string)
+		}
+		pass, _ := m["password"].(string)
+		enabled := true
+		if e, ok := m["enabled"].(bool); ok {
+			enabled = e
+		}
+		// json numbers / missing enabled default true
+		if name != "" && pass != "" && enabled {
+			out = append(out, map[string]string{"name": name, "password": pass})
+		}
+	}
+
+	switch t := v.(type) {
+	case []interface{}:
+		for _, it := range t {
+			if m, ok := it.(map[string]interface{}); ok {
+				appendOne(m)
 			}
-		} else {
-			log.Printf("[mita_server] reloaded")
 		}
-	} else {
-		if out, err := procutil.RunCapture(bin, "start"); err != nil {
-			return fmt.Errorf("mita start: %w (%s)", err, strings.TrimSpace(out))
+	case []map[string]interface{}:
+		for _, m := range t {
+			appendOne(m)
 		}
-		log.Printf("[mita_server] started")
+	case []map[string]string:
+		for _, m := range t {
+			name := m["username"]
+			if name == "" {
+				name = m["name"]
+			}
+			pass := m["password"]
+			if name != "" && pass != "" {
+				out = append(out, map[string]string{"name": name, "password": pass})
+			}
+		}
+	default:
+		// try re-marshal (handles []model.AgentUser if ever passed raw)
+		if v == nil {
+			return out
+		}
+		b, err := json.Marshal(v)
+		if err != nil {
+			return out
+		}
+		var arr []map[string]interface{}
+		if json.Unmarshal(b, &arr) == nil {
+			for _, m := range arr {
+				appendOne(m)
+			}
+		}
 	}
-
-	status, _ = procutil.RunCapture(bin, "status")
-	log.Printf("[mita_server] final status: %s", strings.TrimSpace(status))
-	return nil
+	return out
 }
 
 func toInt(v interface{}) int {
@@ -142,6 +217,9 @@ func toInt(v interface{}) int {
 		return t
 	case int64:
 		return int(t)
+	case json.Number:
+		n, _ := t.Int64()
+		return int(n)
 	case string:
 		n, _ := strconv.Atoi(t)
 		return n

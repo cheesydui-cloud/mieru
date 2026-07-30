@@ -5,7 +5,7 @@
 set -euo pipefail
 
 REPO="${MIERU_REPO:-cheesydui-cloud/mieru}"
-VERSION="${MIERU_VERSION:-v0.2.0}"
+VERSION="${MIERU_VERSION:-v0.2.1}"
 PREFIX="${MIERU_PREFIX:-/usr/local}"
 INSTALL_DIR="${MIERU_INSTALL_DIR:-/opt/mieru-panel}"
 DATA_DIR="${MIERU_AGENT_DATA:-/var/lib/mieru-agent}"
@@ -65,6 +65,14 @@ if [[ "$(id -u)" -eq 0 ]]; then SUDO=""; else
   command -v sudo >/dev/null 2>&1 || { echo "需要 root 或 sudo" >&2; exit 1; }
   SUDO="sudo"
 fi
+
+echo "==> 停止旧 Agent（如有）"
+if command -v systemctl >/dev/null 2>&1; then
+  $SUDO systemctl stop mieru-agent 2>/dev/null || true
+fi
+$SUDO pkill -x mieru-agent 2>/dev/null || true
+$SUDO pkill -f '/usr/local/bin/mieru-agent' 2>/dev/null || true
+sleep 1
 
 echo "==> 下载 ${URL}"
 curl -fsSL "$URL" -o "$TMP/$ASSET"
