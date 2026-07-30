@@ -8,10 +8,18 @@ const error = ref('')
 const toast = ref('')
 const show = ref(false)
 const saving = ref(false)
+const mode = ref('create') // create | edit
+const editingId = ref(null)
+
 const form = reactive({
   name: '',
   strategy: 'sticky',
+  // entry: node | external
+  entry_mode: 'node',
   entry_id: '',
+  entry_host: '',
+  entry_port: 10401,
+  entry_name: '',
   relay_id: '',
   exit_id: '',
 })
@@ -20,7 +28,15 @@ const entries = computed(() => (nodes.value || []).filter((n) => n.role === 'ent
 const relays = computed(() => (nodes.value || []).filter((n) => n.role === 'relay' || n.role === 'hybrid'))
 const exits = computed(() => (nodes.value || []).filter((n) => n.role === 'exit' || n.role === 'hybrid'))
 const hasNodes = computed(() => (nodes.value || []).length > 0)
-const canSave = computed(() => form.name.trim() && (form.entry_id || form.relay_id || form.exit_id))
+const canSave = computed(() => {
+  if (!form.name.trim()) return false
+  if (form.entry_mode === 'external') {
+    if (!form.entry_host.trim()) return false
+  } else if (form.entry_id) {
+    // ok
+  }
+  return !!(form.entry_id || form.entry_mode === 'external' || form.relay_id || form.exit_id)
+})
 
 async function load() {
   try {
@@ -47,47 +63,159 @@ function parseHops(json) {
 }
 
 function hopLabel(hop) {
+  if (hop.external || (!hop.node_id && hop.host)) {
+    const port = hop.port > 0 ? `:${hop.port}` : ''
+    const name = hop.name || hop.host || '外部入口'
+    return `${name} (${hop.host}${port})`
+  }
   const n = (nodes.value || []).find((x) => x.id === hop.node_id)
-  return n ? `${n.name} (${n.role})` : hop.node_id
+  return n ? `${n.name} (${n.role})` : hop.node_id || '?'
+}
+
+function blankForm() {
+  form.name = ''
+  form.strategy = 'sticky'
+  form.entry_mode = 'node'
+  form.entry_id = entries.value[0]?.id || ''
+  form.entry_host = ''
+  form.entry_port = 10401
+  form.entry_name = ''
+  form.relay_id = relays.value[0]?.id || ''
+  form.exit_id = exits.value[0]?.id || ''
 }
 
 function openCreate() {
-  form.name = ''
-  form.strategy = 'sticky'
-  form.entry_id = entries.value[0]?.id || ''
-  form.relay_id = relays.value[0]?.id || ''
-  form.exit_id = exits.value[0]?.id || ''
+  blankForm()
+  mode.value = 'create'
+  editingId.value = null
   error.value = ''
   show.value = true
 }
 
-async function create() {
+function openEdit(r) {
+  blankForm()
+  mode.value = 'edit'
+  editingId.value = r.id
+  form.name = r.name || ''
+  form.strategy = r.strategy || 'sticky'
+  const hops = parseHops(r.hops_json)
+
+  form.entry_mode = 'node'
+  form.entry_id = ''
+  form.entry_host = ''
+  form.entry_port = 10401
+  form.entry_name = ''
+  form.relay_id = ''
+  form.exit_id = ''
+
+  for (const h of hops) {
+    if (h.external || (!h.node_id && h.host)) {
+      form.entry_mode = 'external'
+      form.entry_host = h.host || ''
+      form.entry_port = h.port > 0 ? h.port : 10401
+      form.entry_name = h.name || ''
+      continue
+    }
+    if (!h.node_id) continue
+    const n = (nodes.value || []).find((x) => x.id === h.node_id)
+    const role = n?.role || ''
+    const cap = h.capability_type || ''
+
+    if (cap === 'socks_in' || role === 'entry') {
+      form.entry_mode = 'node'
+      form.entry_id = h.node_id
+      continue
+    }
+    if (cap === 'mieru_client' || role === 'relay') {
+      form.relay_id = h.node_id
+      continue
+    }
+    if (cap === 'mita_server' || role === 'exit') {
+      form.exit_id = h.node_id
+      continue
+    }
+    if (role === 'hybrid') {
+      // first hybrid without entry → entry; else exit
+      if (!form.entry_id && form.entry_mode === 'node') {
+        form.entry_id = h.node_id
+      } else {
+        form.exit_id = h.node_id
+      }
+      continue
+    }
+    // unknown role: fill in order entry → relay → exit
+    if (!form.entry_id && form.entry_mode === 'node') form.entry_id = h.node_id
+    else if (!form.relay_id) form.relay_id = h.node_id
+    else if (!form.exit_id) form.exit_id = h.node_id
+  }
+  error.value = ''
+  show.value = true
+}
+
+function buildHops() {
+  const hops = []
+  let order = 0
+  if (form.entry_mode === 'external') {
+    const host = form.entry_host.trim()
+    if (host) {
+      hops.push({
+        external: true,
+        host,
+        port: Number(form.entry_port) || 0,
+        name: form.entry_name.trim() || host,
+        order: order++,
+        capability_type: 'external_entry',
+      })
+    }
+  } else if (form.entry_id) {
+    hops.push({ node_id: form.entry_id, order: order++, capability_type: 'socks_in' })
+  }
+  if (form.relay_id) {
+    hops.push({ node_id: form.relay_id, order: order++, capability_type: 'mieru_client' })
+  }
+  if (form.exit_id) {
+    hops.push({ node_id: form.exit_id, order: order++, capability_type: 'mita_server' })
+  }
+  return hops
+}
+
+async function save() {
   if (!form.name.trim()) {
     error.value = '请填写线路名称'
     return
   }
-  const hops = []
-  if (form.entry_id) hops.push({ node_id: form.entry_id, order: 0, capability_type: 'socks_in' })
-  if (form.relay_id) hops.push({ node_id: form.relay_id, order: 1, capability_type: 'mieru_client' })
-  if (form.exit_id) hops.push({ node_id: form.exit_id, order: 2, capability_type: 'mita_server' })
+  if (form.entry_mode === 'external' && !form.entry_host.trim()) {
+    error.value = '请填写外部入口的 IP 或域名'
+    return
+  }
+  const hops = buildHops()
   if (!hops.length) {
-    error.value = '至少选择一个节点（建议 Entry → Relay → Exit）'
+    error.value = '至少选择一个节点或填写外部入口（建议 Entry → Relay → Exit）'
     return
   }
   saving.value = true
   try {
-    await api('/api/admin/routes', {
-      method: 'POST',
-      body: JSON.stringify({
-        name: form.name.trim(),
-        strategy: form.strategy,
-        enabled: true,
-        hops_json: JSON.stringify(hops),
-        weight: 100,
-      }),
-    })
+    const body = {
+      name: form.name.trim(),
+      strategy: form.strategy,
+      enabled: true,
+      hops_json: JSON.stringify(hops),
+      weight: 100,
+    }
+    if (mode.value === 'edit' && editingId.value != null) {
+      await api(`/api/admin/routes/${editingId.value}`, {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      })
+      toast.value = '线路已更新'
+    } else {
+      await api('/api/admin/routes', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      })
+      toast.value = '线路已创建'
+    }
     show.value = false
-    toast.value = '线路已创建'
     await load()
   } catch (e) {
     error.value = e.message
@@ -119,7 +247,7 @@ onMounted(load)
       <div>
         <h2>线路编排</h2>
         <div class="muted" style="font-size: 12px; margin-top: 4px">
-          Entry → Relay(mieru) → Exit(mita)
+          Entry → Relay(mieru) → Exit(mita)；入口可选手动 IP/域名
         </div>
       </div>
       <button class="btn btn-primary btn-sm" @click="openCreate">＋ 新建线路</button>
@@ -146,14 +274,17 @@ onMounted(load)
               <div class="hops">
                 <template v-for="(h, i) in parseHops(r.hops_json)" :key="i">
                   <span v-if="i" class="hop-arrow">→</span>
-                  <span class="hop">{{ hopLabel(h) }}</span>
+                  <span class="hop" :class="{ external: h.external || (!h.node_id && h.host) }">{{ hopLabel(h) }}</span>
                 </template>
                 <span v-if="!parseHops(r.hops_json).length" class="muted">无 hops</span>
               </div>
             </td>
             <td>{{ r.health || '—' }}</td>
             <td>
-              <button class="btn btn-danger btn-sm" @click="remove(r.id)">删除</button>
+              <div class="row-actions">
+                <button class="btn btn-ghost btn-sm" @click="openEdit(r)">编辑</button>
+                <button class="btn btn-danger btn-sm" @click="remove(r.id)">删除</button>
+              </div>
             </td>
           </tr>
         </tbody>
@@ -161,7 +292,7 @@ onMounted(load)
       <div v-else class="empty" style="padding: 48px 24px; text-align: center">
         <div style="font-size: 16px; margin-bottom: 8px">还没有线路</div>
         <div class="muted" style="margin-bottom: 20px; max-width: 420px; margin-left: auto; margin-right: auto">
-          先在「节点」里创建 Entry / Relay / Exit，再把它们串成一条线路。
+          先在「节点」里创建 Relay / Exit；入口可选手动填商家 IP，再串成线路。
         </div>
         <button class="btn btn-primary" @click="openCreate">新建线路</button>
         <div v-if="!hasNodes" class="muted" style="margin-top: 12px; font-size: 12px">
@@ -172,9 +303,9 @@ onMounted(load)
   </div>
 
   <div v-if="show" class="modal-mask" @click.self="show = false">
-    <div class="modal">
+    <div class="modal" style="max-width: 560px">
       <div class="modal-hd">
-        <h3>新建线路</h3>
+        <h3>{{ mode === 'edit' ? '编辑线路' : '新建线路' }}</h3>
         <button class="btn btn-ghost btn-sm" @click="show = false">关闭</button>
       </div>
       <div class="modal-bd">
@@ -192,13 +323,46 @@ onMounted(load)
             </select>
           </div>
           <div class="field">
-            <label>Entry（入口）</label>
-            <select v-model="form.entry_id">
-              <option value="">— 不选 —</option>
-              <option v-for="n in entries" :key="n.id" :value="n.id">{{ n.name }} ({{ n.id }})</option>
+            <label>入口来源</label>
+            <select v-model="form.entry_mode">
+              <option value="node">从节点选择</option>
+              <option value="external">手填 IP / 域名</option>
             </select>
-            <div v-if="!entries.length" class="muted" style="font-size:12px;margin-top:4px">无 entry 节点，请先在「节点」创建</div>
           </div>
+        </div>
+
+        <!-- Entry: node -->
+        <div v-if="form.entry_mode === 'node'" class="field">
+          <label>Entry（入口节点）</label>
+          <select v-model="form.entry_id">
+            <option value="">— 不选 —</option>
+            <option v-for="n in entries" :key="n.id" :value="n.id">{{ n.name }} ({{ n.id }})</option>
+          </select>
+          <div v-if="!entries.length" class="muted" style="font-size:12px;margin-top:4px">
+            无 entry/hybrid 节点。商家入口可改选「手填 IP / 域名」。
+          </div>
+        </div>
+
+        <!-- Entry: external -->
+        <div v-else class="form-grid">
+          <div class="field" style="grid-column: 1 / -1">
+            <label>入口 IP / 域名</label>
+            <input v-model="form.entry_host" placeholder="例如 1.2.3.4 或 entry.example.com" />
+          </div>
+          <div class="field">
+            <label>端口</label>
+            <input v-model.number="form.entry_port" type="number" min="1" max="65535" placeholder="10401" />
+          </div>
+          <div class="field">
+            <label>显示名称（可选）</label>
+            <input v-model="form.entry_name" placeholder="国内入口" />
+          </div>
+          <div class="muted" style="grid-column: 1 / -1; font-size:12px; line-height:1.6">
+            不装 Agent。订阅会下发此地址；流量由商家 DNAT 到下方 Relay。请保证端口与中转监听一致。
+          </div>
+        </div>
+
+        <div class="form-grid" style="margin-top: 12px">
           <div class="field">
             <label>Relay（中继 / mieru）</label>
             <select v-model="form.relay_id">
@@ -214,16 +378,23 @@ onMounted(load)
             </select>
           </div>
         </div>
-        <div class="muted" style="font-size:12px;line-height:1.6">
-          推荐拓扑：Entry → Relay → Exit。可只选部分节点；保存后会生成 hops 配置下发给 Agent。
+        <div class="muted" style="font-size:12px;line-height:1.6;margin-top:10px">
+          推荐：入口（节点或手填）→ Relay → Exit。保存后 hops 下发给 Agent；手填入口不会出现在「节点」列表。
         </div>
       </div>
       <div class="modal-ft">
         <button class="btn btn-ghost" @click="show = false">取消</button>
-        <button class="btn btn-primary" :disabled="saving || !canSave" @click="create">
-          {{ saving ? '保存中…' : '保存线路' }}
+        <button class="btn btn-primary" :disabled="saving || !canSave" @click="save">
+          {{ saving ? '保存中…' : (mode === 'edit' ? '保存修改' : '保存线路') }}
         </button>
       </div>
     </div>
   </div>
 </template>
+
+<style scoped>
+.hop.external {
+  border-style: dashed;
+  opacity: 0.95;
+}
+</style>

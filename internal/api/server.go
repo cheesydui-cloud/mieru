@@ -920,60 +920,142 @@ func (s *Server) nodeInstallCmd(c *gin.Context) {
 	})
 }
 
-func (s *Server) subscription(c *gin.Context) {
-	u, err := s.store.GetUserBySubToken(c.Param("token"))
-	if err != nil {
-		c.String(http.StatusNotFound, "not found")
-		return
-	}
-	_ = s.store.RefreshUserStatuses()
-	if u2, err := s.store.GetUser(u.ID); err == nil {
-		u = u2
-	}
-	if u.Status != model.StatusActive {
-		c.String(http.StatusForbidden, "account not active: "+u.Status)
-		return
-	}
+	func (s *Server) subscription(c *gin.Context) {
+		u, err := s.store.GetUserBySubToken(c.Param("token"))
+		if err != nil {
+			c.String(http.StatusNotFound, "not found")
+			return
+		}
+		_ = s.store.RefreshUserStatuses()
+		if u2, err := s.store.GetUser(u.ID); err == nil {
+			u = u2
+		}
+		if u.Status != model.StatusActive {
+			c.String(http.StatusForbidden, "account not active: "+u.Status)
+			return
+		}
 
-	nodes, _ := s.store.ListNodes()
-	var b strings.Builder
-	b.WriteString("# mieru-panel subscription\n")
-	b.WriteString("# user: " + u.Username + "\n")
-	b.WriteString("proxies:\n")
-	count := 0
-	names := []string{}
-	for _, n := range nodes {
-		if n.Role != model.RoleEntry && n.Role != model.RoleHybrid {
-			continue
+		type entryProxy struct {
+			Name string
+			Host string
+			Port int
 		}
-		host := n.Hostname
-		if host == "" {
-			host = n.PublicIP
+		seen := map[string]bool{}
+		proxies := []entryProxy{}
+
+		// Prefer entry endpoints from the user's bound route (supports external entry).
+		if u.RouteID != nil {
+			if r, err := s.store.GetRoute(*u.RouteID); err == nil && r.Enabled {
+				var hops []model.Hop
+				_ = json.Unmarshal([]byte(r.HopsJSON), &hops)
+				for _, h := range hops {
+					if h.External || (h.NodeID == "" && h.Host != "") {
+						host := strings.TrimSpace(h.Host)
+						if host == "" {
+							continue
+						}
+						port := h.Port
+						if port <= 0 {
+							port = 1080
+						}
+						name := h.Name
+						if name == "" {
+							name = host
+						}
+						key := fmt.Sprintf("%s:%d", host, port)
+						if seen[key] {
+							continue
+						}
+						seen[key] = true
+						proxies = append(proxies, entryProxy{Name: name, Host: host, Port: port})
+						// only first external/entry hop is the client entry
+						break
+					}
+					if h.NodeID == "" {
+						continue
+					}
+					n, err := s.store.GetNode(h.NodeID)
+					if err != nil {
+						continue
+					}
+					if n.Role != model.RoleEntry && n.Role != model.RoleHybrid {
+						// first hop might be relay when only relay+exit — skip for client entry
+						continue
+					}
+					host := n.Hostname
+					if host == "" {
+						host = n.PublicIP
+					}
+					if host == "" {
+						continue
+					}
+					name := n.Name
+					if name == "" {
+						name = host
+					}
+					port := n.EffectiveListenPort()
+					key := fmt.Sprintf("%s:%d", host, port)
+					if seen[key] {
+						continue
+					}
+					seen[key] = true
+					proxies = append(proxies, entryProxy{Name: name, Host: host, Port: port})
+					break
+				}
+			}
 		}
-		if host == "" {
-			continue
+
+		// Fallback: all entry/hybrid nodes (legacy / unbound route).
+		if len(proxies) == 0 {
+			nodes, _ := s.store.ListNodes()
+			for _, n := range nodes {
+				if n.Role != model.RoleEntry && n.Role != model.RoleHybrid {
+					continue
+				}
+				host := n.Hostname
+				if host == "" {
+					host = n.PublicIP
+				}
+				if host == "" {
+					continue
+				}
+				name := n.Name
+				if name == "" {
+					name = host
+				}
+				port := n.EffectiveListenPort()
+				key := fmt.Sprintf("%s:%d", host, port)
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				proxies = append(proxies, entryProxy{Name: name, Host: host, Port: port})
+			}
 		}
-		name := n.Name
-		if name == "" {
-			name = host
+
+		var b strings.Builder
+		b.WriteString("# mieru-panel subscription\n")
+		b.WriteString("# user: " + u.Username + "\n")
+		b.WriteString("proxies:\n")
+		names := []string{}
+		if len(proxies) == 0 {
+			b.WriteString("  - name: \"placeholder-no-entry\"\n    type: socks5\n    server: 127.0.0.1\n    port: 1\n")
+			names = append(names, "placeholder-no-entry")
+		} else {
+			for _, p := range proxies {
+				fmt.Fprintf(&b, "  - name: %q\n    type: socks5\n    server: %s\n    port: %d\n    username: %q\n    password: %q\n",
+					p.Name, p.Host, p.Port, u.Username, u.ProxyPassword)
+				names = append(names, p.Name)
+			}
 		}
-			fmt.Fprintf(&b, "  - name: %q\n    type: socks5\n    server: %s\n    port: %d\n    username: %q\n    password: %q\n",
-				name, host, n.EffectiveListenPort(), u.Username, u.ProxyPassword)
-		names = append(names, name)
-		count++
+		b.WriteString("proxy-groups:\n  - name: PROXY\n    type: select\n    proxies:\n")
+		for _, name := range names {
+			fmt.Fprintf(&b, "      - %q\n", name)
+		}
+		b.WriteString("rules:\n  - MATCH,PROXY\n")
+		c.Header("Content-Disposition", "attachment; filename=subscription.yaml")
+		c.Data(http.StatusOK, "text/yaml; charset=utf-8", []byte(b.String()))
 	}
-	if count == 0 {
-		b.WriteString("  - name: \"placeholder-no-entry\"\n    type: socks5\n    server: 127.0.0.1\n    port: 1\n")
-		names = append(names, "placeholder-no-entry")
-	}
-	b.WriteString("proxy-groups:\n  - name: PROXY\n    type: select\n    proxies:\n")
-	for _, name := range names {
-		fmt.Fprintf(&b, "      - %q\n", name)
-	}
-	b.WriteString("rules:\n  - MATCH,PROXY\n")
-	c.Header("Content-Disposition", "attachment; filename=subscription.yaml")
-	c.Data(http.StatusOK, "text/yaml; charset=utf-8", []byte(b.String()))
-}
 
 func (s *Server) agentHeartbeat(c *gin.Context) {
 	var req model.HeartbeatRequest

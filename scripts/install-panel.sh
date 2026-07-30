@@ -6,7 +6,7 @@
 set -euo pipefail
 
 REPO="${MIERU_REPO:-cheesydui-cloud/mieru}"
-VERSION="${MIERU_VERSION:-v0.1.8}"
+VERSION="${MIERU_VERSION:-v0.1.9}"
 PREFIX="${MIERU_PREFIX:-/usr/local}"
 INSTALL_DIR="${MIERU_INSTALL_DIR:-/opt/mieru-panel}"
 DATA_DIR="${MIERU_DATA_DIR:-/var/lib/mieru-panel}"
@@ -120,7 +120,7 @@ EOF
   $SUDO systemctl enable mieru-panel >/dev/null 2>&1 || true
   $SUDO systemctl restart mieru-panel
   sleep 1
-  # v0.1.8+ 启动时会把 env 密码同步进 SQLite；再主动 reset 一次更保险
+  # v0.1.9+ 启动时会把 env 密码同步进 SQLite；再主动 reset 一次更保险
   if $SUDO "${PREFIX}/bin/mieru-panel" --help 2>&1 | grep -q reset-admin; then
     $SUDO systemctl stop mieru-panel || true
     $SUDO env -i PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
@@ -169,4 +169,4 @@ echo " 服务状态 : systemctl status mieru-panel"
 echo " 版本检查 : curl -s ${CHECK_URL}/api/version"
 echo " 本机探测 : version=${VER}  / => HTTP ${ROOT}"
 echo "============================================"
-echo "请用上方账号密码登录。v0.1.8 起 env 密码会在每次启动同步到数据库。"
+echo "请用上方账号密码登录。v0.1.9 起 env 密码会在每次启动同步到数据库。"

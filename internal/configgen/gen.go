@@ -77,7 +77,7 @@ func (b *Builder) RebuildAll() error {
 					Enabled:  true,
 				})
 			}
-			// derive simple forwards from first hop of assigned routes
+			// derive simple forwards: this entry → next agent hop on assigned routes
 			forwards := []model.ForwardRule{}
 			for _, u := range users {
 				if u.RouteID == nil {
@@ -89,49 +89,65 @@ func (b *Builder) RebuildAll() error {
 				}
 				var hops []model.Hop
 				_ = json.Unmarshal([]byte(r.HopsJSON), &hops)
-				if len(hops) < 2 {
-					continue
-				}
-				// hop[0] should be entry, hop[1] next
-				nextID := hops[1].NodeID
-				next, err := b.Store.GetNode(nextID)
-				if err != nil {
+				next := b.nextAgentHopAfter(hops, n.ID)
+				if next == nil {
 					continue
 				}
 				host := next.PublicIP
-				if next.Hostname != "" {
-					// for node-to-node, prefer IP if present
-					if next.PublicIP != "" {
-						host = next.PublicIP
-					} else {
-						host = next.Hostname
-					}
+				if host == "" {
+					host = next.Hostname
 				}
-					lp := n.PortInRange(u.ID)
-					tp := next.PortInRange(u.ID)
-					forwards = append(forwards, model.ForwardRule{
-						ListenPort: lp,
-						TargetHost: host,
-						TargetPort: tp,
-						Protocol:   "tcp",
-						Comment:    fmt.Sprintf("user %s -> %s", u.Username, next.Name),
+				if host == "" {
+					continue
+				}
+				lp := n.PortInRange(u.ID)
+				tp := next.PortInRange(u.ID)
+				forwards = append(forwards, model.ForwardRule{
+					ListenPort: lp,
+					TargetHost: host,
+					TargetPort: tp,
+					Protocol:   "tcp",
+					Comment:    fmt.Sprintf("user %s -> %s", u.Username, next.Name),
+				})
+			}
+			cfg.Forwards = forwards
+			emin, emax := n.EffectivePortRange()
+			cfg.Plugins = append(cfg.Plugins,
+				map[string]interface{}{
+					"type": "socks_in",
+					"config": map[string]interface{}{
+						"auth":        "users",
+						"listen_port": n.EffectiveListenPort(),
+						"port_min":    emin,
+						"port_max":    emax,
+					},
+				},
+				map[string]interface{}{"type": "nft_forward", "config": map[string]interface{}{"rules_from": "forwards"}},
+			)
+		case model.RoleRelay:
+			// If a route starts with external entry and this relay is the first agent hop,
+			// accept client SOCKS here (merchant DNAT lands on this machine).
+			if routeHasExternalEntryTo(routes, n.ID) {
+				for _, u := range users {
+					cfg.Users = append(cfg.Users, model.AgentUser{
+						UserID:   u.ID,
+						Username: u.Username,
+						Password: u.ProxyPassword,
+						Enabled:  true,
 					})
 				}
-				cfg.Forwards = forwards
-				emin, emax := n.EffectivePortRange()
-				cfg.Plugins = append(cfg.Plugins,
-					map[string]interface{}{
-						"type": "socks_in",
-						"config": map[string]interface{}{
-							"auth":        "users",
-							"listen_port": n.EffectiveListenPort(),
-							"port_min":    emin,
-							"port_max":    emax,
-						},
+				pmin, pmax := n.EffectivePortRange()
+				cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
+					"type": "socks_in",
+					"config": map[string]interface{}{
+						"auth":        "users",
+						"listen_port": n.EffectiveListenPort(),
+						"port_min":    pmin,
+						"port_max":    pmax,
+						"via":         "external_entry",
 					},
-					map[string]interface{}{"type": "nft_forward", "config": map[string]interface{}{"rules_from": "forwards"}},
-				)
-		case model.RoleRelay:
+				})
+			}
 			// mieru client toward exits found in routes
 			exits := map[string]model.Node{}
 			for _, r := range routes {
@@ -141,6 +157,9 @@ func (b *Builder) RebuildAll() error {
 				var hops []model.Hop
 				_ = json.Unmarshal([]byte(r.HopsJSON), &hops)
 				for _, h := range hops {
+					if h.NodeID == "" {
+						continue
+					}
 					if h.CapabilityType == "mita_server" || h.Order == len(hops)-1 {
 						if ex, err := b.Store.GetNode(h.NodeID); err == nil && (ex.Role == model.RoleExit || ex.Role == model.RoleHybrid) {
 							exits[ex.ID] = *ex
@@ -148,25 +167,36 @@ func (b *Builder) RebuildAll() error {
 					}
 				}
 			}
-				pmin, pmax := n.EffectivePortRange()
-				for _, ex := range exits {
-					host := ex.PublicIP
-					if host == "" {
-						host = ex.Hostname
-					}
-					cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
-						"type": "mieru_client",
-						"config": map[string]interface{}{
-							"server":      host,
-							"port":        ex.EffectiveListenPort(),
-							"exit_id":     ex.ID,
-							"listen_port": n.EffectiveListenPort(),
-							"port_min":    pmin,
-							"port_max":    pmax,
-						},
-					})
+			pmin, pmax := n.EffectivePortRange()
+			for _, ex := range exits {
+				host := ex.PublicIP
+				if host == "" {
+					host = ex.Hostname
 				}
+				cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
+					"type": "mieru_client",
+					"config": map[string]interface{}{
+						"server":      host,
+						"port":        ex.EffectiveListenPort(),
+						"exit_id":     ex.ID,
+						"listen_port": n.EffectiveListenPort(),
+						"port_min":    pmin,
+						"port_max":    pmax,
+					},
+				})
+			}
 			for _, u := range users {
+				// avoid duplicate users if already filled for external entry socks
+				dup := false
+				for _, existing := range cfg.Users {
+					if existing.UserID == u.ID {
+						dup = true
+						break
+					}
+				}
+				if dup {
+					continue
+				}
 				cfg.Users = append(cfg.Users, model.AgentUser{
 					UserID:   u.ID,
 					Username: u.Username,
@@ -188,5 +218,82 @@ func (b *Builder) RebuildAll() error {
 			return err
 		}
 	}
-	return nil
-}
+		return nil
+	}
+
+	// nextAgentHopAfter returns the first non-external hop after the hop matching nodeID
+	// (or after an external entry if nodeID is empty). Looks up the node from store.
+	func (b *Builder) nextAgentHopAfter(hops []model.Hop, nodeID string) *model.Node {
+		return nextAgentHopAfterStore(b.Store, hops, nodeID)
+	}
+
+	func nextAgentHopAfterStore(st *store.Store, hops []model.Hop, nodeID string) *model.Node {
+		if st == nil || len(hops) == 0 {
+			return nil
+		}
+		start := -1
+		if nodeID == "" {
+			// first external or start of chain
+			for i, h := range hops {
+				if h.External || h.NodeID == "" {
+					start = i
+					break
+				}
+			}
+			if start < 0 {
+				start = -1 // will look from 0
+			}
+		} else {
+			for i, h := range hops {
+				if h.NodeID == nodeID {
+					start = i
+					break
+				}
+			}
+			if start < 0 {
+				return nil
+			}
+		}
+		for j := start + 1; j < len(hops); j++ {
+			h := hops[j]
+			if h.External || h.NodeID == "" {
+				continue
+			}
+			n, err := st.GetNode(h.NodeID)
+			if err != nil {
+				continue
+			}
+			return n
+		}
+		return nil
+	}
+
+	// routeHasExternalEntryTo reports whether any enabled route has an external
+	// entry hop whose next agent hop is nodeID (merchant DNAT lands on this node).
+	func routeHasExternalEntryTo(routes []model.Route, nodeID string) bool {
+		for _, r := range routes {
+			if !r.Enabled {
+				continue
+			}
+			var hops []model.Hop
+			if err := json.Unmarshal([]byte(r.HopsJSON), &hops); err != nil {
+				continue
+			}
+			for i, h := range hops {
+				if !h.External && h.NodeID != "" {
+					continue
+				}
+				// external entry at i — next agent hop
+				for j := i + 1; j < len(hops); j++ {
+					if hops[j].External || hops[j].NodeID == "" {
+						continue
+					}
+					if hops[j].NodeID == nodeID {
+						return true
+					}
+					break
+				}
+			}
+		}
+		return false
+	}

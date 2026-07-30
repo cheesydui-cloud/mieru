@@ -153,11 +153,18 @@ type Route struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-type Hop struct {
-	NodeID         string `json:"node_id"`
-	Order          int    `json:"order"`
-	CapabilityType string `json:"capability_type"`
-}
+	// Hop is one step in a route. NodeID is empty when External is true
+	// (merchant-provided entry IP/domain with no Agent).
+	type Hop struct {
+		NodeID         string `json:"node_id,omitempty"`
+		Order          int    `json:"order"`
+		CapabilityType string `json:"capability_type,omitempty"`
+		// External entry: no panel node / no Agent; only client-facing endpoint.
+		External bool   `json:"external,omitempty"`
+		Host     string `json:"host,omitempty"` // IP or domain for clients
+		Port     int    `json:"port,omitempty"` // client port (0 = default)
+		Name     string `json:"name,omitempty"` // display name in subscription
+	}
 
 type User struct {
 	ID               int64      `json:"id"`
