@@ -10,6 +10,8 @@ const show = ref(false)
 const saving = ref(false)
 const mode = ref('create') // create | edit
 const editingId = ref(null)
+const probing = ref({}) // id -> true
+const probeDetail = ref(null) // last probe result modal
 
 const form = reactive({
   name: '',
@@ -235,6 +237,40 @@ async function remove(id) {
   }
 }
 
+function healthLabel(h) {
+  const m = {
+    ok: '通',
+    degraded: '部分通',
+    down: '不通',
+    unknown: '未测',
+  }
+  return m[h] || h || '未测'
+}
+
+function healthClass(h) {
+  if (h === 'ok') return 'badge-ok'
+  if (h === 'degraded') return 'badge-warn'
+  if (h === 'down') return 'badge-bad'
+  return 'badge-muted'
+}
+
+async function probe(r) {
+  probing.value = { ...probing.value, [r.id]: true }
+  error.value = ''
+  try {
+    const res = await api(`/api/admin/routes/${r.id}/probe`, { method: 'POST' })
+    probeDetail.value = res
+    const ok = (res.hops || []).filter((x) => x.ok).length
+    const total = (res.hops || []).length
+    toast.value = `线路 #${r.id} 探测：${ok}/${total} 通 · ${healthLabel(res.health)}`
+    await load()
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    probing.value = { ...probing.value, [r.id]: false }
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -279,10 +315,19 @@ onMounted(load)
                 <span v-if="!parseHops(r.hops_json).length" class="muted">无 hops</span>
               </div>
             </td>
-            <td>{{ r.health || '—' }}</td>
             <td>
+              <span class="badge" :class="healthClass(r.health)">{{ healthLabel(r.health) }}</span>
+            </td>
+            <td class="actions-cell">
               <div class="row-actions">
                 <button class="btn btn-ghost btn-sm" @click="openEdit(r)">编辑</button>
+                <button
+                  class="btn btn-ghost btn-sm"
+                  :disabled="!!probing[r.id]"
+                  @click="probe(r)"
+                >
+                  {{ probing[r.id] ? '探测中…' : '测通断' }}
+                </button>
                 <button class="btn btn-danger btn-sm" @click="remove(r.id)">删除</button>
               </div>
             </td>
@@ -390,11 +435,86 @@ onMounted(load)
       </div>
     </div>
   </div>
+
+  <!-- probe result -->
+  <div v-if="probeDetail" class="modal-mask" @click.self="probeDetail = null">
+    <div class="modal" style="max-width: 560px">
+      <div class="modal-hd">
+        <h3>通断探测 · 线路 #{{ probeDetail.route_id }}</h3>
+        <button class="btn btn-ghost btn-sm" @click="probeDetail = null">关闭</button>
+      </div>
+      <div class="modal-bd">
+        <div class="kv" style="margin-bottom: 12px">
+          <dt>总评</dt>
+          <dd>
+            <span class="badge" :class="healthClass(probeDetail.health)">{{ healthLabel(probeDetail.health) }}</span>
+          </dd>
+          <dt>时间</dt>
+          <dd class="mono muted">{{ probeDetail.checked_at }}</dd>
+        </div>
+        <table class="data" v-if="probeDetail.hops?.length">
+          <thead>
+            <tr>
+              <th>跳</th>
+              <th>地址</th>
+              <th>结果</th>
+              <th>延迟</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(h, i) in probeDetail.hops" :key="i">
+              <td>
+                <div>{{ h.label || '—' }}</div>
+                <div class="muted" style="font-size:11px">{{ h.kind }}{{ h.agent_status ? ' · agent ' + h.agent_status : '' }}</div>
+              </td>
+              <td class="mono">{{ h.host }}:{{ h.port }}</td>
+              <td>
+                <span class="badge" :class="h.ok ? 'badge-ok' : 'badge-bad'">{{ h.ok ? '通' : '不通' }}</span>
+                <div v-if="h.error" class="muted" style="font-size:11px;max-width:180px;word-break:break-all">{{ h.error }}</div>
+              </td>
+              <td class="mono">{{ h.ok ? h.latency_ms + ' ms' : '—' }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="muted" style="font-size:12px;margin-top:12px;line-height:1.6">
+          从<strong>面板主机</strong>对每个 hop 的 IP:端口做 TCP 连通检测（不验证 SOCKS 账号）。
+          商家入口若仅允许客户端 IP 访问，面板测不通也属正常，以用户端为准。
+        </div>
+      </div>
+      <div class="modal-ft">
+        <button class="btn btn-primary" @click="probeDetail = null">知道了</button>
+      </div>
+    </div>
+  </div>
 </template>
 
 <style scoped>
 .hop.external {
   border-style: dashed;
   opacity: 0.95;
+}
+.actions-cell {
+  min-width: 200px;
+  white-space: nowrap;
+}
+.badge-ok {
+  background: rgba(52, 211, 153, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(52, 211, 153, 0.35);
+}
+.badge-warn {
+  background: rgba(251, 191, 36, 0.12);
+  color: #fbbf24;
+  border: 1px solid rgba(251, 191, 36, 0.35);
+}
+.badge-bad {
+  background: rgba(248, 113, 113, 0.12);
+  color: #f87171;
+  border: 1px solid rgba(248, 113, 113, 0.35);
+}
+.badge-muted {
+  background: rgba(148, 163, 184, 0.12);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.25);
 }
 </style>

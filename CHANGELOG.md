@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.10] - 2026-07-30
+
+### Added
+- **Route 测通断**: `POST /api/admin/routes/:id/probe` — TCP probe each hop from panel, update health (ok/degraded/down).
+- Route list actions: **编辑** + **测通断** + 删除 (more visible action column).
+
+### Note
+- Live panels still on v0.1.7 need upgrade to see edit/probe UI.
+
 ## [0.1.9] - 2026-07-30
 
 ### Added

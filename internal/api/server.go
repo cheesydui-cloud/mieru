@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"os"
 	"path"
@@ -93,6 +94,7 @@ func (s *Server) Router() *gin.Engine {
 		admin.POST("/routes", s.createRoute)
 		admin.PUT("/routes/:id", s.updateRoute)
 		admin.DELETE("/routes/:id", s.deleteRoute)
+		admin.POST("/routes/:id/probe", s.probeRoute)
 
 		admin.GET("/users", s.listUsers)
 		admin.POST("/users", s.createUser)
@@ -506,6 +508,129 @@ func (s *Server) deleteRoute(c *gin.Context) {
 	}
 	_ = s.gen.RebuildAll()
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// probeRoute checks TCP reachability of each hop endpoint from the panel host
+// and updates route.health. This is connectivity (port open), not full proxy auth.
+func (s *Server) probeRoute(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	r, err := s.store.GetRoute(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	var hops []model.Hop
+	_ = json.Unmarshal([]byte(r.HopsJSON), &hops)
+
+	type hopResult struct {
+		Label   string `json:"label"`
+		Kind    string `json:"kind"` // external|node
+		Host    string `json:"host"`
+		Port    int    `json:"port"`
+		OK      bool   `json:"ok"`
+		Latency int64  `json:"latency_ms"`
+		Error   string `json:"error,omitempty"`
+		NodeID  string `json:"node_id,omitempty"`
+		Status  string `json:"agent_status,omitempty"`
+	}
+	results := make([]hopResult, 0, len(hops))
+	allOK := len(hops) > 0
+	anyOK := false
+
+	for _, h := range hops {
+		hr := hopResult{}
+		if h.External || (h.NodeID == "" && h.Host != "") {
+			hr.Kind = "external"
+			hr.Host = strings.TrimSpace(h.Host)
+			hr.Port = h.Port
+			if hr.Port <= 0 {
+				hr.Port = 1080
+			}
+			hr.Label = h.Name
+			if hr.Label == "" {
+				hr.Label = hr.Host
+			}
+		} else if h.NodeID != "" {
+			hr.Kind = "node"
+			hr.NodeID = h.NodeID
+			n, err := s.store.GetNode(h.NodeID)
+			if err != nil {
+				hr.OK = false
+				hr.Error = "node not found"
+				hr.Label = h.NodeID
+				results = append(results, hr)
+				allOK = false
+				continue
+			}
+			hr.Label = n.Name
+			hr.Status = n.Status
+			host := n.Hostname
+			if host == "" {
+				host = n.PublicIP
+			}
+			// prefer IP for panel→node probe when both set
+			if n.PublicIP != "" {
+				host = n.PublicIP
+			}
+			hr.Host = host
+			hr.Port = n.EffectiveListenPort()
+			if h.Port > 0 {
+				hr.Port = h.Port
+			}
+		} else {
+			hr.OK = false
+			hr.Error = "empty hop"
+			hr.Label = "?"
+			results = append(results, hr)
+			allOK = false
+			continue
+		}
+
+		if hr.Host == "" || hr.Port <= 0 {
+			hr.OK = false
+			hr.Error = "missing host/port"
+			results = append(results, hr)
+			allOK = false
+			continue
+		}
+
+		addr := net.JoinHostPort(hr.Host, strconv.Itoa(hr.Port))
+		start := time.Now()
+		conn, err := net.DialTimeout("tcp", addr, 4*time.Second)
+		hr.Latency = time.Since(start).Milliseconds()
+		if err != nil {
+			hr.OK = false
+			hr.Error = err.Error()
+			allOK = false
+		} else {
+			_ = conn.Close()
+			hr.OK = true
+			anyOK = true
+		}
+		results = append(results, hr)
+	}
+
+	health := "unknown"
+	if len(hops) == 0 {
+		health = "unknown"
+		allOK = false
+	} else if allOK {
+		health = "ok"
+	} else if anyOK {
+		health = "degraded"
+	} else {
+		health = "down"
+	}
+	_ = s.store.SetRouteHealth(id, health)
+	r.Health = health
+
+	c.JSON(http.StatusOK, gin.H{
+		"route_id": id,
+		"health":   health,
+		"hops":     results,
+		"checked_at": time.Now().UTC().Format(time.RFC3339),
+		"note":     "TCP connect from panel host; not full proxy authentication",
+	})
 }
 
 func (s *Server) listUsers(c *gin.Context) {

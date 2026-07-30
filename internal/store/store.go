@@ -470,6 +470,11 @@ func (s *Store) DeleteRoute(id int64) error {
 	return err
 }
 
+func (s *Store) SetRouteHealth(id int64, health string) error {
+	_, err := s.db.Exec(`UPDATE routes SET health=?, updated_at=? WHERE id=?`, health, now(), id)
+	return err
+}
+
 // ---------- Users ----------
 
 func (s *Store) CreateUser(u *model.User) error {
