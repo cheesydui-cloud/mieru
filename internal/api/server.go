@@ -23,18 +23,20 @@ import (
 )
 
 type Server struct {
-	cfg   config.PanelConfig
-	store *store.Store
-	jwt   *auth.TokenManager
-	gen   *configgen.Builder
+	cfg     config.PanelConfig
+	store   *store.Store
+	jwt     *auth.TokenManager
+	gen     *configgen.Builder
+	Version string
 }
 
 func New(cfg config.PanelConfig, st *store.Store) *Server {
 	return &Server{
-		cfg:   cfg,
-		store: st,
-		jwt:   auth.NewTokenManager(cfg.JWTSecret),
-		gen:   &configgen.Builder{Store: st},
+		cfg:     cfg,
+		store:   st,
+		jwt:     auth.NewTokenManager(cfg.JWTSecret),
+		gen:     &configgen.Builder{Store: st},
+		Version: "dev",
 	}
 }
 
@@ -58,7 +60,10 @@ func (s *Server) Router() *gin.Engine {
 	r.Use(cors.New(c))
 
 	r.GET("/api/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"ok": true, "ts": time.Now().UTC()})
+		c.JSON(http.StatusOK, gin.H{"ok": true, "ts": time.Now().UTC(), "version": s.Version})
+	})
+	r.GET("/api/version", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"version": s.Version, "ui": "embedded"})
 	})
 
 	r.GET("/sub/:token", s.subscription)
@@ -108,13 +113,27 @@ func (s *Server) Router() *gin.Engine {
 		portal.GET("/rates", s.myRate)
 	}
 
-	// SPA frontend: prefer embedded dist (one-binary install), fallback to on-disk ./web/dist
+	// SPA frontend: embedded dist first, on-disk ./web/dist fallback
 	dist, err := fs.Sub(web.Dist, "dist")
 	if err != nil {
 		dist = web.Dist
 	}
+	// Explicit routes so "/" never falls into Gin's default 404
+	serveIndex := func(c *gin.Context) {
+		if !serveStatic(c, dist, "index.html") {
+			c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(fallbackHTML))
+		}
+	}
+	r.GET("/", serveIndex)
+	r.GET("/index.html", serveIndex)
+	r.HEAD("/", serveIndex)
 	r.GET("/assets/*filepath", func(c *gin.Context) {
-		serveStatic(c, dist, path.Join("assets", strings.TrimPrefix(c.Param("filepath"), "/")))
+		rel := path.Join("assets", strings.TrimPrefix(c.Param("filepath"), "/"))
+		if !serveStatic(c, dist, rel) {
+			c.Status(http.StatusNotFound)
+			c.Header("Content-Type", "text/plain; charset=utf-8")
+			_, _ = c.Writer.Write([]byte("asset not found\n"))
+		}
 	})
 	r.NoRoute(func(c *gin.Context) {
 		p := c.Request.URL.Path
@@ -122,18 +141,15 @@ func (s *Server) Router() *gin.Engine {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return
 		}
-		// try exact file from embed or disk (e.g. /favicon.ico)
+		// try exact static file
 		rel := strings.TrimPrefix(p, "/")
 		if rel != "" && !strings.Contains(rel, "..") {
 			if serveStatic(c, dist, rel) {
 				return
 			}
 		}
-		// SPA fallback
-		if serveStatic(c, dist, "index.html") {
-			return
-		}
-		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(fallbackHTML))
+		// Vue router history mode → index.html
+		serveIndex(c)
 	})
 
 	return r

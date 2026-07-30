@@ -12,6 +12,9 @@ import (
 	"github.com/cheesydui-cloud/mieru/internal/store"
 )
 
+// set by -ldflags "-X main.Version=v0.1.2"
+var Version = "v0.1.2"
+
 func main() {
 	cfg := config.LoadPanel()
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
@@ -37,10 +40,11 @@ func main() {
 	}()
 
 	srv := api.New(cfg, st)
+	srv.Version = Version
 	r := srv.Router()
 
 	go func() {
-		log.Printf("mieru-panel listening on %s (db=%s)", cfg.Listen, cfg.DBPath)
+		log.Printf("mieru-panel %s listening on %s (db=%s)", Version, cfg.Listen, cfg.DBPath)
 		log.Printf("default admin user: %s", cfg.AdminUser)
 		if err := r.Run(cfg.Listen); err != nil {
 			log.Fatal(err)

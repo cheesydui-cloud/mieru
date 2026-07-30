@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.2] - 2026-07-30
+
+### Fixed
+- Remote installs still returning Gin default `404 page not found` on `/` because upgrade replaced the binary **without restarting** the running process. Installer now always `systemctl restart mieru-panel`.
+- Added explicit `GET /` and `GET /index.html` routes (not only `NoRoute`) so the SPA never hits Gin’s default 404 handler.
+- Added `/api/version` and version field on `/api/health` to verify the running binary after upgrade.
+
+### Changed
+- Install scripts default to `v0.1.2`; upgrade keeps existing `/etc/mieru-panel.env`.
+
 ## [0.1.1] - 2026-07-30
 
 ### Fixed

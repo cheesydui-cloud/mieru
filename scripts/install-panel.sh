@@ -4,7 +4,7 @@
 set -euo pipefail
 
 REPO="${MIERU_REPO:-cheesydui-cloud/mieru}"
-VERSION="${MIERU_VERSION:-v0.1.1}"
+VERSION="${MIERU_VERSION:-v0.1.2}"
 PREFIX="${MIERU_PREFIX:-/usr/local}"
 INSTALL_DIR="${MIERU_INSTALL_DIR:-/opt/mieru-panel}"
 DATA_DIR="${MIERU_DATA_DIR:-/var/lib/mieru-panel}"
@@ -58,8 +58,12 @@ ADMIN_PASS="${PANEL_ADMIN_PASS:-$(openssl rand -base64 12 2>/dev/null | tr -d '=
 LISTEN="${PANEL_LISTEN:-:8080}"
 
 ENV_FILE="/etc/mieru-panel.env"
-echo "==> writing ${ENV_FILE}"
-$SUDO tee "$ENV_FILE" >/dev/null <<EOF
+# Preserve existing env on upgrade (do not overwrite admin password / JWT)
+if [[ -f "$ENV_FILE" ]]; then
+  echo "==> keeping existing ${ENV_FILE} (upgrade mode)"
+else
+  echo "==> writing ${ENV_FILE}"
+  $SUDO tee "$ENV_FILE" >/dev/null <<EOF
 PANEL_LISTEN=${LISTEN}
 PANEL_DB=${DATA_DIR}/panel.db
 PANEL_DATA=${DATA_DIR}
@@ -67,10 +71,11 @@ PANEL_JWT_SECRET=${JWT_SECRET}
 PANEL_ADMIN_USER=${ADMIN_USER}
 PANEL_ADMIN_PASS=${ADMIN_PASS}
 EOF
-$SUDO chmod 600 "$ENV_FILE"
+  $SUDO chmod 600 "$ENV_FILE"
+fi
 
 if [[ "$SYSTEMD" == "1" ]] && command -v systemctl >/dev/null 2>&1 && [[ "$os" == "linux" ]]; then
-  echo "==> installing systemd unit"
+  echo "==> installing/updating systemd unit"
   $SUDO tee /etc/systemd/system/mieru-panel.service >/dev/null <<EOF
 [Unit]
 Description=Mieru Panel
@@ -90,16 +95,27 @@ LimitNOFILE=65535
 WantedBy=multi-user.target
 EOF
   $SUDO systemctl daemon-reload
-  $SUDO systemctl enable --now mieru-panel
-  echo "==> service started: systemctl status mieru-panel"
+  # Always restart so upgraded binary is loaded (enable --now alone won't replace running process)
+  $SUDO systemctl enable mieru-panel >/dev/null 2>&1 || true
+  $SUDO systemctl restart mieru-panel
+  sleep 1
+  $SUDO systemctl --no-pager --full status mieru-panel || true
+  echo "==> service restarted"
 else
-  echo "==> start manually:"
+  echo "==> start/restart manually:"
   echo "    set -a; source ${ENV_FILE}; set +a; cd ${INSTALL_DIR}; mieru-panel"
+fi
+
+# print admin from env file if present
+if [[ -f "$ENV_FILE" ]]; then
+  ADMIN_USER=$($SUDO grep '^PANEL_ADMIN_USER=' "$ENV_FILE" | head -1 | cut -d= -f2- || true)
+  ADMIN_PASS=$($SUDO grep '^PANEL_ADMIN_PASS=' "$ENV_FILE" | head -1 | cut -d= -f2- || true)
+  LISTEN=$($SUDO grep '^PANEL_LISTEN=' "$ENV_FILE" | head -1 | cut -d= -f2- || echo "$LISTEN")
 fi
 
 echo
 echo "============================================"
-echo " Mieru Panel installed"
+echo " Mieru Panel installed (${VERSION})"
 echo "--------------------------------------------"
 echo " binary : ${PREFIX}/bin/mieru-panel"
 echo " home   : ${INSTALL_DIR}"
@@ -108,5 +124,6 @@ echo " env    : ${ENV_FILE}"
 echo " admin  : ${ADMIN_USER} / ${ADMIN_PASS}"
 echo " listen : ${LISTEN}"
 echo "============================================"
-echo " open: http://<server-ip>${LISTEN/:/:}"
+echo " open: http://<server-ip>${LISTEN}"
+echo " check: curl -s http://127.0.0.1${LISTEN}/api/version"
 echo " save the admin password now."

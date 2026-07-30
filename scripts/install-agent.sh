@@ -5,7 +5,7 @@
 set -euo pipefail
 
 REPO="${MIERU_REPO:-cheesydui-cloud/mieru}"
-VERSION="${MIERU_VERSION:-v0.1.1}"
+VERSION="${MIERU_VERSION:-v0.1.2}"
 PREFIX="${MIERU_PREFIX:-/usr/local}"
 INSTALL_DIR="${MIERU_INSTALL_DIR:-/opt/mieru-panel}"
 DATA_DIR="${MIERU_AGENT_DATA:-/var/lib/mieru-agent}"
@@ -113,8 +113,11 @@ LimitNOFILE=65535
 WantedBy=multi-user.target
 EOF
   $SUDO systemctl daemon-reload
-  $SUDO systemctl enable --now mieru-agent
-  echo "==> service started: systemctl status mieru-agent"
+  $SUDO systemctl enable mieru-agent >/dev/null 2>&1 || true
+  $SUDO systemctl restart mieru-agent
+  sleep 1
+  $SUDO systemctl --no-pager --full status mieru-agent || true
+  echo "==> service restarted"
 else
   echo "==> start manually:"
   echo "    set -a; source ${ENV_FILE}; set +a; mieru-agent"
