@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.11] - 2026-07-30
+
+### Fixed
+- **Upgrade actually replaces running binary**: install script stops service/pkill before install, verifies `mieru-panel --version` and live `/api/version`.
+- **index.html no-cache** so browsers pick new hashed assets after upgrade.
+- Removed misleading auto `--reset-admin` on every upgrade (was stopping/restarting and confusing ops).
+
+### Added
+- `mieru-panel --version` for binary self-check.
+- Sidebar + topbar always show panel version (from `/api/version`).
+- Route list: edit + probe (from 0.1.10) with clearer subtitle.
+
 ## [0.1.10] - 2026-07-30
 
 ### Added

@@ -172,15 +172,19 @@ code{background:#1a222d;padding:2px 6px;border-radius:6px}</style></head><body><
 </main></body></html>`
 
 func serveStatic(c *gin.Context, dist fs.FS, rel string) bool {
-	// 1) embedded
+	// index.html must not be cached — otherwise browsers keep old asset hashes after upgrade
+	if rel == "index.html" || strings.HasSuffix(rel, "/index.html") {
+		c.Header("Cache-Control", "no-store, no-cache, must-revalidate")
+		c.Header("Pragma", "no-cache")
+	} else if strings.HasPrefix(rel, "assets/") {
+		// hashed assets are immutable
+		c.Header("Cache-Control", "public, max-age=31536000, immutable")
+	}
+	// 1) embedded only (never prefer on-disk over embed in production)
 	if f, err := dist.Open(rel); err == nil {
 		defer f.Close()
 		stat, err := f.Stat()
 		if err == nil && !stat.IsDir() {
-			if rs, ok := f.(io.ReadSeeker); ok {
-				http.ServeContent(c.Writer, c.Request, path.Base(rel), stat.ModTime(), rs)
-				return true
-			}
 			data, err := io.ReadAll(f)
 			if err == nil {
 				c.Data(http.StatusOK, contentType(rel), data)
@@ -188,7 +192,7 @@ func serveStatic(c *gin.Context, dist fs.FS, rel string) bool {
 			}
 		}
 	}
-	// 2) on-disk fallback for local dev
+	// 2) on-disk fallback for local dev only when embed miss
 	disk := path.Join("web", "dist", rel)
 	if st, err := os.Stat(disk); err == nil && !st.IsDir() {
 		c.File(disk)

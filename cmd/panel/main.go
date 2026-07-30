@@ -14,12 +14,18 @@ import (
 	"github.com/cheesydui-cloud/mieru/internal/store"
 )
 
-// set by -ldflags "-X main.Version=v0.1.10"
-var Version = "v0.1.10"
+// set by -ldflags "-X main.Version=v0.1.11"
+var Version = "v0.1.11"
 
 func main() {
 	resetAdmin := flag.Bool("reset-admin", false, "reset admin password from PANEL_ADMIN_* env and exit")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(Version)
+		return
+	}
 
 	cfg := config.LoadPanel()
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {

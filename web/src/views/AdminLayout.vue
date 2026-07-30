@@ -1,11 +1,12 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { clearSession, getUsername } from '../api'
 
 const route = useRoute()
 const router = useRouter()
 const user = getUsername()
+const version = ref('')
 
 const title = computed(() => {
   const map = {
@@ -22,6 +23,18 @@ function logout() {
   clearSession()
   router.replace('/login')
 }
+
+onMounted(async () => {
+  try {
+    const r = await fetch('/api/version', { cache: 'no-store' })
+    if (r.ok) {
+      const j = await r.json()
+      version.value = j.version || ''
+    }
+  } catch {
+    /* ignore */
+  }
+})
 </script>
 
 <template>
@@ -39,12 +52,16 @@ function logout() {
       <router-link class="nav-item" :class="{ active: route.name === 'routes' }" to="/routes">线路</router-link>
       <router-link class="nav-item" :class="{ active: route.name === 'users' }" to="/users">用户</router-link>
       <router-link class="nav-item" :class="{ active: route.name === 'settings' }" to="/settings">设置</router-link>
-      <div class="sidebar-foot">域名优先 · 落地主计量 · Agent 下发</div>
+      <div class="sidebar-foot">
+        <div>域名优先 · 落地主计量 · Agent 下发</div>
+        <div v-if="version" class="sidebar-ver mono">{{ version }}</div>
+      </div>
     </aside>
     <div class="main">
       <header class="topbar">
         <h1>{{ title }}</h1>
         <div class="topbar-actions">
+          <span v-if="version" class="badge mono" style="margin-right:8px">{{ version }}</span>
           <span>{{ user }}</span>
           <button class="btn btn-ghost btn-sm" @click="logout">退出</button>
         </div>

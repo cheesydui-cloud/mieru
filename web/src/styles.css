@@ -118,6 +118,13 @@ button, input, select, textarea {
   color: var(--text-muted);
   font-size: 12px;
   border-top: 1px solid var(--border);
+  line-height: 1.5;
+}
+.sidebar-ver {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--accent);
+  opacity: 0.9;
 }
 
 .main {

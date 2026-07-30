@@ -283,7 +283,7 @@ onMounted(load)
       <div>
         <h2>线路编排</h2>
         <div class="muted" style="font-size: 12px; margin-top: 4px">
-          Entry → Relay(mieru) → Exit(mita)；入口可选手动 IP/域名
+          Entry → Relay(mieru) → Exit(mita) · 支持编辑 / 测通断 / 外部入口
         </div>
       </div>
       <button class="btn btn-primary btn-sm" @click="openCreate">＋ 新建线路</button>
