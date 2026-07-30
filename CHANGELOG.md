@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.7] - 2026-07-30
+
+### Changed
+- Node ports UI simplified to **start port / end port** only (like common panels). Removed separate "主监听端口" field; start port is the primary client port.
+
 ## [0.1.6] - 2026-07-30
 
 ### Added

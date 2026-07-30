@@ -21,9 +21,8 @@ const form = reactive({
   public_ip: '',
   hostname: '',
   alt_hostnames: '',
-  listen_port: 0,
-  port_min: 0,
-  port_max: 0,
+  port_min: 10001,
+  port_max: 20000,
 })
 
 function blankForm() {
@@ -35,9 +34,8 @@ function blankForm() {
     public_ip: '',
     hostname: '',
     alt_hostnames: '',
-    listen_port: 0,
-    port_min: 0,
-    port_max: 0,
+    port_min: 10001,
+    port_max: 20000,
   })
 }
 
@@ -50,18 +48,19 @@ function fillForm(n) {
     public_ip: n.public_ip || '',
     hostname: n.hostname || '',
     alt_hostnames: n.alt_hostnames || '',
-    listen_port: n.listen_port || 0,
-    port_min: n.port_min || 0,
-    port_max: n.port_max || 0,
+    port_min: n.port_min > 0 ? n.port_min : (n.listen_port > 0 ? n.listen_port : 10001),
+    port_max: n.port_max > 0 ? n.port_max : (n.port_min > 0 ? n.port_min : 20000),
   })
 }
 
 function portLabel(n) {
-  const listen = n.listen_port > 0 ? n.listen_port : '默认'
   if (n.port_min > 0 || n.port_max > 0) {
-    return `${listen} · ${n.port_min || '?'}-${n.port_max || '?'}`
+    const a = n.port_min || n.listen_port || '?'
+    const b = n.port_max || a
+    return a === b ? String(a) : `${a}-${b}`
   }
-  return String(listen)
+  if (n.listen_port > 0) return String(n.listen_port)
+  return '默认'
 }
 
 async function load() {
@@ -93,6 +92,8 @@ function openEdit(n) {
 }
 
 function payload() {
+  const min = Number(form.port_min) || 0
+  const max = Number(form.port_max) || 0
   return {
     name: form.name,
     role: form.role,
@@ -101,15 +102,24 @@ function payload() {
     public_ip: form.public_ip,
     hostname: form.hostname,
     alt_hostnames: form.alt_hostnames,
-    listen_port: Number(form.listen_port) || 0,
-    port_min: Number(form.port_min) || 0,
-    port_max: Number(form.port_max) || 0,
+    // only start/end; backend treats start as primary listen
+    port_min: min,
+    port_max: max,
+    listen_port: min,
   }
 }
 
 async function create() {
   if (!form.name.trim()) {
     error.value = '请填写名称'
+    return
+  }
+  if ((form.port_min > 0) !== (form.port_max > 0)) {
+    error.value = '起始端口和结束端口需同时填写'
+    return
+  }
+  if (form.port_min > 0 && form.port_max > 0 && form.port_min > form.port_max) {
+    error.value = '起始端口不能大于结束端口'
     return
   }
   saving.value = true
@@ -133,6 +143,14 @@ async function saveEdit() {
   if (!editingId.value) return
   if (!form.name.trim()) {
     error.value = '请填写名称'
+    return
+  }
+  if ((form.port_min > 0) !== (form.port_max > 0)) {
+    error.value = '起始端口和结束端口需同时填写'
+    return
+  }
+  if (form.port_min > 0 && form.port_max > 0 && form.port_min > form.port_max) {
+    error.value = '起始端口不能大于结束端口'
     return
   }
   saving.value = true
@@ -191,7 +209,7 @@ onMounted(load)
       <div>
         <h2>节点列表</h2>
         <div class="muted" style="font-size:12px;margin-top:4px">
-          支持编辑端口 / 域名；点「安装命令」复制 Agent 一键脚本
+          端口只填起始～结束；点「安装命令」复制 Agent 脚本
         </div>
       </div>
       <div class="row-actions">
@@ -207,7 +225,7 @@ onMounted(load)
             <th>角色</th>
             <th>接入域名</th>
             <th>公网 IP</th>
-            <th>端口</th>
+            <th>端口范围</th>
             <th>区域 / 标签</th>
             <th>状态</th>
             <th></th>
@@ -244,16 +262,13 @@ onMounted(load)
       </table>
       <div v-else class="empty" style="padding:40px 20px;text-align:center">
         <div style="margin-bottom:12px">还没有节点</div>
-        <div class="muted" style="margin-bottom:16px;font-size:13px">
-          建议顺序：Exit（落地）→ Relay（中继）→ Entry（入口，填域名）
-        </div>
         <button class="btn btn-primary" @click="openCreate">新建节点</button>
       </div>
     </div>
   </div>
 
   <div v-if="show" class="modal-mask" @click.self="show = false">
-    <div class="modal" style="width:min(680px,100%)">
+    <div class="modal" style="width:min(640px,100%)">
       <div class="modal-hd">
         <h3>
           <template v-if="mode === 'created'">节点已创建</template>
@@ -295,23 +310,19 @@ onMounted(load)
               <input v-model="form.tags" placeholder="residential,tk" />
             </div>
             <div class="field">
-              <label>主监听端口（0=角色默认）</label>
-              <input v-model.number="form.listen_port" type="number" min="0" max="65535" placeholder="entry 默认 1080" />
+              <label>起始端口</label>
+              <input v-model.number="form.port_min" type="number" min="0" max="65535" placeholder="10001" />
             </div>
             <div class="field">
-              <label>端口范围起（0=默认）</label>
-              <input v-model.number="form.port_min" type="number" min="0" max="65535" placeholder="如 10000" />
-            </div>
-            <div class="field">
-              <label>端口范围止（0=默认）</label>
-              <input v-model.number="form.port_max" type="number" min="0" max="65535" placeholder="如 20000" />
+              <label>结束端口</label>
+              <input v-model.number="form.port_max" type="number" min="0" max="65535" placeholder="20000" />
             </div>
           </div>
           <div class="muted" style="font-size:12px;line-height:1.55">
-            主监听端口：客户端/订阅用的端口（entry 默认 1080，relay/exit 默认 8964）。
-            端口范围：该节点允许分配的端口池，例如 <code class="mono">1-100</code> 或
-            <code class="mono">400-40000</code>。两边都填 0 则用角色默认范围。
-            <span v-if="mode === 'edit'" class="mono"> · 编辑 ID：{{ editingId }}</span>
+            只填端口范围，例如 <code class="mono">10001</code> ～ <code class="mono">20000</code>。
+            起始端口同时作为订阅/客户端主端口；范围内端口用于按用户分配转发。
+            都填 <code class="mono">0</code> 则用角色默认范围。
+            <span v-if="mode === 'edit'" class="mono"> · ID：{{ editingId }}</span>
           </div>
         </template>
         <template v-else>
@@ -322,11 +333,8 @@ onMounted(load)
             <dd class="mono" style="word-break:break-all">{{ created.agent_token }}</dd>
             <dt>面板地址</dt>
             <dd class="mono">{{ created.panel_url }}</dd>
-            <dt>端口</dt>
-            <dd class="mono">
-              listen {{ created.node.listen_port || '默认' }}
-              · range {{ created.node.port_min || 0 }}-{{ created.node.port_max || 0 }}
-            </dd>
+            <dt>端口范围</dt>
+            <dd class="mono">{{ created.node.port_min }}-{{ created.node.port_max }}</dd>
           </div>
           <div class="field" style="margin-top:12px">
             <label>一键安装 Agent（在目标 Linux 上执行）</label>
@@ -337,10 +345,6 @@ onMounted(load)
               style="width:100%;resize:vertical;background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;padding:12px"
               :value="created.install_cmd"
             />
-          </div>
-          <div class="muted" style="font-size:12px;line-height:1.5">
-            {{ created.install_hint }}
-            若地址不对，请先到侧边栏「设置」填写面板地址。
           </div>
           <div class="row-actions" style="margin-top:10px">
             <button class="btn btn-primary btn-sm" @click="copy(created.install_cmd)">复制安装命令</button>
@@ -389,7 +393,6 @@ onMounted(load)
             :value="installInfo.install_cmd"
           />
         </div>
-        <div class="muted" style="font-size:12px">{{ installInfo.hint }}</div>
       </div>
       <div class="modal-ft">
         <button class="btn btn-ghost" @click="installShow = false">关闭</button>

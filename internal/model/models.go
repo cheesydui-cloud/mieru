@@ -36,11 +36,11 @@ type Node struct {
 	PublicIP     string    `json:"public_ip"`
 	Hostname     string    `json:"hostname"` // domain preferred for clients
 	AltHostnames string    `json:"alt_hostnames"`
-	// ListenPort: primary service port (entry socks / mita listen). 0 = role default.
+	// PortMin/PortMax: node port range (start-end). Client/subscription uses PortMin as primary.
+// 0/0 = role default range. ListenPort is kept for backward compat (= PortMin when set).
 	ListenPort int `json:"listen_port"`
-	// PortMin/PortMax: allowed port pool for per-user forwards etc. 0/0 = role default.
-	PortMin int `json:"port_min"`
-	PortMax int `json:"port_max"`
+	PortMin    int `json:"port_min"`
+	PortMax    int `json:"port_max"`
 	AgentToken   string    `json:"-"`
 	Status       string    `json:"status"`
 	LastSeen     *time.Time `json:"last_seen,omitempty"`
@@ -50,17 +50,35 @@ type Node struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
-// EffectiveListenPort returns primary listen port with role defaults.
+// NormalizePorts: UI only uses start/end; primary listen = start port.
+func (n *Node) NormalizePorts() {
+	if n.PortMin > 0 && n.ListenPort == 0 {
+		n.ListenPort = n.PortMin
+	}
+	if n.ListenPort > 0 && n.PortMin == 0 {
+		n.PortMin = n.ListenPort
+	}
+	if n.PortMin > 0 && n.PortMax == 0 {
+		n.PortMax = n.PortMin
+	}
+	if n.PortMax > 0 && n.PortMin == 0 {
+		n.PortMin = n.PortMax
+		n.ListenPort = n.PortMax
+	}
+}
+
+// EffectiveListenPort: start of range, else role default.
 func (n *Node) EffectiveListenPort() int {
+	if n.PortMin > 0 {
+		return n.PortMin
+	}
 	if n.ListenPort > 0 {
 		return n.ListenPort
 	}
 	switch n.Role {
 	case RoleEntry, RoleHybrid:
 		return 1080
-	case RoleRelay:
-		return 8964
-	case RoleExit:
+	case RoleRelay, RoleExit:
 		return 8964
 	default:
 		return 1080

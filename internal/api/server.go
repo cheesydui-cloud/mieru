@@ -321,6 +321,7 @@ func (s *Server) createNode(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name and role required"})
 		return
 	}
+	req.NormalizePorts()
 	if err := validateNodePorts(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -383,6 +384,7 @@ func (s *Server) updateNode(c *gin.Context) {
 	n.ListenPort = req.ListenPort
 	n.PortMin = req.PortMin
 	n.PortMax = req.PortMax
+	n.NormalizePorts()
 	if req.Status != "" {
 		n.Status = req.Status
 	}
@@ -404,16 +406,15 @@ func (s *Server) updateNode(c *gin.Context) {
 }
 
 func validateNodePorts(n *model.Node) error {
-	if n.ListenPort < 0 || n.ListenPort > 65535 {
-		return fmt.Errorf("listen_port must be 0-65535 (0=role default)")
-	}
 	if n.PortMin < 0 || n.PortMin > 65535 || n.PortMax < 0 || n.PortMax > 65535 {
-		return fmt.Errorf("port_min/port_max must be 0-65535")
+		return fmt.Errorf("端口范围必须在 0-65535（0=使用角色默认）")
+	}
+	if (n.PortMin > 0) != (n.PortMax > 0) {
+		return fmt.Errorf("起始端口和结束端口需同时填写，或都填 0 使用默认")
 	}
 	if n.PortMin > 0 && n.PortMax > 0 && n.PortMin > n.PortMax {
-		return fmt.Errorf("port_min cannot be greater than port_max")
+		return fmt.Errorf("起始端口不能大于结束端口")
 	}
-	// both zero = default range; one set without the other is ok (filled by EffectivePortRange)
 	return nil
 }
 
