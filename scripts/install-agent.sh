@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# One-line install:
+# Linux 一键安装 / 升级 Agent
 #   curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | \
-#     bash -s -- --panel-url http://PANEL:8080 --node-id n_xxx --token tok_xxx --role exit
+#     bash -s -- --panel-url http://面板IP:8080 --node-id n_xxx --token tok_xxx --role exit
 set -euo pipefail
 
 REPO="${MIERU_REPO:-cheesydui-cloud/mieru}"
@@ -9,7 +9,6 @@ VERSION="${MIERU_VERSION:-v0.1.2}"
 PREFIX="${MIERU_PREFIX:-/usr/local}"
 INSTALL_DIR="${MIERU_INSTALL_DIR:-/opt/mieru-panel}"
 DATA_DIR="${MIERU_AGENT_DATA:-/var/lib/mieru-agent}"
-SYSTEMD="${MIERU_SYSTEMD:-1}"
 
 PANEL_URL="${AGENT_PANEL_URL:-}"
 NODE_ID="${AGENT_NODE_ID:-}"
@@ -19,10 +18,8 @@ NFT_DRYRUN="${AGENT_NFT_DRYRUN:-1}"
 
 usage() {
   cat <<'EOF'
-Usage:
-  install-agent.sh --panel-url URL --node-id ID --token TOKEN [--role exit|entry|relay|hybrid]
-
-Env vars also work: AGENT_PANEL_URL, AGENT_NODE_ID, AGENT_TOKEN, AGENT_ROLE
+用法:
+  bash install-agent.sh --panel-url URL --node-id ID --token TOKEN [--role exit|entry|relay]
 EOF
 }
 
@@ -34,55 +31,49 @@ while [[ $# -gt 0 ]]; do
     --role) ROLE="$2"; shift 2 ;;
     --nft-dryrun) NFT_DRYRUN="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
-    *) echo "unknown arg: $1" >&2; usage; exit 1 ;;
+    *) echo "未知参数: $1" >&2; usage; exit 1 ;;
   esac
 done
 
 if [[ -z "$PANEL_URL" || -z "$NODE_ID" || -z "$TOKEN" ]]; then
-  echo "error: --panel-url, --node-id, --token are required" >&2
+  echo "错误: 需要 --panel-url --node-id --token" >&2
   usage
   exit 1
 fi
 
-need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "missing command: $1" >&2; exit 1; }; }
+need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "缺少命令: $1" >&2; exit 1; }; }
 need_cmd curl
 need_cmd tar
 need_cmd uname
 
 os=$(uname -s | tr '[:upper:]' '[:lower:]')
+[[ "$os" == "linux" ]] || { echo "本脚本仅支持 Linux" >&2; exit 1; }
+
 arch=$(uname -m)
-case "$os" in
-  linux|darwin) ;;
-  *) echo "unsupported OS: $os" >&2; exit 1 ;;
-esac
 case "$arch" in
   x86_64|amd64) arch=amd64 ;;
   aarch64|arm64) arch=arm64 ;;
-  *) echo "unsupported arch: $arch" >&2; exit 1 ;;
+  *) echo "不支持的架构: $arch" >&2; exit 1 ;;
 esac
 
-TARGET="${os}-${arch}"
-ASSET="mieru-panel-${VERSION}-${TARGET}.tar.gz"
+ASSET="mieru-panel-${VERSION}-linux-${arch}.tar.gz"
 URL="https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-echo "==> downloading ${URL}"
-curl -fsSL "$URL" -o "$TMP/$ASSET"
-
 if [[ "$(id -u)" -eq 0 ]]; then SUDO=""; else
-  command -v sudo >/dev/null 2>&1 || { echo "need root or sudo" >&2; exit 1; }
+  command -v sudo >/dev/null 2>&1 || { echo "需要 root 或 sudo" >&2; exit 1; }
   SUDO="sudo"
 fi
 
+echo "==> 下载 ${URL}"
+curl -fsSL "$URL" -o "$TMP/$ASSET"
 $SUDO mkdir -p "$INSTALL_DIR" "$DATA_DIR" "${PREFIX}/bin"
 $SUDO tar -xzf "$TMP/$ASSET" -C "$INSTALL_DIR" --strip-components=1
 $SUDO install -m 755 "$INSTALL_DIR/agent" "${PREFIX}/bin/mieru-agent"
-# panel binary is also useful on nodes sometimes
-$SUDO install -m 755 "$INSTALL_DIR/panel" "${PREFIX}/bin/mieru-panel" 2>/dev/null || true
 
 ENV_FILE="/etc/mieru-agent.env"
-echo "==> writing ${ENV_FILE}"
+echo "==> 写入 ${ENV_FILE}"
 $SUDO tee "$ENV_FILE" >/dev/null <<EOF
 AGENT_PANEL_URL=${PANEL_URL}
 AGENT_NODE_ID=${NODE_ID}
@@ -93,8 +84,7 @@ AGENT_NFT_DRYRUN=${NFT_DRYRUN}
 EOF
 $SUDO chmod 600 "$ENV_FILE"
 
-if [[ "$SYSTEMD" == "1" ]] && command -v systemctl >/dev/null 2>&1 && [[ "$os" == "linux" ]]; then
-  echo "==> installing systemd unit"
+if command -v systemctl >/dev/null 2>&1; then
   $SUDO tee /etc/systemd/system/mieru-agent.service >/dev/null <<EOF
 [Unit]
 Description=Mieru Node Agent
@@ -117,19 +107,13 @@ EOF
   $SUDO systemctl restart mieru-agent
   sleep 1
   $SUDO systemctl --no-pager --full status mieru-agent || true
-  echo "==> service restarted"
-else
-  echo "==> start manually:"
-  echo "    set -a; source ${ENV_FILE}; set +a; mieru-agent"
 fi
 
 echo
 echo "============================================"
-echo " Mieru Agent installed"
-echo "--------------------------------------------"
-echo " binary : ${PREFIX}/bin/mieru-agent"
-echo " role   : ${ROLE}"
-echo " panel  : ${PANEL_URL}"
-echo " node   : ${NODE_ID}"
-echo " env    : ${ENV_FILE}"
+echo " Agent 已安装/升级  ${VERSION}"
+echo " role  : ${ROLE}"
+echo " panel : ${PANEL_URL}"
+echo " node  : ${NODE_ID}"
+echo " env   : ${ENV_FILE}"
 echo "============================================"
