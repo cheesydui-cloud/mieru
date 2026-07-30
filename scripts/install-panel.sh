@@ -6,7 +6,7 @@
 set -euo pipefail
 
 REPO="${MIERU_REPO:-cheesydui-cloud/mieru}"
-VERSION="${MIERU_VERSION:-v0.1.3}"
+VERSION="${MIERU_VERSION:-v0.1.4}"
 PREFIX="${MIERU_PREFIX:-/usr/local}"
 INSTALL_DIR="${MIERU_INSTALL_DIR:-/opt/mieru-panel}"
 DATA_DIR="${MIERU_DATA_DIR:-/var/lib/mieru-panel}"
@@ -58,10 +58,31 @@ UPGRADE=0
 
 if [[ -f "$ENV_FILE" ]]; then
   UPGRADE=1
-  echo "==> 升级模式：保留 ${ENV_FILE}（账号密码不变）"
-  ADMIN_USER=$($SUDO grep '^PANEL_ADMIN_USER=' "$ENV_FILE" | head -1 | cut -d= -f2- || echo admin)
-  ADMIN_PASS=$($SUDO grep '^PANEL_ADMIN_PASS=' "$ENV_FILE" | head -1 | cut -d= -f2- || echo "(见 env 文件)")
+  echo "==> 升级模式：保留 ${ENV_FILE}"
+  # 若安装时显式传了 PANEL_ADMIN_PASS，升级时也写入 env（启动时会同步进库）
+  if [[ -n "${PANEL_ADMIN_PASS:-}" ]]; then
+    if $SUDO grep -q '^PANEL_ADMIN_PASS=' "$ENV_FILE"; then
+      $SUDO sed -i "s|^PANEL_ADMIN_PASS=.*|PANEL_ADMIN_PASS=${PANEL_ADMIN_PASS}|" "$ENV_FILE"
+    else
+      echo "PANEL_ADMIN_PASS=${PANEL_ADMIN_PASS}" | $SUDO tee -a "$ENV_FILE" >/dev/null
+    fi
+    ADMIN_PASS="$PANEL_ADMIN_PASS"
+  else
+    ADMIN_PASS=$($SUDO grep '^PANEL_ADMIN_PASS=' "$ENV_FILE" | head -1 | cut -d= -f2- || true)
+  fi
+  if [[ -n "${PANEL_ADMIN_USER:-}" ]]; then
+    if $SUDO grep -q '^PANEL_ADMIN_USER=' "$ENV_FILE"; then
+      $SUDO sed -i "s|^PANEL_ADMIN_USER=.*|PANEL_ADMIN_USER=${PANEL_ADMIN_USER}|" "$ENV_FILE"
+    else
+      echo "PANEL_ADMIN_USER=${PANEL_ADMIN_USER}" | $SUDO tee -a "$ENV_FILE" >/dev/null
+    fi
+    ADMIN_USER="$PANEL_ADMIN_USER"
+  else
+    ADMIN_USER=$($SUDO grep '^PANEL_ADMIN_USER=' "$ENV_FILE" | head -1 | cut -d= -f2- || echo admin)
+  fi
   LISTEN=$($SUDO grep '^PANEL_LISTEN=' "$ENV_FILE" | head -1 | cut -d= -f2- || echo ":8080")
+  [[ -n "$ADMIN_USER" ]] || ADMIN_USER=admin
+  [[ -n "$ADMIN_PASS" ]] || ADMIN_PASS="(见 ${ENV_FILE})"
 else
   echo "==> 写入 ${ENV_FILE}"
   $SUDO tee "$ENV_FILE" >/dev/null <<EOF
@@ -99,6 +120,14 @@ EOF
   $SUDO systemctl enable mieru-panel >/dev/null 2>&1 || true
   $SUDO systemctl restart mieru-panel
   sleep 1
+  # v0.1.4+ 启动时会把 env 密码同步进 SQLite；再主动 reset 一次更保险
+  if $SUDO "${PREFIX}/bin/mieru-panel" --help 2>&1 | grep -q reset-admin; then
+    $SUDO systemctl stop mieru-panel || true
+    $SUDO env -i PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+      bash -c "set -a; . '${ENV_FILE}'; set +a; '${PREFIX}/bin/mieru-panel' --reset-admin" || true
+    $SUDO systemctl start mieru-panel
+    sleep 1
+  fi
   $SUDO systemctl --no-pager --full status mieru-panel || true
 else
   echo "==> 无 systemd，请手动："
@@ -110,6 +139,17 @@ PORT="${LISTEN##*:}"
 [[ "$LISTEN" == :* ]] && CHECK_URL="http://127.0.0.1:${PORT}" || CHECK_URL="http://127.0.0.1${LISTEN}"
 VER=$(curl -s --max-time 3 "${CHECK_URL}/api/version" 2>/dev/null || echo "无法连接")
 ROOT=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "${CHECK_URL}/" 2>/dev/null || echo "000")
+LOGIN_OK="未测"
+if [[ -n "${ADMIN_PASS}" && "${ADMIN_PASS}" != "(见 ${ENV_FILE})" ]]; then
+  LOGIN_BODY=$(curl -s --max-time 3 -X POST "${CHECK_URL}/api/auth/login" \
+    -H 'Content-Type: application/json' \
+    -d "{\"username\":\"${ADMIN_USER}\",\"password\":\"${ADMIN_PASS}\"}" 2>/dev/null || true)
+  if echo "$LOGIN_BODY" | grep -q '"token"'; then
+    LOGIN_OK="OK"
+  else
+    LOGIN_OK="FAIL: ${LOGIN_BODY}"
+  fi
+fi
 
 echo
 echo "============================================"
@@ -124,10 +164,9 @@ echo " 管理员   : ${ADMIN_USER}"
 echo " 密  码   : ${ADMIN_PASS}"
 echo " 密码文件 : ${ENV_FILE}"
 echo " 查看密码 : sudo cat ${ENV_FILE}"
+echo " 登录探测 : ${LOGIN_OK}"
 echo " 服务状态 : systemctl status mieru-panel"
 echo " 版本检查 : curl -s ${CHECK_URL}/api/version"
 echo " 本机探测 : version=${VER}  / => HTTP ${ROOT}"
 echo "============================================"
-if [[ "$UPGRADE" -eq 0 ]]; then
-  echo "请立即保存上方管理员密码。"
-fi
+echo "请用上方账号密码登录。v0.1.4 起 env 密码会在每次启动同步到数据库。"

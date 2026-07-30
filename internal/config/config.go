@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -27,7 +28,7 @@ type AgentConfig struct {
 }
 
 func getenv(k, def string) string {
-	if v := os.Getenv(k); v != "" {
+	if v := strings.TrimSpace(os.Getenv(k)); v != "" {
 		return v
 	}
 	return def

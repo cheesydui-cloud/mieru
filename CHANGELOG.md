@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.4] - 2026-07-30
+
+### Fixed
+- **Root cause of `invalid credentials`**: `EnsureAdmin` only inserted when `admins` table was empty. After first install, `/etc/mieru-panel.env` could drift from SQLite password hash; pasting env password always failed.
+- **Fix**: every panel start now syncs `PANEL_ADMIN_USER` / `PANEL_ADMIN_PASS` into SQLite via `SetAdminPassword`. Env is source of truth.
+- Installer prints login probe result after install/upgrade; supports `PANEL_ADMIN_PASS=...` on upgrade to force new password.
+
+
 ## [0.1.3] - 2026-07-30
 
 ### Fixed
