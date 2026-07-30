@@ -65,6 +65,9 @@ CREATE TABLE IF NOT EXISTS nodes (
   last_seen TEXT,
   config_version INTEGER NOT NULL DEFAULT 1,
   meta_json TEXT DEFAULT '{}',
+  listen_port INTEGER NOT NULL DEFAULT 0,
+  port_min INTEGER NOT NULL DEFAULT 0,
+  port_max INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -136,9 +139,58 @@ CREATE TABLE IF NOT EXISTS node_desired_config (
   config_json TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 `
-	_, err := s.db.Exec(schema)
+		if _, err := s.db.Exec(schema); err != nil {
+			return err
+		}
+		// lightweight migrations for existing DBs
+		for _, q := range []string{
+			`ALTER TABLE nodes ADD COLUMN listen_port INTEGER NOT NULL DEFAULT 0`,
+			`ALTER TABLE nodes ADD COLUMN port_min INTEGER NOT NULL DEFAULT 0`,
+			`ALTER TABLE nodes ADD COLUMN port_max INTEGER NOT NULL DEFAULT 0`,
+		} {
+			_, _ = s.db.Exec(q) // ignore "duplicate column" on fresh DBs
+		}
+		return nil
+	}
+
+// ---------- Settings ----------
+
+func (s *Store) GetSetting(key string) (string, error) {
+	var v string
+	err := s.db.QueryRow(`SELECT value FROM settings WHERE key=?`, key).Scan(&v)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return v, err
+}
+
+func (s *Store) SetSetting(key, value string) error {
+	_, err := s.db.Exec(`INSERT INTO settings(key,value) VALUES(?,?)
+		ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
 	return err
+}
+
+func (s *Store) GetSettings(keys ...string) (map[string]string, error) {
+	out := make(map[string]string, len(keys))
+	for _, k := range keys {
+		v, err := s.GetSetting(k)
+		if err != nil {
+			return nil, err
+		}
+		out[k] = v
+	}
+	return out, nil
+}
+
+func (s *Store) PanelBaseURL() string {
+	v, _ := s.GetSetting("panel_url")
+	return strings.TrimRight(strings.TrimSpace(v), "/")
 }
 
 func now() string { return time.Now().UTC().Format(time.RFC3339) }
@@ -235,10 +287,10 @@ func (s *Store) CreateNode(n *model.Node) error {
 		n.ConfigVersion = 1
 	}
 	ts := now()
-	_, err := s.db.Exec(`INSERT INTO nodes(id,name,role,region,tags,public_ip,hostname,alt_hostnames,agent_token,status,last_seen,config_version,meta_json,created_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	_, err := s.db.Exec(`INSERT INTO nodes(id,name,role,region,tags,public_ip,hostname,alt_hostnames,agent_token,status,last_seen,config_version,meta_json,created_at,updated_at,listen_port,port_min,port_max)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		n.ID, n.Name, n.Role, n.Region, n.Tags, n.PublicIP, n.Hostname, n.AltHostnames, n.AgentToken,
-		n.Status, nil, n.ConfigVersion, n.MetaJSON, ts, ts)
+		n.Status, nil, n.ConfigVersion, n.MetaJSON, ts, ts, n.ListenPort, n.PortMin, n.PortMax)
 	if err != nil {
 		return err
 	}
@@ -249,8 +301,8 @@ func (s *Store) CreateNode(n *model.Node) error {
 
 func (s *Store) UpdateNode(n *model.Node) error {
 	ts := now()
-	_, err := s.db.Exec(`UPDATE nodes SET name=?, role=?, region=?, tags=?, public_ip=?, hostname=?, alt_hostnames=?, status=?, meta_json=?, updated_at=? WHERE id=?`,
-		n.Name, n.Role, n.Region, n.Tags, n.PublicIP, n.Hostname, n.AltHostnames, n.Status, n.MetaJSON, ts, n.ID)
+	_, err := s.db.Exec(`UPDATE nodes SET name=?, role=?, region=?, tags=?, public_ip=?, hostname=?, alt_hostnames=?, status=?, meta_json=?, listen_port=?, port_min=?, port_max=?, updated_at=? WHERE id=?`,
+		n.Name, n.Role, n.Region, n.Tags, n.PublicIP, n.Hostname, n.AltHostnames, n.Status, n.MetaJSON, n.ListenPort, n.PortMin, n.PortMax, ts, n.ID)
 	return err
 }
 
@@ -266,7 +318,7 @@ func (s *Store) BumpNodeConfigVersion(nodeID string) (int64, error) {
 }
 
 func (s *Store) GetNode(id string) (*model.Node, error) {
-	row := s.db.QueryRow(`SELECT id,name,role,region,tags,public_ip,hostname,alt_hostnames,agent_token,status,last_seen,config_version,meta_json,created_at,updated_at FROM nodes WHERE id=?`, id)
+	row := s.db.QueryRow(`SELECT id,name,role,region,tags,public_ip,hostname,alt_hostnames,agent_token,status,last_seen,config_version,meta_json,created_at,updated_at,listen_port,port_min,port_max FROM nodes WHERE id=?`, id)
 	return scanNode(row)
 }
 
@@ -282,7 +334,7 @@ func (s *Store) GetNodeByToken(id, token string) (*model.Node, error) {
 }
 
 func (s *Store) ListNodes() ([]model.Node, error) {
-	rows, err := s.db.Query(`SELECT id,name,role,region,tags,public_ip,hostname,alt_hostnames,agent_token,status,last_seen,config_version,meta_json,created_at,updated_at FROM nodes ORDER BY created_at DESC`)
+	rows, err := s.db.Query(`SELECT id,name,role,region,tags,public_ip,hostname,alt_hostnames,agent_token,status,last_seen,config_version,meta_json,created_at,updated_at,listen_port,port_min,port_max FROM nodes ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -319,7 +371,7 @@ func scanNode(row scannable) (*model.Node, error) {
 	var n model.Node
 	var lastSeen, created, updated sql.NullString
 	var meta sql.NullString
-	if err := row.Scan(&n.ID, &n.Name, &n.Role, &n.Region, &n.Tags, &n.PublicIP, &n.Hostname, &n.AltHostnames, &n.AgentToken, &n.Status, &lastSeen, &n.ConfigVersion, &meta, &created, &updated); err != nil {
+	if err := row.Scan(&n.ID, &n.Name, &n.Role, &n.Region, &n.Tags, &n.PublicIP, &n.Hostname, &n.AltHostnames, &n.AgentToken, &n.Status, &lastSeen, &n.ConfigVersion, &meta, &created, &updated, &n.ListenPort, &n.PortMin, &n.PortMax); err != nil {
 		return nil, err
 	}
 	if lastSeen.Valid {

@@ -36,6 +36,11 @@ type Node struct {
 	PublicIP     string    `json:"public_ip"`
 	Hostname     string    `json:"hostname"` // domain preferred for clients
 	AltHostnames string    `json:"alt_hostnames"`
+	// ListenPort: primary service port (entry socks / mita listen). 0 = role default.
+	ListenPort int `json:"listen_port"`
+	// PortMin/PortMax: allowed port pool for per-user forwards etc. 0/0 = role default.
+	PortMin int `json:"port_min"`
+	PortMax int `json:"port_max"`
 	AgentToken   string    `json:"-"`
 	Status       string    `json:"status"`
 	LastSeen     *time.Time `json:"last_seen,omitempty"`
@@ -43,6 +48,69 @@ type Node struct {
 	MetaJSON     string    `json:"meta_json"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// EffectiveListenPort returns primary listen port with role defaults.
+func (n *Node) EffectiveListenPort() int {
+	if n.ListenPort > 0 {
+		return n.ListenPort
+	}
+	switch n.Role {
+	case RoleEntry, RoleHybrid:
+		return 1080
+	case RoleRelay:
+		return 8964
+	case RoleExit:
+		return 8964
+	default:
+		return 1080
+	}
+}
+
+// EffectivePortRange returns [min,max] for allocatable ports; defaults by role.
+func (n *Node) EffectivePortRange() (int, int) {
+	min, max := n.PortMin, n.PortMax
+	if min <= 0 && max <= 0 {
+		switch n.Role {
+		case RoleEntry, RoleHybrid:
+			return 10000, 20000
+		case RoleRelay:
+			return 20000, 30000
+		case RoleExit:
+			return 30000, 40000
+		default:
+			return 10000, 20000
+		}
+	}
+	if min <= 0 {
+		min = 1
+	}
+	if max <= 0 {
+		max = 65535
+	}
+	if min > max {
+		min, max = max, min
+	}
+	if min < 1 {
+		min = 1
+	}
+	if max > 65535 {
+		max = 65535
+	}
+	return min, max
+}
+
+// PortInRange maps userID into the node's allowed port pool (stable).
+func (n *Node) PortInRange(userID int64) int {
+	min, max := n.EffectivePortRange()
+	span := max - min + 1
+	if span <= 0 {
+		return min
+	}
+	if userID <= 0 {
+		return min
+	}
+	return min + int((userID-1)%int64(span))
 }
 
 type Capability struct {

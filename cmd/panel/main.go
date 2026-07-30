@@ -14,8 +14,8 @@ import (
 	"github.com/cheesydui-cloud/mieru/internal/store"
 )
 
-// set by -ldflags "-X main.Version=v0.1.5"
-var Version = "v0.1.5"
+// set by -ldflags "-X main.Version=v0.1.6"
+var Version = "v0.1.6"
 
 func main() {
 	resetAdmin := flag.Bool("reset-admin", false, "reset admin password from PANEL_ADMIN_* env and exit")
@@ -32,15 +32,20 @@ func main() {
 	}
 	defer st.Close()
 
-	// Always treat env as source of truth for admin credentials.
-	// (Previously EnsureAdmin only inserted when the table was empty, so after the
-	// first install env could drift from SQLite and login always failed.)
-	if err := st.SetAdminPassword(cfg.AdminUser, cfg.AdminPass); err != nil {
-		log.Fatalf("sync admin: %v", err)
-	}
-	if *resetAdmin {
-		fmt.Printf("admin password reset\n  user: %s\n  pass: %s\n  db:   %s\n", cfg.AdminUser, cfg.AdminPass, cfg.DBPath)
-		return
+	// Bootstrap / force-reset: --reset-admin or PANEL_ADMIN_FORCE_SYNC=1
+	// Normal start only ensures first admin exists so UI password changes persist.
+	forceSync := *resetAdmin || os.Getenv("PANEL_ADMIN_FORCE_SYNC") == "1"
+	if forceSync {
+		if err := st.SetAdminPassword(cfg.AdminUser, cfg.AdminPass); err != nil {
+			log.Fatalf("sync admin: %v", err)
+		}
+		if *resetAdmin {
+			fmt.Printf("admin password reset\n  user: %s\n  pass: %s\n  db:   %s\n", cfg.AdminUser, cfg.AdminPass, cfg.DBPath)
+			return
+		}
+		log.Printf("admin force-synced from env: %s", cfg.AdminUser)
+	} else if err := st.EnsureAdmin(cfg.AdminUser, cfg.AdminPass); err != nil {
+		log.Fatalf("ensure admin: %v", err)
 	}
 
 	go func() {

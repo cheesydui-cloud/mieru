@@ -57,13 +57,17 @@ func (b *Builder) RebuildAll() error {
 					MitaUser: u.Username,
 				})
 			}
-			cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
-				"type": "mita_server",
-				"config": map[string]interface{}{
-					"users_from": "panel",
-					"metering":   "local",
-				},
-			})
+				pmin, pmax := n.EffectivePortRange()
+				cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
+					"type": "mita_server",
+					"config": map[string]interface{}{
+						"users_from":  "panel",
+						"metering":    "local",
+						"listen_port": n.EffectiveListenPort(),
+						"port_min":    pmin,
+						"port_max":    pmax,
+					},
+				})
 		case model.RoleEntry:
 			for _, u := range users {
 				cfg.Users = append(cfg.Users, model.AgentUser{
@@ -103,19 +107,30 @@ func (b *Builder) RebuildAll() error {
 						host = next.Hostname
 					}
 				}
-				forwards = append(forwards, model.ForwardRule{
-					ListenPort: 10000 + int(u.ID),
-					TargetHost: host,
-					TargetPort: 10000 + int(u.ID),
-					Protocol:   "tcp",
-					Comment:    fmt.Sprintf("user %s -> %s", u.Username, next.Name),
-				})
-			}
-			cfg.Forwards = forwards
-			cfg.Plugins = append(cfg.Plugins,
-				map[string]interface{}{"type": "socks_in", "config": map[string]interface{}{"auth": "users"}},
-				map[string]interface{}{"type": "nft_forward", "config": map[string]interface{}{"rules_from": "forwards"}},
-			)
+					lp := n.PortInRange(u.ID)
+					tp := next.PortInRange(u.ID)
+					forwards = append(forwards, model.ForwardRule{
+						ListenPort: lp,
+						TargetHost: host,
+						TargetPort: tp,
+						Protocol:   "tcp",
+						Comment:    fmt.Sprintf("user %s -> %s", u.Username, next.Name),
+					})
+				}
+				cfg.Forwards = forwards
+				emin, emax := n.EffectivePortRange()
+				cfg.Plugins = append(cfg.Plugins,
+					map[string]interface{}{
+						"type": "socks_in",
+						"config": map[string]interface{}{
+							"auth":        "users",
+							"listen_port": n.EffectiveListenPort(),
+							"port_min":    emin,
+							"port_max":    emax,
+						},
+					},
+					map[string]interface{}{"type": "nft_forward", "config": map[string]interface{}{"rules_from": "forwards"}},
+				)
 		case model.RoleRelay:
 			// mieru client toward exits found in routes
 			exits := map[string]model.Node{}
@@ -133,19 +148,24 @@ func (b *Builder) RebuildAll() error {
 					}
 				}
 			}
-			for _, ex := range exits {
-				host := ex.PublicIP
-				if host == "" {
-					host = ex.Hostname
+				pmin, pmax := n.EffectivePortRange()
+				for _, ex := range exits {
+					host := ex.PublicIP
+					if host == "" {
+						host = ex.Hostname
+					}
+					cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
+						"type": "mieru_client",
+						"config": map[string]interface{}{
+							"server":      host,
+							"port":        ex.EffectiveListenPort(),
+							"exit_id":     ex.ID,
+							"listen_port": n.EffectiveListenPort(),
+							"port_min":    pmin,
+							"port_max":    pmax,
+						},
+					})
 				}
-				cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
-					"type": "mieru_client",
-					"config": map[string]interface{}{
-						"server": host,
-						"exit_id": ex.ID,
-					},
-				})
-			}
 			for _, u := range users {
 				cfg.Users = append(cfg.Users, model.AgentUser{
 					UserID:   u.ID,

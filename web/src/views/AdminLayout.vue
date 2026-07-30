@@ -13,6 +13,7 @@ const title = computed(() => {
     nodes: '节点',
     users: '用户',
     routes: '线路',
+    settings: '设置',
   }
   return map[route.name] || '控制台'
 })
@@ -37,6 +38,7 @@ function logout() {
       <router-link class="nav-item" :class="{ active: route.name === 'nodes' }" to="/nodes">节点</router-link>
       <router-link class="nav-item" :class="{ active: route.name === 'routes' }" to="/routes">线路</router-link>
       <router-link class="nav-item" :class="{ active: route.name === 'users' }" to="/users">用户</router-link>
+      <router-link class="nav-item" :class="{ active: route.name === 'settings' }" to="/settings">设置</router-link>
       <div class="sidebar-foot">域名优先 · 落地主计量 · Agent 下发</div>
     </aside>
     <div class="main">

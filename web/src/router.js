@@ -6,6 +6,7 @@ import Dashboard from './views/Dashboard.vue'
 import Nodes from './views/Nodes.vue'
 import Users from './views/Users.vue'
 import Routes from './views/Routes.vue'
+import Settings from './views/Settings.vue'
 import Portal from './views/Portal.vue'
 
 const router = createRouter({
@@ -21,6 +22,7 @@ const router = createRouter({
         { path: 'nodes', name: 'nodes', component: Nodes },
         { path: 'users', name: 'users', component: Users },
         { path: 'routes', name: 'routes', component: Routes },
+        { path: 'settings', name: 'settings', component: Settings },
       ],
     },
     { path: '/portal', component: Portal, meta: { auth: true, role: 'user' } },

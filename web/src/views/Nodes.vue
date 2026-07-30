@@ -6,7 +6,13 @@ const nodes = ref([])
 const error = ref('')
 const toast = ref('')
 const show = ref(false)
-const createdToken = ref('')
+const mode = ref('create') // create | edit | created
+const installShow = ref(false)
+const installInfo = ref(null)
+const created = ref(null)
+const editingId = ref('')
+const saving = ref(false)
+
 const form = reactive({
   name: '',
   role: 'entry',
@@ -15,7 +21,48 @@ const form = reactive({
   public_ip: '',
   hostname: '',
   alt_hostnames: '',
+  listen_port: 0,
+  port_min: 0,
+  port_max: 0,
 })
+
+function blankForm() {
+  Object.assign(form, {
+    name: '',
+    role: 'entry',
+    region: '',
+    tags: '',
+    public_ip: '',
+    hostname: '',
+    alt_hostnames: '',
+    listen_port: 0,
+    port_min: 0,
+    port_max: 0,
+  })
+}
+
+function fillForm(n) {
+  Object.assign(form, {
+    name: n.name || '',
+    role: n.role || 'entry',
+    region: n.region || '',
+    tags: n.tags || '',
+    public_ip: n.public_ip || '',
+    hostname: n.hostname || '',
+    alt_hostnames: n.alt_hostnames || '',
+    listen_port: n.listen_port || 0,
+    port_min: n.port_min || 0,
+    port_max: n.port_max || 0,
+  })
+}
+
+function portLabel(n) {
+  const listen = n.listen_port > 0 ? n.listen_port : '默认'
+  if (n.port_min > 0 || n.port_max > 0) {
+    return `${listen} · ${n.port_min || '?'}-${n.port_max || '?'}`
+  }
+  return String(listen)
+}
 
 async function load() {
   try {
@@ -29,28 +76,86 @@ async function load() {
 }
 
 function openCreate() {
-  Object.assign(form, {
-    name: '',
-    role: 'entry',
-    region: '',
-    tags: '',
-    public_ip: '',
-    hostname: '',
-    alt_hostnames: '',
-  })
-  createdToken.value = ''
+  blankForm()
+  created.value = null
+  editingId.value = ''
+  mode.value = 'create'
   show.value = true
 }
 
+function openEdit(n) {
+  fillForm(n)
+  created.value = null
+  editingId.value = n.id
+  mode.value = 'edit'
+  show.value = true
+  error.value = ''
+}
+
+function payload() {
+  return {
+    name: form.name,
+    role: form.role,
+    region: form.region,
+    tags: form.tags,
+    public_ip: form.public_ip,
+    hostname: form.hostname,
+    alt_hostnames: form.alt_hostnames,
+    listen_port: Number(form.listen_port) || 0,
+    port_min: Number(form.port_min) || 0,
+    port_max: Number(form.port_max) || 0,
+  }
+}
+
 async function create() {
+  if (!form.name.trim()) {
+    error.value = '请填写名称'
+    return
+  }
+  saving.value = true
   try {
     const res = await api('/api/admin/nodes', {
       method: 'POST',
-      body: JSON.stringify(form),
+      body: JSON.stringify(payload()),
     })
-    createdToken.value = res.agent_token
+    created.value = res
+    mode.value = 'created'
     toast.value = `节点已创建：${res.node.id}`
     await load()
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    saving.value = false
+  }
+}
+
+async function saveEdit() {
+  if (!editingId.value) return
+  if (!form.name.trim()) {
+    error.value = '请填写名称'
+    return
+  }
+  saving.value = true
+  try {
+    await api(`/api/admin/nodes/${editingId.value}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload()),
+    })
+    toast.value = '节点已更新'
+    show.value = false
+    await load()
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    saving.value = false
+  }
+}
+
+async function showInstall(id) {
+  try {
+    installInfo.value = await api(`/api/admin/nodes/${id}/install`)
+    installShow.value = true
+    error.value = ''
   } catch (e) {
     error.value = e.message
   }
@@ -59,6 +164,7 @@ async function create() {
 async function remove(id) {
   if (!confirm('确认删除该节点？')) return
   await api(`/api/admin/nodes/${id}`, { method: 'DELETE' })
+  toast.value = '已删除'
   await load()
 }
 
@@ -82,7 +188,12 @@ onMounted(load)
 
   <div class="panel">
     <div class="panel-hd">
-      <h2>节点列表</h2>
+      <div>
+        <h2>节点列表</h2>
+        <div class="muted" style="font-size:12px;margin-top:4px">
+          支持编辑端口 / 域名；点「安装命令」复制 Agent 一键脚本
+        </div>
+      </div>
       <div class="row-actions">
         <button class="btn btn-ghost btn-sm" @click="rebuild">重建配置</button>
         <button class="btn btn-primary btn-sm" @click="openCreate">新建节点</button>
@@ -96,6 +207,7 @@ onMounted(load)
             <th>角色</th>
             <th>接入域名</th>
             <th>公网 IP</th>
+            <th>端口</th>
             <th>区域 / 标签</th>
             <th>状态</th>
             <th></th>
@@ -110,6 +222,7 @@ onMounted(load)
             <td><span class="badge">{{ n.role }}</span></td>
             <td class="mono">{{ n.hostname || '—' }}</td>
             <td class="mono">{{ n.public_ip || '—' }}</td>
+            <td class="mono" style="font-size:12px">{{ portLabel(n) }}</td>
             <td>
               <div>{{ n.region || '—' }}</div>
               <div class="muted" style="font-size:12px">{{ n.tags || '' }}</div>
@@ -120,64 +233,167 @@ onMounted(load)
               </span>
             </td>
             <td>
-              <button class="btn btn-danger btn-sm" @click="remove(n.id)">删除</button>
+              <div class="row-actions">
+                <button class="btn btn-ghost btn-sm" @click="openEdit(n)">编辑</button>
+                <button class="btn btn-primary btn-sm" @click="showInstall(n.id)">安装命令</button>
+                <button class="btn btn-danger btn-sm" @click="remove(n.id)">删除</button>
+              </div>
             </td>
           </tr>
         </tbody>
       </table>
-      <div v-else class="empty">还没有节点。建议先建 Exit，再 Relay，再 Entry（可填域名）。</div>
+      <div v-else class="empty" style="padding:40px 20px;text-align:center">
+        <div style="margin-bottom:12px">还没有节点</div>
+        <div class="muted" style="margin-bottom:16px;font-size:13px">
+          建议顺序：Exit（落地）→ Relay（中继）→ Entry（入口，填域名）
+        </div>
+        <button class="btn btn-primary" @click="openCreate">新建节点</button>
+      </div>
     </div>
   </div>
 
   <div v-if="show" class="modal-mask" @click.self="show = false">
-    <div class="modal">
+    <div class="modal" style="width:min(680px,100%)">
       <div class="modal-hd">
-        <h3>新建节点</h3>
+        <h3>
+          <template v-if="mode === 'created'">节点已创建</template>
+          <template v-else-if="mode === 'edit'">编辑节点</template>
+          <template v-else>新建节点</template>
+        </h3>
         <button class="btn btn-ghost btn-sm" @click="show = false">关闭</button>
       </div>
       <div class="modal-bd">
-        <div class="form-grid">
-          <div class="field">
-            <label>名称</label>
-            <input v-model="form.name" placeholder="us-exit-01" />
+        <template v-if="mode !== 'created'">
+          <div class="form-grid">
+            <div class="field">
+              <label>名称</label>
+              <input v-model="form.name" placeholder="us-exit-01" />
+            </div>
+            <div class="field">
+              <label>角色</label>
+              <select v-model="form.role">
+                <option value="entry">entry（入口）</option>
+                <option value="relay">relay（中继）</option>
+                <option value="exit">exit（落地）</option>
+                <option value="hybrid">hybrid</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>接入域名</label>
+              <input v-model="form.hostname" placeholder="e1.example.com" />
+            </div>
+            <div class="field">
+              <label>公网 IP</label>
+              <input v-model="form.public_ip" placeholder="x.x.x.x" />
+            </div>
+            <div class="field">
+              <label>区域</label>
+              <input v-model="form.region" placeholder="cn / us / sh-ix" />
+            </div>
+            <div class="field">
+              <label>标签</label>
+              <input v-model="form.tags" placeholder="residential,tk" />
+            </div>
+            <div class="field">
+              <label>主监听端口（0=角色默认）</label>
+              <input v-model.number="form.listen_port" type="number" min="0" max="65535" placeholder="entry 默认 1080" />
+            </div>
+            <div class="field">
+              <label>端口范围起（0=默认）</label>
+              <input v-model.number="form.port_min" type="number" min="0" max="65535" placeholder="如 10000" />
+            </div>
+            <div class="field">
+              <label>端口范围止（0=默认）</label>
+              <input v-model.number="form.port_max" type="number" min="0" max="65535" placeholder="如 20000" />
+            </div>
           </div>
-          <div class="field">
-            <label>角色</label>
-            <select v-model="form.role">
-              <option value="entry">entry（入口）</option>
-              <option value="relay">relay（中继）</option>
-              <option value="exit">exit（落地）</option>
-              <option value="hybrid">hybrid</option>
-            </select>
+          <div class="muted" style="font-size:12px;line-height:1.55">
+            主监听端口：客户端/订阅用的端口（entry 默认 1080，relay/exit 默认 8964）。
+            端口范围：该节点允许分配的端口池，例如 <code class="mono">1-100</code> 或
+            <code class="mono">400-40000</code>。两边都填 0 则用角色默认范围。
+            <span v-if="mode === 'edit'" class="mono"> · 编辑 ID：{{ editingId }}</span>
           </div>
-          <div class="field">
-            <label>接入域名</label>
-            <input v-model="form.hostname" placeholder="e1.example.com" />
+        </template>
+        <template v-else>
+          <div class="kv">
+            <dt>Node ID</dt>
+            <dd class="mono">{{ created.node.id }}</dd>
+            <dt>Token</dt>
+            <dd class="mono" style="word-break:break-all">{{ created.agent_token }}</dd>
+            <dt>面板地址</dt>
+            <dd class="mono">{{ created.panel_url }}</dd>
+            <dt>端口</dt>
+            <dd class="mono">
+              listen {{ created.node.listen_port || '默认' }}
+              · range {{ created.node.port_min || 0 }}-{{ created.node.port_max || 0 }}
+            </dd>
           </div>
-          <div class="field">
-            <label>公网 IP</label>
-            <input v-model="form.public_ip" placeholder="x.x.x.x" />
+          <div class="field" style="margin-top:12px">
+            <label>一键安装 Agent（在目标 Linux 上执行）</label>
+            <textarea
+              readonly
+              rows="4"
+              class="mono"
+              style="width:100%;resize:vertical;background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;padding:12px"
+              :value="created.install_cmd"
+            />
           </div>
-          <div class="field">
-            <label>区域</label>
-            <input v-model="form.region" placeholder="cn / us / sh-ix" />
+          <div class="muted" style="font-size:12px;line-height:1.5">
+            {{ created.install_hint }}
+            若地址不对，请先到侧边栏「设置」填写面板地址。
           </div>
-          <div class="field">
-            <label>标签</label>
-            <input v-model="form.tags" placeholder="residential,tk" />
-          </div>
-        </div>
-        <div v-if="createdToken" class="card" style="padding:14px">
-          <div class="muted" style="margin-bottom:8px">请立即保存 Agent Token（仅此时完整展示）</div>
-          <div class="mono" style="word-break:break-all">{{ createdToken }}</div>
           <div class="row-actions" style="margin-top:10px">
-            <button class="btn btn-ghost btn-sm" @click="copy(createdToken)">复制 Token</button>
+            <button class="btn btn-primary btn-sm" @click="copy(created.install_cmd)">复制安装命令</button>
+            <button class="btn btn-ghost btn-sm" @click="copy(created.agent_token)">复制 Token</button>
           </div>
-        </div>
+        </template>
       </div>
       <div class="modal-ft">
-        <button class="btn btn-ghost" @click="show = false">取消</button>
-        <button class="btn btn-primary" @click="create">创建</button>
+        <button class="btn btn-ghost" @click="show = false">
+          {{ mode === 'created' ? '完成' : '取消' }}
+        </button>
+        <button v-if="mode === 'create'" class="btn btn-primary" :disabled="saving" @click="create">
+          {{ saving ? '创建中…' : '创建' }}
+        </button>
+        <button v-else-if="mode === 'edit'" class="btn btn-primary" :disabled="saving" @click="saveEdit">
+          {{ saving ? '保存中…' : '保存修改' }}
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div v-if="installShow && installInfo" class="modal-mask" @click.self="installShow = false">
+    <div class="modal" style="width:min(640px,100%)">
+      <div class="modal-hd">
+        <h3>Agent 安装命令</h3>
+        <button class="btn btn-ghost btn-sm" @click="installShow = false">关闭</button>
+      </div>
+      <div class="modal-bd">
+        <div class="kv">
+          <dt>Node ID</dt>
+          <dd class="mono">{{ installInfo.node_id }}</dd>
+          <dt>Role</dt>
+          <dd><span class="badge">{{ installInfo.role }}</span></dd>
+          <dt>Token</dt>
+          <dd class="mono" style="word-break:break-all">{{ installInfo.agent_token }}</dd>
+          <dt>面板</dt>
+          <dd class="mono">{{ installInfo.panel_url }}</dd>
+        </div>
+        <div class="field" style="margin-top:12px">
+          <label>在目标机器执行</label>
+          <textarea
+            readonly
+            rows="4"
+            class="mono"
+            style="width:100%;resize:vertical;background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;padding:12px"
+            :value="installInfo.install_cmd"
+          />
+        </div>
+        <div class="muted" style="font-size:12px">{{ installInfo.hint }}</div>
+      </div>
+      <div class="modal-ft">
+        <button class="btn btn-ghost" @click="installShow = false">关闭</button>
+        <button class="btn btn-primary" @click="copy(installInfo.install_cmd)">复制命令</button>
       </div>
     </div>
   </div>

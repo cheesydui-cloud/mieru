@@ -103,8 +103,13 @@ func (s *Server) Router() *gin.Engine {
 		admin.POST("/users/:id/reset-sub", s.resetUserSub)
 
 		admin.GET("/metrics/rates", s.listRates)
-		admin.GET("/audit", s.listAudit)
-	}
+			admin.GET("/audit", s.listAudit)
+
+			admin.GET("/settings", s.getSettings)
+			admin.PUT("/settings", s.putSettings)
+			admin.POST("/admin-password", s.changeAdminPassword)
+			admin.GET("/nodes/:id/install", s.nodeInstallCmd)
+		}
 
 	portal := r.Group("/api/me")
 	portal.Use(s.requireUserOrAdmin())
@@ -316,6 +321,10 @@ func (s *Server) createNode(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name and role required"})
 		return
 	}
+	if err := validateNodePorts(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	if req.MetaJSON == "" {
 		req.MetaJSON = "{}"
 	}
@@ -326,23 +335,32 @@ func (s *Server) createNode(c *gin.Context) {
 	_ = s.gen.RebuildAll()
 	s.store.Audit("admin", "create_node", req.ID, req.Name)
 	full, _ := s.store.GetNode(req.ID)
+	install := s.buildInstallCmd(c, full)
 	c.JSON(http.StatusCreated, gin.H{
-		"node":        full,
-		"agent_token": full.AgentToken,
-		"hint":        "Save agent_token; set AGENT_NODE_ID and AGENT_TOKEN on the node.",
+		"node":         full,
+		"agent_token":  full.AgentToken,
+		"panel_url":    install.PanelURL,
+		"install_cmd":  install.Cmd,
+		"install_hint": install.Hint,
 	})
 }
 
-func (s *Server) getNode(c *gin.Context) {
-	n, err := s.store.GetNode(c.Param("id"))
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
-		return
+	func (s *Server) getNode(c *gin.Context) {
+		n, err := s.store.GetNode(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		token := n.AgentToken
+		n.AgentToken = ""
+		install := s.buildInstallCmd(c, &model.Node{ID: n.ID, Role: n.Role, AgentToken: token})
+		c.JSON(http.StatusOK, gin.H{
+			"node":        n,
+			"agent_token": token,
+			"panel_url":   install.PanelURL,
+			"install_cmd": install.Cmd,
+		})
 	}
-	token := n.AgentToken
-	n.AgentToken = ""
-	c.JSON(http.StatusOK, gin.H{"node": n, "agent_token": token})
-}
 
 func (s *Server) updateNode(c *gin.Context) {
 	n, err := s.store.GetNode(c.Param("id"))
@@ -362,11 +380,18 @@ func (s *Server) updateNode(c *gin.Context) {
 	n.PublicIP = req.PublicIP
 	n.Hostname = req.Hostname
 	n.AltHostnames = req.AltHostnames
+	n.ListenPort = req.ListenPort
+	n.PortMin = req.PortMin
+	n.PortMax = req.PortMax
 	if req.Status != "" {
 		n.Status = req.Status
 	}
 	if req.MetaJSON != "" {
 		n.MetaJSON = req.MetaJSON
+	}
+	if err := validateNodePorts(n); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
 	if err := s.store.UpdateNode(n); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -376,6 +401,20 @@ func (s *Server) updateNode(c *gin.Context) {
 	s.store.Audit("admin", "update_node", n.ID, n.Name)
 	n.AgentToken = ""
 	c.JSON(http.StatusOK, n)
+}
+
+func validateNodePorts(n *model.Node) error {
+	if n.ListenPort < 0 || n.ListenPort > 65535 {
+		return fmt.Errorf("listen_port must be 0-65535 (0=role default)")
+	}
+	if n.PortMin < 0 || n.PortMin > 65535 || n.PortMax < 0 || n.PortMax > 65535 {
+		return fmt.Errorf("port_min/port_max must be 0-65535")
+	}
+	if n.PortMin > 0 && n.PortMax > 0 && n.PortMin > n.PortMax {
+		return fmt.Errorf("port_min cannot be greater than port_max")
+	}
+	// both zero = default range; one set without the other is ok (filled by EffectivePortRange)
+	return nil
 }
 
 func (s *Server) deleteNode(c *gin.Context) {
@@ -536,11 +575,12 @@ func (s *Server) createUser(c *gin.Context) {
 	}
 	_ = s.gen.RebuildAll()
 	s.store.Audit("admin", "create_user", fmt.Sprintf("%d", u.ID), u.Username)
+	base := s.publicBase(c)
 	c.JSON(http.StatusCreated, gin.H{
 		"user":           u,
 		"proxy_password": u.ProxyPassword,
 		"sub_token":      u.SubToken,
-		"subscription":   fmt.Sprintf("/sub/%s", u.SubToken),
+		"subscription":   base + "/sub/" + u.SubToken,
 	})
 }
 
@@ -552,7 +592,7 @@ func (s *Server) getUser(c *gin.Context) {
 		return
 	}
 	sample, _ := s.store.GetRate(u.ID)
-	c.JSON(http.StatusOK, gin.H{"user": u, "rate": sample, "subscription": fmt.Sprintf("/sub/%s", u.SubToken)})
+	c.JSON(http.StatusOK, gin.H{"user": u, "rate": sample, "subscription": s.publicBase(c) + "/sub/" + u.SubToken})
 }
 
 func (s *Server) updateUser(c *gin.Context) {
@@ -639,7 +679,7 @@ func (s *Server) resetUserSub(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"sub_token": tok, "subscription": fmt.Sprintf("/sub/%s", tok)})
+	c.JSON(http.StatusOK, gin.H{"sub_token": tok, "subscription": s.publicBase(c) + "/sub/" + tok})
 }
 
 func (s *Server) listRates(c *gin.Context) {
@@ -688,7 +728,7 @@ func (s *Server) myProfile(c *gin.Context) {
 		"rate":         sample,
 		"today_up":     up,
 		"today_down":   down,
-		"subscription": fmt.Sprintf("/sub/%s", u.SubToken),
+		"subscription": s.publicBase(c) + "/sub/" + u.SubToken,
 		"entries":      entries,
 	})
 }
@@ -706,6 +746,177 @@ func (s *Server) myRate(c *gin.Context) {
 	}
 	sample, _ := s.store.GetRate(u.ID)
 	c.JSON(http.StatusOK, sample)
+}
+
+// ---------- Settings & install helpers ----------
+
+type installInfo struct {
+	PanelURL string
+	Cmd      string
+	Hint     string
+}
+
+func (s *Server) publicBase(c *gin.Context) string {
+	if u := s.store.PanelBaseURL(); u != "" {
+		return u
+	}
+	scheme := "http"
+	if c.Request.TLS != nil {
+		scheme = "https"
+	}
+	if p := c.GetHeader("X-Forwarded-Proto"); p != "" {
+		scheme = strings.TrimSpace(strings.Split(p, ",")[0])
+	}
+	host := c.Request.Host
+	if host == "" {
+		host = "127.0.0.1:8080"
+	}
+	return scheme + "://" + host
+}
+
+func normalizePanelURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	raw = strings.TrimRight(raw, "/")
+	if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") {
+		raw = "http://" + raw
+	}
+	return raw
+}
+
+func (s *Server) buildInstallCmd(c *gin.Context, n *model.Node) installInfo {
+	base := s.publicBase(c)
+	role := n.Role
+	if role == "" {
+		role = "exit"
+	}
+	cmd := fmt.Sprintf(
+		"curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | bash -s -- --panel-url %s --node-id %s --token %s --role %s",
+		base, n.ID, n.AgentToken, role,
+	)
+	hint := "在对应 Linux 节点上执行上述命令。请先在「设置」填写面板地址（外网可访问的 http/https）。"
+	if s.store.PanelBaseURL() == "" {
+		hint = "尚未配置面板地址，当前用浏览器访问地址生成命令。生产环境请到「设置」填写固定面板地址。"
+	}
+	return installInfo{PanelURL: base, Cmd: cmd, Hint: hint}
+}
+
+func (s *Server) getSettings(c *gin.Context) {
+	m, err := s.store.GetSettings("panel_url", "panel_name")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	panelURL := m["panel_url"]
+	if panelURL == "" {
+		panelURL = s.publicBase(c)
+	}
+	name := m["panel_name"]
+	if name == "" {
+		name = "Mieru Panel"
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"panel_url":     panelURL,
+		"panel_name":    name,
+		"panel_url_set": m["panel_url"] != "",
+		"version":       s.Version,
+		"admin_user":    s.cfg.AdminUser,
+	})
+}
+
+func (s *Server) putSettings(c *gin.Context) {
+	var req struct {
+		PanelURL  string `json:"panel_url"`
+		PanelName string `json:"panel_name"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
+		return
+	}
+	url := normalizePanelURL(req.PanelURL)
+	if url == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "panel_url required (e.g. http://IP:8080 or https://panel.example.com)"})
+		return
+	}
+	if err := s.store.SetSetting("panel_url", url); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	name := strings.TrimSpace(req.PanelName)
+	if name == "" {
+		name = "Mieru Panel"
+	}
+	if err := s.store.SetSetting("panel_name", name); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	s.store.Audit("admin", "update_settings", "panel", url)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "panel_url": url, "panel_name": name})
+}
+
+func (s *Server) changeAdminPassword(c *gin.Context) {
+	var req struct {
+		Username        string `json:"username"`
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
+		return
+	}
+	req.Username = strings.TrimSpace(req.Username)
+	req.NewPassword = strings.TrimSpace(req.NewPassword)
+	if req.NewPassword == "" || len(req.NewPassword) < 6 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "new_password min 6 chars"})
+		return
+	}
+	claims, err := s.bearer(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	user := claims.Username
+	if req.Username != "" {
+		user = req.Username
+	}
+	adm, err := s.store.GetAdminByUsername(claims.Username)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	if !store.CheckPassword(adm.PasswordHash, req.CurrentPassword) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "current password wrong"})
+		return
+	}
+	if err := s.store.SetAdminPassword(user, req.NewPassword); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	s.store.Audit("admin", "change_password", user, "")
+	c.JSON(http.StatusOK, gin.H{
+		"ok":       true,
+		"username": user,
+		"hint":     "密码已更新到数据库。若 /etc/mieru-panel.env 里 PANEL_ADMIN_PASS 不同，可手动同步，勿设 PANEL_ADMIN_FORCE_SYNC=1 除非要强制用 env 覆盖。",
+	})
+}
+
+func (s *Server) nodeInstallCmd(c *gin.Context) {
+	n, err := s.store.GetNode(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	info := s.buildInstallCmd(c, n)
+	c.JSON(http.StatusOK, gin.H{
+		"node_id":     n.ID,
+		"role":        n.Role,
+		"agent_token": n.AgentToken,
+		"panel_url":   info.PanelURL,
+		"install_cmd": info.Cmd,
+		"hint":        info.Hint,
+	})
 }
 
 func (s *Server) subscription(c *gin.Context) {
@@ -745,8 +956,8 @@ func (s *Server) subscription(c *gin.Context) {
 		if name == "" {
 			name = host
 		}
-		fmt.Fprintf(&b, "  - name: %q\n    type: socks5\n    server: %s\n    port: %d\n    username: %q\n    password: %q\n",
-			name, host, 1080, u.Username, u.ProxyPassword)
+			fmt.Fprintf(&b, "  - name: %q\n    type: socks5\n    server: %s\n    port: %d\n    username: %q\n    password: %q\n",
+				name, host, n.EffectiveListenPort(), u.Username, u.ProxyPassword)
 		names = append(names, name)
 		count++
 	}

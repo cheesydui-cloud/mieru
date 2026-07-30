@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.6] - 2026-07-30
+
+### Added
+- **Settings page**: panel URL / panel name (used for Agent install commands & absolute subscription links).
+- **Admin password change** in UI (`POST /api/admin/admin-password`).
+- **Node edit** UI (name/role/hostname/IP/ports).
+- **Custom listen port + port range** on nodes (`listen_port`, `port_min`, `port_max`); used by configgen/subscription.
+- **Agent one-line install command** after create and via "安装命令" button (`GET /api/admin/nodes/:id/install`).
+
+### Fixed
+- Normal start no longer force-overwrites admin password from env (so UI password changes persist). Use `--reset-admin` or `PANEL_ADMIN_FORCE_SYNC=1` only when intentional.
+- Empty list APIs still return `[]` (from 0.1.5).
+
 ## [0.1.5] - 2026-07-30
 
 ### Fixed
