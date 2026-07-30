@@ -179,6 +179,33 @@ func (s *Store) EnsureAdmin(username, password string) error {
 	return err
 }
 
+// SetAdminPassword creates or overwrites the admin password (used by --reset-admin).
+func (s *Store) SetAdminPassword(username, password string) error {
+	if username == "" || password == "" {
+		return fmt.Errorf("username and password required")
+	}
+	hash := mustHash(password)
+	var id int64
+	err := s.db.QueryRow(`SELECT id FROM admins WHERE username=?`, username).Scan(&id)
+	if err == nil {
+		_, err = s.db.Exec(`UPDATE admins SET password_hash=? WHERE id=?`, hash, id)
+		return err
+	}
+	// no row with that username: if table empty insert; else update first admin + rename
+	var n int
+	if err2 := s.db.QueryRow(`SELECT COUNT(1) FROM admins`).Scan(&n); err2 != nil {
+		return err2
+	}
+	if n == 0 {
+		_, err = s.db.Exec(`INSERT INTO admins(username, password_hash, created_at) VALUES(?,?,?)`,
+			username, hash, now())
+		return err
+	}
+	_, err = s.db.Exec(`UPDATE admins SET username=?, password_hash=? WHERE id=(SELECT id FROM admins ORDER BY id LIMIT 1)`,
+		username, hash)
+	return err
+}
+
 func (s *Store) GetAdminByUsername(username string) (*model.Admin, error) {
 	row := s.db.QueryRow(`SELECT id, username, password_hash, created_at FROM admins WHERE username=?`, username)
 	var a model.Admin

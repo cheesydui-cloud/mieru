@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.3] - 2026-07-30
+
+### Fixed
+- Admin login `invalid credentials` after upgrade: password in `/etc/mieru-panel.env` was only applied on **first** DB create; later env changes did not update SQLite. Added `mieru-panel --reset-admin` and `scripts/reset-admin.sh`.
+
+### Added
+- One-line admin password reset for Linux servers.
+- Install/upgrade scripts default to `v0.1.3` (Linux only).
+
 ## [0.1.2] - 2026-07-30
 
 ### Fixed
