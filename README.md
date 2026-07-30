@@ -36,62 +36,225 @@
 
 > 骨干加密段推荐使用 [mieru/mita](https://github.com/enfein/mieru)；本仓库是 **编排与运维面板**，不重新实现协议。
 
-## 快速开始
+## 安装
 
-### 要求
+### 方式一：一键安装预编译二进制（推荐服务器）
 
-- Go 1.22+（开发构建）
-- Node.js 20+（构建前端）
-- Linux 节点若要真正 `nft apply` 需要 root + nftables（默认 dry-run 只写规则文件）
+> 需要 `curl` + `tar`。默认安装到 `/usr/local/bin`，前端静态资源放到 `/opt/mieru-panel/web/dist`（可改环境变量）。
 
-### 从源码运行
+**Linux amd64：**
+
+```bash
+export MIERU_VERSION=v0.1.0
+export MIERU_ARCH=linux-amd64
+curl -fsSL -o /tmp/mieru-panel.tgz \
+  "https://github.com/cheesydui-cloud/mieru/releases/download/${MIERU_VERSION}/mieru-panel-${MIERU_VERSION}-${MIERU_ARCH}.tar.gz"
+sudo mkdir -p /opt/mieru-panel
+sudo tar -xzf /tmp/mieru-panel.tgz -C /opt/mieru-panel --strip-components=1
+sudo install -m 755 /opt/mieru-panel/panel /usr/local/bin/mieru-panel
+sudo install -m 755 /opt/mieru-panel/agent /usr/local/bin/mieru-agent
+```
+
+**Linux arm64：** 将上面的 `MIERU_ARCH=linux-arm64`。
+
+**macOS Apple Silicon：**
+
+```bash
+export MIERU_VERSION=v0.1.0
+export MIERU_ARCH=darwin-arm64
+curl -fsSL -o /tmp/mieru-panel.tgz \
+  "https://github.com/cheesydui-cloud/mieru/releases/download/${MIERU_VERSION}/mieru-panel-${MIERU_VERSION}-${MIERU_ARCH}.tar.gz"
+mkdir -p "$HOME/.local/mieru-panel"
+tar -xzf /tmp/mieru-panel.tgz -C "$HOME/.local/mieru-panel" --strip-components=1
+install -m 755 "$HOME/.local/mieru-panel/panel" "$HOME/.local/bin/mieru-panel"
+install -m 755 "$HOME/.local/mieru-panel/agent" "$HOME/.local/bin/mieru-agent"
+# 确保 PATH 含 $HOME/.local/bin
+```
+
+**macOS Intel：** `MIERU_ARCH=darwin-amd64`。
+
+**Windows x64（PowerShell）：**
+
+```powershell
+$ver = "v0.1.0"
+$url = "https://github.com/cheesydui-cloud/mieru/releases/download/$ver/mieru-panel-$ver-windows-amd64.zip"
+$out = "$env:USERPROFILE\mieru-panel"
+New-Item -ItemType Directory -Force -Path $out | Out-Null
+Invoke-WebRequest -Uri $url -OutFile "$out\mieru-panel.zip"
+Expand-Archive -Path "$out\mieru-panel.zip" -DestinationPath $out -Force
+# 运行: $out\mieru-panel-v0.1.0-windows-amd64\panel.exe
+```
+
+**校验下载：**
+
+```bash
+curl -fsSL -o SHA256SUMS.txt \
+  "https://github.com/cheesydui-cloud/mieru/releases/download/v0.1.0/SHA256SUMS.txt"
+# 将对应包与 SUMS 放在同一目录后：
+shasum -a 256 -c SHA256SUMS.txt --ignore-missing
+```
+
+预编译包文件一览：
+
+| 平台 | 资源 |
+|------|------|
+| Linux x86_64 | [mieru-panel-v0.1.0-linux-amd64.tar.gz](https://github.com/cheesydui-cloud/mieru/releases/download/v0.1.0/mieru-panel-v0.1.0-linux-amd64.tar.gz) |
+| Linux arm64 | [mieru-panel-v0.1.0-linux-arm64.tar.gz](https://github.com/cheesydui-cloud/mieru/releases/download/v0.1.0/mieru-panel-v0.1.0-linux-arm64.tar.gz) |
+| macOS Intel | [mieru-panel-v0.1.0-darwin-amd64.tar.gz](https://github.com/cheesydui-cloud/mieru/releases/download/v0.1.0/mieru-panel-v0.1.0-darwin-amd64.tar.gz) |
+| macOS Apple Silicon | [mieru-panel-v0.1.0-darwin-arm64.tar.gz](https://github.com/cheesydui-cloud/mieru/releases/download/v0.1.0/mieru-panel-v0.1.0-darwin-arm64.tar.gz) |
+| Windows x64 | [mieru-panel-v0.1.0-windows-amd64.zip](https://github.com/cheesydui-cloud/mieru/releases/download/v0.1.0/mieru-panel-v0.1.0-windows-amd64.zip) |
+| 校验和 | [SHA256SUMS.txt](https://github.com/cheesydui-cloud/mieru/releases/download/v0.1.0/SHA256SUMS.txt) |
+
+### 启动 Panel（二进制）
+
+```bash
+# 数据与前端目录（按需修改）
+export PANEL_LISTEN=':8080'
+export PANEL_DB='/var/lib/mieru-panel/panel.db'
+export PANEL_DATA='/var/lib/mieru-panel'
+export PANEL_JWT_SECRET='replace-me-with-long-random'
+export PANEL_ADMIN_USER='admin'
+export PANEL_ADMIN_PASS='strong-password'
+
+sudo mkdir -p /var/lib/mieru-panel
+# 前端：从源码构建后拷贝，或暂时用开发模式（见下文）
+# sudo mkdir -p /opt/mieru-panel/web && sudo cp -a web/dist /opt/mieru-panel/web/
+cd /opt/mieru-panel   # 保证相对路径 ./web/dist 可访问，或自行改工作目录
+mieru-panel
+# 浏览器打开 http://服务器IP:8080
+```
+
+**systemd 示例（Linux）：**
+
+```bash
+sudo tee /etc/systemd/system/mieru-panel.service >/dev/null <<'EOF'
+[Unit]
+Description=Mieru Panel
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/mieru-panel
+Environment=PANEL_LISTEN=:8080
+Environment=PANEL_DB=/var/lib/mieru-panel/panel.db
+Environment=PANEL_DATA=/var/lib/mieru-panel
+Environment=PANEL_JWT_SECRET=replace-me-with-long-random
+Environment=PANEL_ADMIN_USER=admin
+Environment=PANEL_ADMIN_PASS=strong-password
+ExecStart=/usr/local/bin/mieru-panel
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now mieru-panel
+sudo systemctl status mieru-panel --no-pager
+```
+
+### 启动 Agent（二进制）
+
+先在面板 **节点 → 新建**，复制 `node_id` 与 `agent_token`：
+
+```bash
+export AGENT_PANEL_URL='http://面板IP或域名:8080'
+export AGENT_NODE_ID='n_xxx'
+export AGENT_TOKEN='tok_xxx'
+export AGENT_ROLE='exit'          # entry | relay | exit | hybrid
+export AGENT_DATA='/var/lib/mieru-agent'
+export AGENT_NFT_DRYRUN=1         # 生产 Entry 需要真实 nft 时设为 0，并确保有权限
+
+sudo mkdir -p /var/lib/mieru-agent
+mieru-agent
+```
+
+**systemd 示例（节点）：**
+
+```bash
+sudo tee /etc/systemd/system/mieru-agent.service >/dev/null <<'EOF'
+[Unit]
+Description=Mieru Node Agent
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Environment=AGENT_PANEL_URL=http://面板地址:8080
+Environment=AGENT_NODE_ID=n_xxx
+Environment=AGENT_TOKEN=tok_xxx
+Environment=AGENT_ROLE=exit
+Environment=AGENT_DATA=/var/lib/mieru-agent
+Environment=AGENT_NFT_DRYRUN=1
+ExecStart=/usr/local/bin/mieru-agent
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now mieru-agent
+```
+
+### 方式二：从源码安装
 
 ```bash
 git clone https://github.com/cheesydui-cloud/mieru.git
 cd mieru
 
-# 后端
-export PANEL_JWT_SECRET='replace-me'
-export PANEL_ADMIN_USER=admin
-export PANEL_ADMIN_PASS='strong-password'
+# 构建后端
+go build -trimpath -ldflags='-s -w' -o bin/panel ./cmd/panel
+go build -trimpath -ldflags='-s -w' -o bin/agent ./cmd/agent
+sudo install -m 755 bin/panel /usr/local/bin/mieru-panel
+sudo install -m 755 bin/agent /usr/local/bin/mieru-agent
+
+# 构建前端（panel 静态托管 ./web/dist）
+cd web && npm ci && npm run build && cd ..
+```
+
+开发热更新：
+
+```bash
+# 终端 1：API
+export PANEL_JWT_SECRET='dev-secret'
+export PANEL_ADMIN_PASS='admin123'
 go run ./cmd/panel
 
-# 前端（另开终端）
+# 终端 2：UI（代理 /api 到 :8080）
 cd web && npm install && npm run dev
-# UI: http://127.0.0.1:5173  API 代理到 :8080
+# 打开 http://127.0.0.1:5173
 ```
 
-生产可先构建静态资源再由 panel 托管：
+### 方式三：Docker（仅 Panel）
 
 ```bash
-cd web && npm ci && npm run build
-# 然后在仓库根目录启动 panel，访问 http://127.0.0.1:8080
-go build -o bin/panel ./cmd/panel
-./bin/panel
-```
-
-### 节点 Agent
-
-在面板 **节点 → 新建** 后保存 `node_id` 与 `agent_token`：
-
-```bash
-go build -o bin/agent ./cmd/agent
-
-export AGENT_PANEL_URL='https://panel.example.com'
-export AGENT_NODE_ID='n_xxx'
-export AGENT_TOKEN='tok_xxx'
-export AGENT_ROLE='exit'          # entry | relay | exit
-export AGENT_NFT_DRYRUN=1         # 0 = 尝试真正执行 nft
-./bin/agent
-```
-
-### Docker（面板）
-
-```bash
-cd deploy
+git clone https://github.com/cheesydui-cloud/mieru.git
+cd mieru/deploy
 export PANEL_JWT_SECRET=replace-me
+export PANEL_ADMIN_USER=admin
 export PANEL_ADMIN_PASS=strong-password
 docker compose up -d --build
+# http://127.0.0.1:8080
+```
+
+### 前端静态资源说明
+
+预编译 `panel` 默认从**当前工作目录**加载 `./web/dist`。任选其一：
+
+```bash
+# A) 源码构建后拷贝
+git clone https://github.com/cheesydui-cloud/mieru.git /tmp/mieru-src
+cd /tmp/mieru-src/web && npm ci && npm run build
+sudo mkdir -p /opt/mieru-panel/web
+sudo cp -a dist /opt/mieru-panel/web/
+cd /opt/mieru-panel && mieru-panel
+
+# B) 开发期只用 Vite
+cd web && npm run dev   # :5173 → 代理 API :8080
 ```
 
 ## 推荐上线流程
