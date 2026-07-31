@@ -184,10 +184,41 @@ func (n *Node) PublicHost() string {
 	if n == nil {
 		return ""
 	}
-	if h := strings.TrimSpace(n.Hostname); h != "" {
+	if h := strings.TrimSpace(n.Hostname); h != "" && !isPlaceholderHost(h) {
 		return h
 	}
 	return strings.TrimSpace(n.PublicIP)
+}
+
+// ClientHost is what end-user mierus:// links should dial.
+// Prefer public IP (often the operator front/IPLC entry) over hostname —
+// hostnames are easy to leave as placeholders (e.g. e1.example.com).
+// Falls back to PublicHost. Never returns private_ip.
+func (n *Node) ClientHost() string {
+	if n == nil {
+		return ""
+	}
+	if ip := strings.TrimSpace(n.PublicIP); ip != "" {
+		return ip
+	}
+	return n.PublicHost()
+}
+
+// isPlaceholderHost rejects common template / example hostnames so share
+// links fall back to PublicIP instead of a non-resolving name.
+func isPlaceholderHost(h string) bool {
+	h = strings.ToLower(strings.TrimSpace(h))
+	if h == "" {
+		return true
+	}
+	if strings.HasSuffix(h, ".example.com") || strings.HasSuffix(h, ".example.org") || strings.HasSuffix(h, ".example.net") {
+		return true
+	}
+	switch h {
+	case "example.com", "localhost", "127.0.0.1", "0.0.0.0", "::1":
+		return true
+	}
+	return false
 }
 
 // PortInRange maps userID into the node's allowed port pool (stable).

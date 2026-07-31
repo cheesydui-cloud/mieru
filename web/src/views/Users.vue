@@ -284,7 +284,8 @@ onUnmounted(() => clearInterval(timer))
           </div>
         </div>
         <div class="muted" style="font-size:12px;line-height:1.5;margin:-4px 0 10px">
-          客户端用官方 mieru 协议直连出口 mita。商家给了独立公网 IP/域名（或转发到 mita）时填写；不填则自动用线路出口节点的公网地址与 mita 端口。
+          对应 OneClick 的「客户端展示入口」：商家只给了前置公网 IP（如移动入口）时填这里，端口填前置映射端口。
+          不填则用线路<strong>第一台 exit/hybrid</strong>节点的公网 IP + mita 端口（扫码连这台，不是美国落地）。
         </div>
         <div class="field">
           <label>备注</label>

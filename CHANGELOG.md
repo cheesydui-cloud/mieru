@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.8] - 2026-08-01
+
+### Fixed — 扫码对齐 OneClick：连客户端可触达的 mita，不是美国落地
+- 对照 **ike-sh/mieru-OneClick**：客户端永远连 **mita**；`mierus://` 的 host/port 可以是「展示入口」（前置 IP），服务端仍监听真实端口，前置 DNAT 过去。
+- 分享解析改为优先线路上 **第一台 exit/hybrid**（如 cm7 前置），不再默认最后一跳美国 exit。
+- 用户 `entry_host`/`entry_port` = OneClick `--advertise-host` / `--advertise-port`（仅改链接展示）。
+- 节点扫码 host 优先 **公网 IP**，忽略 `*.example.com` 等占位接入域名。
+
+### Ops
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | bash
+```
+面板升级即可。节点请设：角色 exit/hybrid、公网 IP=前置 IP、端口=商家映射口、接入域名留空。
+
+
 ## [0.3.7] - 2026-08-01
 
 ### Changed — 客户端分享改为官方 mierus://（直连出口 mita）
