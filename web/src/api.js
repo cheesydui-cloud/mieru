@@ -43,6 +43,14 @@ export async function api(path, options = {}) {
     data = text
   }
   if (!res.ok) {
+    // Session expired / invalid JWT — force re-login so lists don't look "empty".
+    if (res.status === 401 && !path.startsWith('/api/auth/')) {
+      clearSession()
+      if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+        const next = encodeURIComponent(window.location.pathname + window.location.search)
+        window.location.replace(`/login?next=${next}`)
+      }
+    }
     const msg = (data && data.error) || res.statusText || 'request failed'
     throw new Error(msg)
   }

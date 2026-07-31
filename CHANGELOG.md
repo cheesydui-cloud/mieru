@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3] - 2026-07-31
+
+### Fixed
+- **Upgrade actually kills old panel**: install script force-kills by name + port (fuser/ss/lsof) before replace; verifies running `/api/version`.
+- **401 unauthorized** on admin APIs redirects to login (expired JWT no longer shows empty node list).
+
+
 ## [0.2.2] - 2026-07-31
 
 ### UI — light admin console (weir-style)
