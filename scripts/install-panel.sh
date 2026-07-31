@@ -117,54 +117,77 @@ if ! curl -fL --retry 3 --retry-delay 2 "$URL" -o "$TMP/$ASSET"; then
   echo "请确认 release 存在: https://github.com/${REPO}/releases/tag/${VERSION}" >&2
   exit 1
 fi
-# 校验包内有 panel
-if ! tar -tzf "$TMP/$ASSET" | grep -qE '/panel$|^panel$'; then
-  echo "错误: 压缩包内没有 panel 二进制" >&2
-  tar -tzf "$TMP/$ASSET" | head -20 >&2
-  exit 1
-fi
-SIZE=$(wc -c <"$TMP/$ASSET" | tr -d ' ')
-if [[ "${SIZE:-0}" -lt 1000000 ]]; then
-  echo "错误: 下载文件过小 (${SIZE} bytes)，可能不是完整 release" >&2
-  exit 1
-fi
-echo "==> 下载完成 ${SIZE} bytes"
+	SIZE=$(wc -c <"$TMP/$ASSET" | tr -d ' ')
+	if [[ "${SIZE:-0}" -lt 1000000 ]]; then
+	  echo "错误: 下载文件过小 (${SIZE} bytes)，可能不是完整 release" >&2
+	  exit 1
+	fi
+	echo "==> 下载完成 ${SIZE} bytes"
 
-kill_panel
+	# 列出成员：忽略 macOS AppleDouble (._*) / xattr 警告（GNU tar 可能 exit≠0）
+	LIST_FILE="$TMP/tar.list"
+	set +e
+	tar -tzf "$TMP/$ASSET" >"$LIST_FILE" 2>"$TMP/tar.list.err"
+	set -e
+	if ! awk -F/ '{print $NF}' "$LIST_FILE" | grep -qx 'panel'; then
+	  echo "错误: 压缩包内没有名为 panel 的文件" >&2
+	  echo "--- tar 列表 ---" >&2
+	  cat "$LIST_FILE" >&2 || true
+	  echo "--- tar 警告 ---" >&2
+	  cat "$TMP/tar.list.err" >&2 || true
+	  exit 1
+	fi
 
-echo "==> 安装到 ${INSTALL_DIR}"
-$SUDO mkdir -p "$INSTALL_DIR" "$DATA_DIR" "${PREFIX}/bin"
-# 清空旧目录里的 panel（不碰 agent 专用目录）
-$SUDO rm -f "${INSTALL_DIR}/panel" \
-  "${PREFIX}/bin/mieru-panel" \
-  /usr/bin/mieru-panel /bin/mieru-panel 2>/dev/null || true
-$SUDO tar -xzf "$TMP/$ASSET" -C "$INSTALL_DIR" --strip-components=1
-if [[ ! -f "${INSTALL_DIR}/panel" ]]; then
-  if [[ -f "${INSTALL_DIR}/mieru-panel-${VERSION}-${TARGET}/panel" ]]; then
-    $SUDO mv "${INSTALL_DIR}/mieru-panel-${VERSION}-${TARGET}/"* "$INSTALL_DIR/" 2>/dev/null || true
-  fi
-fi
-if [[ ! -x "${INSTALL_DIR}/panel" && -f "${INSTALL_DIR}/panel" ]]; then
-  $SUDO chmod +x "${INSTALL_DIR}/panel"
-fi
-if [[ ! -f "${INSTALL_DIR}/panel" ]]; then
-  echo "错误: 解压后找不到 ${INSTALL_DIR}/panel" >&2
-  $SUDO ls -la "$INSTALL_DIR" >&2
-  exit 1
-fi
-$SUDO install -m 755 "${INSTALL_DIR}/panel" "${PREFIX}/bin/mieru-panel"
-# also refresh agent binary if present in tarball (optional)
-if [[ -f "${INSTALL_DIR}/agent" ]]; then
-  $SUDO install -m 755 "${INSTALL_DIR}/agent" "${PREFIX}/bin/mieru-agent" 2>/dev/null || true
-fi
-sync || true
-# dual-path must match
-if command -v cmp >/dev/null 2>&1; then
-  if ! cmp -s "${INSTALL_DIR}/panel" "${PREFIX}/bin/mieru-panel"; then
-    echo "错误: ${INSTALL_DIR}/panel 与 ${PREFIX}/bin/mieru-panel 不一致" >&2
-    exit 1
-  fi
-fi
+	kill_panel
+
+	echo "==> 安装到 ${INSTALL_DIR}"
+	$SUDO mkdir -p "$INSTALL_DIR" "$DATA_DIR" "${PREFIX}/bin" "$TMP/extract"
+	$SUDO rm -f "${INSTALL_DIR}/panel" \
+	  "${PREFIX}/bin/mieru-panel" \
+	  /usr/bin/mieru-panel /bin/mieru-panel 2>/dev/null || true
+	# 解压到临时目录；忽略 xattr 警告（旧 mac 打包兼容）
+	set +e
+	tar -xzf "$TMP/$ASSET" -C "$TMP/extract" --strip-components=1 2>"$TMP/tar.extract.err"
+	TAR_EC=$?
+	set -e
+	# 选真实二进制：文件名 panel 且体积 >1MB（排除 ._panel 元数据）
+	PANEL_SRC=""
+	while IFS= read -r -d '' f; do
+	  [[ "$(basename "$f")" == "panel" ]] || continue
+	  psz=$(wc -c <"$f" | tr -d ' ')
+	  if [[ "${psz:-0}" -gt 1000000 ]]; then
+	    PANEL_SRC="$f"
+	    break
+	  fi
+	done < <(find "$TMP/extract" -type f -name 'panel' -print0 2>/dev/null)
+	if [[ -z "$PANEL_SRC" || ! -f "$PANEL_SRC" ]]; then
+	  echo "错误: 解压后找不到 panel 二进制 (tar_exit=${TAR_EC})" >&2
+	  find "$TMP/extract" -maxdepth 3 -type f -ls 2>/dev/null | head -40 >&2 || true
+	  cat "$TMP/tar.extract.err" >&2 || true
+	  exit 1
+	fi
+	$SUDO install -m 755 "$PANEL_SRC" "${INSTALL_DIR}/panel"
+	$SUDO install -m 755 "${INSTALL_DIR}/panel" "${PREFIX}/bin/mieru-panel"
+	AGENT_SRC=""
+	while IFS= read -r -d '' f; do
+	  [[ "$(basename "$f")" == "agent" ]] || continue
+	  asz=$(wc -c <"$f" | tr -d ' ')
+	  if [[ "${asz:-0}" -gt 1000000 ]]; then
+	    AGENT_SRC="$f"
+	    break
+	  fi
+	done < <(find "$TMP/extract" -type f -name 'agent' -print0 2>/dev/null)
+	if [[ -n "$AGENT_SRC" ]]; then
+	  $SUDO install -m 755 "$AGENT_SRC" "${PREFIX}/bin/mieru-agent" 2>/dev/null || true
+	fi
+	$SUDO rm -f "${INSTALL_DIR}/._panel" "${INSTALL_DIR}/._agent" 2>/dev/null || true
+	sync || true
+	if command -v cmp >/dev/null 2>&1; then
+	  if ! cmp -s "${INSTALL_DIR}/panel" "${PREFIX}/bin/mieru-panel"; then
+	    echo "错误: ${INSTALL_DIR}/panel 与 ${PREFIX}/bin/mieru-panel 不一致" >&2
+	    exit 1
+	  fi
+	fi
 
 # 校验二进制版本（panel --version）
 BIN_VER=$("${PREFIX}/bin/mieru-panel" --version 2>/dev/null | tr -d '[:space:]' || true)

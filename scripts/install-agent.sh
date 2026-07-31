@@ -87,17 +87,30 @@ if [[ "${SIZE:-0}" -lt 1000000 ]]; then
   exit 1
 fi
 
-$SUDO mkdir -p "$INSTALL_DIR" "$DATA_DIR" "${PREFIX}/bin" "$TMP/extract"
-$SUDO tar -xzf "$TMP/$ASSET" -C "$TMP/extract" --strip-components=1
-if [[ ! -f "$TMP/extract/agent" ]]; then
-  echo "错误: 压缩包内没有 agent 二进制" >&2
-  $SUDO ls -la "$TMP/extract" >&2
-  exit 1
-fi
-# Only install agent — never overwrite panel binary in /opt/mieru-panel
-$SUDO install -m 755 "$TMP/extract/agent" "${INSTALL_DIR}/agent"
-$SUDO install -m 755 "$TMP/extract/agent" "${PREFIX}/bin/mieru-agent"
-sync || true
+	$SUDO mkdir -p "$INSTALL_DIR" "$DATA_DIR" "${PREFIX}/bin" "$TMP/extract"
+	# 忽略 macOS xattr / AppleDouble 警告
+	set +e
+	tar -xzf "$TMP/$ASSET" -C "$TMP/extract" --strip-components=1 2>"$TMP/tar.extract.err"
+	set -e
+	AGENT_SRC=""
+	while IFS= read -r -d '' f; do
+	  [[ "$(basename "$f")" == "agent" ]] || continue
+	  asz=$(wc -c <"$f" | tr -d ' ')
+	  if [[ "${asz:-0}" -gt 1000000 ]]; then
+	    AGENT_SRC="$f"
+	    break
+	  fi
+	done < <(find "$TMP/extract" -type f -name 'agent' -print0 2>/dev/null)
+	if [[ -z "$AGENT_SRC" || ! -f "$AGENT_SRC" ]]; then
+	  echo "错误: 压缩包内没有 agent 二进制" >&2
+	  find "$TMP/extract" -maxdepth 3 -type f -ls 2>/dev/null | head -40 >&2 || true
+	  cat "$TMP/tar.extract.err" 2>/dev/null >&2 || true
+	  exit 1
+	fi
+	# Only install agent — never overwrite panel binary
+	$SUDO install -m 755 "$AGENT_SRC" "${INSTALL_DIR}/agent"
+	$SUDO install -m 755 "$AGENT_SRC" "${PREFIX}/bin/mieru-agent"
+	sync || true
 
 ENV_FILE="/etc/mieru-agent.env"
 echo "==> 写入 ${ENV_FILE}"
