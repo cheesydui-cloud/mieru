@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.4] - 2026-08-01
+
+### Fixed — hop probe false timeout + apply blocking heartbeat
+- Screenshot error `等待 Agent 拨测超时` often meant agent was stuck in `pullAndApply` (mieru apply/start) and could not pick dial jobs on heartbeat.
+- Agent now runs apply **in background**; heartbeat keeps running every **5s** and reports dial results immediately.
+- Panel waits **30s** for agent dial jobs (was 5s/22s).
+- Concurrent version/apply_error state is mutex-protected.
+
+### Ops
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | bash
+```
+
 ## [0.3.3] - 2026-08-01
 
 ### Fixed — restore working multi-hop after v0.3.2 regression

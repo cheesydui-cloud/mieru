@@ -69,21 +69,21 @@ func (s *Server) Router() *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery(), gin.Logger())
 
-		c := cors.Config{
-			AllowMethods:  []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-			AllowHeaders:  []string{"Origin", "Content-Type", "Authorization"},
-			ExposeHeaders: []string{"Content-Length"},
-			MaxAge:        12 * time.Hour,
-		}
-		// Browsers forbid AllowCredentials + AllowAllOrigins(*). Same-origin SPA needs neither.
-		if len(s.cfg.CORSOrigins) == 1 && s.cfg.CORSOrigins[0] == "*" {
-			c.AllowAllOrigins = true
-			c.AllowCredentials = false
-		} else {
-			c.AllowOrigins = s.cfg.CORSOrigins
-			c.AllowCredentials = true
-		}
-		r.Use(cors.New(c))
+	c := cors.Config{
+		AllowMethods:  []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowHeaders:  []string{"Origin", "Content-Type", "Authorization"},
+		ExposeHeaders: []string{"Content-Length"},
+		MaxAge:        12 * time.Hour,
+	}
+	// Browsers forbid AllowCredentials + AllowAllOrigins(*). Same-origin SPA needs neither.
+	if len(s.cfg.CORSOrigins) == 1 && s.cfg.CORSOrigins[0] == "*" {
+		c.AllowAllOrigins = true
+		c.AllowCredentials = false
+	} else {
+		c.AllowOrigins = s.cfg.CORSOrigins
+		c.AllowCredentials = true
+	}
+	r.Use(cors.New(c))
 
 	r.GET("/api/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "ts": time.Now().UTC(), "version": s.Version})
@@ -96,13 +96,13 @@ func (s *Server) Router() *gin.Engine {
 	r.GET("/api/sub/:token", s.subscription)
 	r.POST("/api/auth/login", s.login)
 
-		agent := r.Group("/api/agent")
-		{
-			agent.POST("/heartbeat", s.agentHeartbeat)
-			agent.GET("/config", s.agentConfig)
-			agent.POST("/traffic", s.agentTraffic)
-			agent.POST("/dial-result", s.agentDialResult)
-		}
+	agent := r.Group("/api/agent")
+	{
+		agent.POST("/heartbeat", s.agentHeartbeat)
+		agent.GET("/config", s.agentConfig)
+		agent.POST("/traffic", s.agentTraffic)
+		agent.POST("/dial-result", s.agentDialResult)
+	}
 
 	admin := r.Group("/api/admin")
 	admin.Use(s.requireAdmin())
@@ -131,15 +131,15 @@ func (s *Server) Router() *gin.Engine {
 		admin.POST("/users/:id/reset-sub", s.resetUserSub)
 
 		admin.GET("/metrics/rates", s.listRates)
-			admin.GET("/audit", s.listAudit)
+		admin.GET("/audit", s.listAudit)
 
-			admin.GET("/settings", s.getSettings)
-			admin.PUT("/settings", s.putSettings)
-			admin.POST("/admin-password", s.changeAdminPassword)
-			admin.GET("/nodes/:id/install", s.nodeInstallCmd)
-			admin.GET("/diagnose", s.diagnose)
-			admin.GET("/nodes/:id/desired", s.nodeDesiredConfig)
-		}
+		admin.GET("/settings", s.getSettings)
+		admin.PUT("/settings", s.putSettings)
+		admin.POST("/admin-password", s.changeAdminPassword)
+		admin.GET("/nodes/:id/install", s.nodeInstallCmd)
+		admin.GET("/diagnose", s.diagnose)
+		admin.GET("/nodes/:id/desired", s.nodeDesiredConfig)
+	}
 
 	portal := r.Group("/api/me")
 	portal.Use(s.requireUserOrAdmin())
@@ -293,28 +293,28 @@ func (s *Server) login(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 		return
 	}
-		if adm, err := s.store.GetAdminByUsername(req.Username); err == nil {
-			if store.CheckPassword(adm.PasswordHash, req.Password) {
-				tok, err := s.jwt.Issue(fmt.Sprintf("%d", adm.ID), "admin", adm.Username)
-				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"error": "token issue failed"})
-					return
-				}
-				c.JSON(http.StatusOK, gin.H{"token": tok, "role": "admin", "username": adm.Username})
+	if adm, err := s.store.GetAdminByUsername(req.Username); err == nil {
+		if store.CheckPassword(adm.PasswordHash, req.Password) {
+			tok, err := s.jwt.Issue(fmt.Sprintf("%d", adm.ID), "admin", adm.Username)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "token issue failed"})
 				return
 			}
+			c.JSON(http.StatusOK, gin.H{"token": tok, "role": "admin", "username": adm.Username})
+			return
 		}
-		if u, err := s.store.GetUserByUsername(req.Username); err == nil {
-			if u.ProxyPassword == req.Password || store.CheckPassword(u.PasswordHash, req.Password) {
-				tok, err := s.jwt.Issue(fmt.Sprintf("%d", u.ID), "user", u.Username)
-				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"error": "token issue failed"})
-					return
-				}
-				c.JSON(http.StatusOK, gin.H{"token": tok, "role": "user", "username": u.Username})
+	}
+	if u, err := s.store.GetUserByUsername(req.Username); err == nil {
+		if u.ProxyPassword == req.Password || store.CheckPassword(u.PasswordHash, req.Password) {
+			tok, err := s.jwt.Issue(fmt.Sprintf("%d", u.ID), "user", u.Username)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "token issue failed"})
 				return
 			}
+			c.JSON(http.StatusOK, gin.H{"token": tok, "role": "user", "username": u.Username})
+			return
 		}
+	}
 	c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 }
 
@@ -404,22 +404,22 @@ func (s *Server) createNode(c *gin.Context) {
 	})
 }
 
-	func (s *Server) getNode(c *gin.Context) {
-		n, err := s.store.GetNode(c.Param("id"))
-		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
-			return
-		}
-		token := n.AgentToken
-		n.AgentToken = ""
-		install := s.buildInstallCmd(c, &model.Node{ID: n.ID, Role: n.Role, AgentToken: token})
-		c.JSON(http.StatusOK, gin.H{
-			"node":        n,
-			"agent_token": token,
-			"panel_url":   install.PanelURL,
-			"install_cmd": install.Cmd,
-		})
+func (s *Server) getNode(c *gin.Context) {
+	n, err := s.store.GetNode(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
 	}
+	token := n.AgentToken
+	n.AgentToken = ""
+	install := s.buildInstallCmd(c, &model.Node{ID: n.ID, Role: n.Role, AgentToken: token})
+	c.JSON(http.StatusOK, gin.H{
+		"node":        n,
+		"agent_token": token,
+		"panel_url":   install.PanelURL,
+		"install_cmd": install.Cmd,
+	})
+}
 
 func (s *Server) updateNode(c *gin.Context) {
 	n, err := s.store.GetNode(c.Param("id"))
@@ -436,25 +436,25 @@ func (s *Server) updateNode(c *gin.Context) {
 	n.Role = req.Role
 	n.Region = req.Region
 	n.Tags = req.Tags
-		n.PublicIP = req.PublicIP
-		n.PrivateIP = strings.TrimSpace(req.PrivateIP)
-		n.Hostname = req.Hostname
-		n.AltHostnames = req.AltHostnames
-		n.ListenPort = req.ListenPort
-		n.PortMin = req.PortMin
-		n.PortMax = req.PortMax
-		n.NormalizePorts()
-		if req.Status != "" {
-			n.Status = req.Status
-		}
-		if req.MetaJSON != "" {
-			n.MetaJSON = req.MetaJSON
-		}
-		if err := validateNodePorts(n); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		if err := s.store.UpdateNode(n); err != nil {
+	n.PublicIP = req.PublicIP
+	n.PrivateIP = strings.TrimSpace(req.PrivateIP)
+	n.Hostname = req.Hostname
+	n.AltHostnames = req.AltHostnames
+	n.ListenPort = req.ListenPort
+	n.PortMin = req.PortMin
+	n.PortMax = req.PortMax
+	n.NormalizePorts()
+	if req.Status != "" {
+		n.Status = req.Status
+	}
+	if req.MetaJSON != "" {
+		n.MetaJSON = req.MetaJSON
+	}
+	if err := validateNodePorts(n); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := s.store.UpdateNode(n); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -770,20 +770,20 @@ func (s *Server) probeRoute(c *gin.Context) {
 	_ = json.Unmarshal([]byte(r.HopsJSON), &hops)
 
 	type hopResult struct {
-		Label    string `json:"label"`
-		Kind     string `json:"kind"` // leg|node|external|info
-		From     string `json:"from,omitempty"`
-		To       string `json:"to,omitempty"`
-		Host     string `json:"host"`
-		Port     int    `json:"port"`
-		OK       bool   `json:"ok"`
-		Latency  int64  `json:"latency_ms"`
-		Error    string `json:"error,omitempty"`
-		NodeID   string `json:"node_id,omitempty"`
-		FromID   string `json:"from_id,omitempty"`
-		ToID     string `json:"to_id,omitempty"`
-		Status   string `json:"agent_status,omitempty"`
-		Via      string `json:"via,omitempty"` // agent|panel|skip
+		Label   string `json:"label"`
+		Kind    string `json:"kind"` // leg|node|external|info
+		From    string `json:"from,omitempty"`
+		To      string `json:"to,omitempty"`
+		Host    string `json:"host"`
+		Port    int    `json:"port"`
+		OK      bool   `json:"ok"`
+		Latency int64  `json:"latency_ms"`
+		Error   string `json:"error,omitempty"`
+		NodeID  string `json:"node_id,omitempty"`
+		FromID  string `json:"from_id,omitempty"`
+		ToID    string `json:"to_id,omitempty"`
+		Status  string `json:"agent_status,omitempty"`
+		Via     string `json:"via,omitempty"` // agent|panel|skip
 	}
 	results := make([]hopResult, 0)
 	allOK := true
@@ -925,7 +925,8 @@ func (s *Server) probeRoute(c *gin.Context) {
 		// Prefer agent-side dial from source node.
 		if from.online && from.node != nil {
 			hr.Via = "agent"
-			ok, lat, errMsg := s.requestAgentDial(from.node.ID, toHost, toPort, 5*time.Second)
+			// Wait > 1 heartbeat cycle (agent hb ≈5s) + dial timeout.
+			ok, lat, errMsg := s.requestAgentDial(from.node.ID, toHost, toPort, 30*time.Second)
 			hr.OK = ok
 			hr.Latency = lat
 			if !ok {
@@ -1030,24 +1031,24 @@ func (s *Server) listUsers(c *gin.Context) {
 		return
 	}
 	base := s.publicBase(c)
-		type row struct {
-			model.User
-			UpBps        int64  `json:"up_bps"`
-			DownBps      int64  `json:"down_bps"`
-			Subscription string `json:"subscription"`
-		}
-		out := make([]row, 0, len(list))
-		for _, u := range list {
-			r := row{User: u, Subscription: base + "/sub/" + u.SubToken}
-			// list still returns sub_token via model.User (needed for admin QR)
-			if sample, ok := s.store.GetRate(u.ID); ok {
-				r.UpBps = sample.UpBps
-				r.DownBps = sample.DownBps
-			}
-			out = append(out, r)
-		}
-		c.JSON(http.StatusOK, out)
+	type row struct {
+		model.User
+		UpBps        int64  `json:"up_bps"`
+		DownBps      int64  `json:"down_bps"`
+		Subscription string `json:"subscription"`
 	}
+	out := make([]row, 0, len(list))
+	for _, u := range list {
+		r := row{User: u, Subscription: base + "/sub/" + u.SubToken}
+		// list still returns sub_token via model.User (needed for admin QR)
+		if sample, ok := s.store.GetRate(u.ID); ok {
+			r.UpBps = sample.UpBps
+			r.DownBps = sample.DownBps
+		}
+		out = append(out, r)
+	}
+	c.JSON(http.StatusOK, out)
+}
 
 func (s *Server) createUser(c *gin.Context) {
 	var req struct {
@@ -1244,11 +1245,11 @@ func (s *Server) myProfile(c *gin.Context) {
 	nodes, _ := s.store.ListNodes()
 	for _, n := range nodes {
 		if n.Role == model.RoleEntry || n.Role == model.RoleHybrid {
-				host := n.PublicHost()
-				if host == "" {
-					continue
-				}
-				entries = append(entries, gin.H{"name": n.Name, "host": host, "status": n.Status, "region": n.Region})
+			host := n.PublicHost()
+			if host == "" {
+				continue
+			}
+			entries = append(entries, gin.H{"name": n.Name, "host": host, "status": n.Status, "region": n.Region})
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -1449,100 +1450,73 @@ func (s *Server) nodeInstallCmd(c *gin.Context) {
 	})
 }
 
-	func (s *Server) subscription(c *gin.Context) {
-		u, err := s.store.GetUserBySubToken(c.Param("token"))
-		if err != nil {
-			c.String(http.StatusNotFound, "not found")
-			return
-		}
-		_ = s.store.RefreshUserStatuses()
-		if u2, err := s.store.GetUser(u.ID); err == nil {
-			u = u2
-		}
-		if u.Status != model.StatusActive {
-			c.String(http.StatusForbidden, "account not active: "+u.Status)
-			return
-		}
+func (s *Server) subscription(c *gin.Context) {
+	u, err := s.store.GetUserBySubToken(c.Param("token"))
+	if err != nil {
+		c.String(http.StatusNotFound, "not found")
+		return
+	}
+	_ = s.store.RefreshUserStatuses()
+	if u2, err := s.store.GetUser(u.ID); err == nil {
+		u = u2
+	}
+	if u.Status != model.StatusActive {
+		c.String(http.StatusForbidden, "account not active: "+u.Status)
+		return
+	}
 
-		type entryProxy struct {
-			Name string
-			Host string
-			Port int
-		}
-		seen := map[string]bool{}
-		proxies := []entryProxy{}
+	type entryProxy struct {
+		Name string
+		Host string
+		Port int
+	}
+	seen := map[string]bool{}
+	proxies := []entryProxy{}
 
-		// Prefer entry endpoints from the user's bound route (supports external entry).
-		if u.RouteID != nil {
-			if r, err := s.store.GetRoute(*u.RouteID); err == nil && r.Enabled {
-				var hops []model.Hop
-				_ = json.Unmarshal([]byte(r.HopsJSON), &hops)
-				for _, h := range hops {
-					if h.External || (h.NodeID == "" && h.Host != "") {
-						host := strings.TrimSpace(h.Host)
-						if host == "" {
-							continue
-						}
-						port := h.Port
-						if port <= 0 {
-							port = 1080
-						}
-						name := h.Name
-						if name == "" {
-							name = host
-						}
-						key := fmt.Sprintf("%s:%d", host, port)
-						if seen[key] {
-							continue
-						}
-						seen[key] = true
-						proxies = append(proxies, entryProxy{Name: name, Host: host, Port: port})
-						// only first external/entry hop is the client entry
-						break
-					}
-					if h.NodeID == "" {
-						continue
-					}
-					n, err := s.store.GetNode(h.NodeID)
-					if err != nil {
-						continue
-					}
-					if n.Role != model.RoleEntry && n.Role != model.RoleHybrid {
-						// first hop might be relay when only relay+exit — skip for client entry
-						continue
-					}
-						host := n.PublicHost()
-						if host == "" {
-							continue
-						}
-						name := n.Name
-						if name == "" {
-							name = host
-						}
-						port := n.PublicServicePort()
-						key := fmt.Sprintf("%s:%d", host, port)
-						if seen[key] {
-							continue
-						}
-						seen[key] = true
-						proxies = append(proxies, entryProxy{Name: name, Host: host, Port: port})
-						break
-					}
-				}
-			}
-
-			// Fallback: all entry/hybrid nodes (legacy / unbound route).
-			if len(proxies) == 0 {
-				nodes, _ := s.store.ListNodes()
-				for _, n := range nodes {
-					if n.Role != model.RoleEntry && n.Role != model.RoleHybrid {
-						continue
-					}
-					host := n.PublicHost()
+	// Prefer entry endpoints from the user's bound route (supports external entry).
+	if u.RouteID != nil {
+		if r, err := s.store.GetRoute(*u.RouteID); err == nil && r.Enabled {
+			var hops []model.Hop
+			_ = json.Unmarshal([]byte(r.HopsJSON), &hops)
+			for _, h := range hops {
+				if h.External || (h.NodeID == "" && h.Host != "") {
+					host := strings.TrimSpace(h.Host)
 					if host == "" {
 						continue
 					}
-					name := n.Name
+					port := h.Port
+					if port <= 0 {
+						port = 1080
+					}
+					name := h.Name
+					if name == "" {
+						name = host
+					}
+					key := fmt.Sprintf("%s:%d", host, port)
+					if seen[key] {
+						continue
+					}
+					seen[key] = true
+					proxies = append(proxies, entryProxy{Name: name, Host: host, Port: port})
+					// only first external/entry hop is the client entry
+					break
+				}
+				if h.NodeID == "" {
+					continue
+				}
+				n, err := s.store.GetNode(h.NodeID)
+				if err != nil {
+					continue
+				}
+				if n.Role != model.RoleEntry && n.Role != model.RoleHybrid {
+					// first hop might be relay when only relay+exit — skip for client entry
+					continue
+				}
+				host := n.PublicHost()
+				if host == "" {
+					continue
+				}
+				name := n.Name
 				if name == "" {
 					name = host
 				}
@@ -1553,32 +1527,59 @@ func (s *Server) nodeInstallCmd(c *gin.Context) {
 				}
 				seen[key] = true
 				proxies = append(proxies, entryProxy{Name: name, Host: host, Port: port})
+				break
 			}
 		}
-
-		var b strings.Builder
-		b.WriteString("# mieru-panel subscription\n")
-		b.WriteString("# user: " + u.Username + "\n")
-		b.WriteString("proxies:\n")
-		names := []string{}
-		if len(proxies) == 0 {
-			b.WriteString("  - name: \"placeholder-no-entry\"\n    type: socks5\n    server: 127.0.0.1\n    port: 1\n")
-			names = append(names, "placeholder-no-entry")
-		} else {
-			for _, p := range proxies {
-				fmt.Fprintf(&b, "  - name: %q\n    type: socks5\n    server: %s\n    port: %d\n    username: %q\n    password: %q\n",
-					p.Name, p.Host, p.Port, u.Username, u.ProxyPassword)
-				names = append(names, p.Name)
-			}
-		}
-		b.WriteString("proxy-groups:\n  - name: PROXY\n    type: select\n    proxies:\n")
-		for _, name := range names {
-			fmt.Fprintf(&b, "      - %q\n", name)
-		}
-		b.WriteString("rules:\n  - MATCH,PROXY\n")
-		c.Header("Content-Disposition", "attachment; filename=subscription.yaml")
-		c.Data(http.StatusOK, "text/yaml; charset=utf-8", []byte(b.String()))
 	}
+
+	// Fallback: all entry/hybrid nodes (legacy / unbound route).
+	if len(proxies) == 0 {
+		nodes, _ := s.store.ListNodes()
+		for _, n := range nodes {
+			if n.Role != model.RoleEntry && n.Role != model.RoleHybrid {
+				continue
+			}
+			host := n.PublicHost()
+			if host == "" {
+				continue
+			}
+			name := n.Name
+			if name == "" {
+				name = host
+			}
+			port := n.PublicServicePort()
+			key := fmt.Sprintf("%s:%d", host, port)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			proxies = append(proxies, entryProxy{Name: name, Host: host, Port: port})
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString("# mieru-panel subscription\n")
+	b.WriteString("# user: " + u.Username + "\n")
+	b.WriteString("proxies:\n")
+	names := []string{}
+	if len(proxies) == 0 {
+		b.WriteString("  - name: \"placeholder-no-entry\"\n    type: socks5\n    server: 127.0.0.1\n    port: 1\n")
+		names = append(names, "placeholder-no-entry")
+	} else {
+		for _, p := range proxies {
+			fmt.Fprintf(&b, "  - name: %q\n    type: socks5\n    server: %s\n    port: %d\n    username: %q\n    password: %q\n",
+				p.Name, p.Host, p.Port, u.Username, u.ProxyPassword)
+			names = append(names, p.Name)
+		}
+	}
+	b.WriteString("proxy-groups:\n  - name: PROXY\n    type: select\n    proxies:\n")
+	for _, name := range names {
+		fmt.Fprintf(&b, "      - %q\n", name)
+	}
+	b.WriteString("rules:\n  - MATCH,PROXY\n")
+	c.Header("Content-Disposition", "attachment; filename=subscription.yaml")
+	c.Data(http.StatusOK, "text/yaml; charset=utf-8", []byte(b.String()))
+}
 
 func (s *Server) agentHeartbeat(c *gin.Context) {
 	var req model.HeartbeatRequest
@@ -1687,9 +1688,9 @@ func (s *Server) requestAgentDial(nodeID, host string, port int, wait time.Durat
 		s.dialMu.Unlock()
 	}()
 
-	// Agents pick jobs on heartbeat (default 15s) — wait at least one full cycle + slack.
-	if wait < 22*time.Second {
-		wait = 22 * time.Second
+	// Agents pick jobs on heartbeat (v0.3.4+: ~5s). Wait at least one cycle + dial + slack.
+	if wait < 30*time.Second {
+		wait = 30 * time.Second
 	}
 	select {
 	case res := <-ch:
@@ -1702,7 +1703,7 @@ func (s *Server) requestAgentDial(nodeID, host string, port int, wait time.Durat
 		}
 		return false, res.Latency, msg
 	case <-time.After(wait):
-		return false, 0, "等待 Agent 拨测超时（节点可能离线或心跳间隔过长）"
+		return false, 0, "等待 Agent 拨测超时（节点可能离线、Agent 过旧、或 apply 卡住未心跳；请升级 agent 到 v0.3.4+ 并看 journalctl -u mieru-agent）"
 	}
 }
 

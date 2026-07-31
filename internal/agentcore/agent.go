@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cheesydui-cloud/mieru/internal/config"
@@ -24,17 +26,21 @@ import (
 	"github.com/cheesydui-cloud/mieru/internal/plugins/socksin"
 )
 
-const AgentVersion = "0.3.3"
+const AgentVersion = "0.3.4"
 
 type Agent struct {
 	cfg      config.AgentConfig
 	client   *http.Client
 	registry *plugins.Registry
-	version  int64
 	// simple local counters for demo metering on exit
 	counters map[int64]*userCounter
-	// lastApplyMsg is reported in heartbeat (empty = healthy apply)
+	// stateMu guards version + lastApplyMsg (heartbeat vs background apply).
+	stateMu      sync.Mutex
+	version      int64
 	lastApplyMsg string
+	// applyMu serializes pullAndApply so heartbeat never blocks on plugin apply.
+	applyMu   chan struct{}
+	applyBusy int32 // atomic: 1 while apply running
 }
 
 type userCounter struct {
@@ -55,6 +61,7 @@ func New(cfg config.AgentConfig) *Agent {
 		client:   &http.Client{Timeout: 15 * time.Second},
 		registry: reg,
 		counters: map[int64]*userCounter{},
+		applyMu:  make(chan struct{}, 1),
 	}
 }
 
@@ -88,12 +95,15 @@ func (a *Agent) Run(ctx context.Context) error {
 		log.Printf("initial heartbeat OK — panel should show this node online")
 	}
 
-	// initial pull (non-fatal)
-	if err := a.pullAndApply(ctx); err != nil {
-		log.Printf("initial config pull: %v (continuing with last_good if any)", err)
-	}
+	// initial pull in background so first heartbeats (and dial jobs) are not blocked
+	a.schedulePull(ctx)
 
-	hb := time.NewTicker(a.cfg.HeartbeatEvery)
+	// Faster heartbeat improves hop-probe reliability (panel waits ~22s for dial job).
+	hbEvery := a.cfg.HeartbeatEvery
+	if hbEvery > 5*time.Second {
+		hbEvery = 5 * time.Second
+	}
+	hb := time.NewTicker(hbEvery)
 	pull := time.NewTicker(a.cfg.PullEvery)
 	traffic := time.NewTicker(2 * time.Second)
 	defer hb.Stop()
@@ -109,9 +119,7 @@ func (a *Agent) Run(ctx context.Context) error {
 				log.Printf("heartbeat: %v", err)
 			}
 		case <-pull.C:
-			if err := a.pullAndApply(ctx); err != nil {
-				log.Printf("pull: %v", err)
-			}
+			a.schedulePull(ctx)
 		case <-traffic.C:
 			if a.cfg.Role == model.RoleExit || a.cfg.Role == model.RoleHybrid {
 				if err := a.reportTraffic(ctx); err != nil {
@@ -122,79 +130,106 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 }
 
-	func (a *Agent) heartbeat(ctx context.Context) error {
-		msg := ""
-		applyErr := ""
-		if a.lastApplyMsg != "" {
-			msg = "degraded"
-			// Truncate so heartbeat payload stays small.
-			applyErr = a.lastApplyMsg
-			if len(applyErr) > 800 {
-				applyErr = applyErr[:800] + "…"
-			}
-		}
-		body := model.HeartbeatRequest{
-			NodeID:        a.cfg.NodeID,
-			Token:         a.cfg.Token,
-			Role:          a.cfg.Role,
-			ConfigVersion: a.version,
-			AgentVersion:  AgentVersion,
-			Hostname:      os.Getenv("AGENT_HOSTNAME"),
-			PublicIP:      os.Getenv("AGENT_PUBLIC_IP"),
-			Message:       msg,
-			ApplyError:    applyErr,
-		}
-		var resp struct {
-			OK            bool `json:"ok"`
-			ConfigVersion int64 `json:"config_version"`
-			NeedPull      bool `json:"need_pull"`
-			DialJobs      []struct {
-				ID        string `json:"id"`
-				Host      string `json:"host"`
-				Port      int    `json:"port"`
-				TimeoutMS int    `json:"timeout_ms"`
-			} `json:"dial_jobs"`
-		}
-		if err := a.postJSON(ctx, "/api/agent/heartbeat", body, &resp); err != nil {
-			return err
-		}
-		// Hop-to-hop probe jobs: dial target from this node and report result.
-		for _, job := range resp.DialJobs {
-			if job.ID == "" || job.Host == "" || job.Port <= 0 {
-				continue
-			}
-			timeout := time.Duration(job.TimeoutMS) * time.Millisecond
-			if timeout <= 0 {
-				timeout = 4 * time.Second
-			}
-			ok, lat, errMsg := tcpDial(job.Host, job.Port, timeout)
-			_ = a.postJSON(ctx, "/api/agent/dial-result", map[string]interface{}{
-				"node_id":     a.cfg.NodeID,
-				"token":       a.cfg.Token,
-				"job_id":      job.ID,
-				"ok":          ok,
-				"latency_ms":  lat,
-				"error":       errMsg,
-			}, nil)
-		}
-		if resp.NeedPull {
-			return a.pullAndApply(ctx)
-		}
-		return nil
+// schedulePull runs pullAndApply in the background so heartbeats keep flowing
+// (hop-to-hop probe jobs are delivered on heartbeat).
+func (a *Agent) schedulePull(ctx context.Context) {
+	select {
+	case a.applyMu <- struct{}{}:
+	default:
+		// already applying or queued
+		return
 	}
+	go func() {
+		defer func() { <-a.applyMu }()
+		atomic.StoreInt32(&a.applyBusy, 1)
+		defer atomic.StoreInt32(&a.applyBusy, 0)
+		if err := a.pullAndApply(ctx); err != nil {
+			log.Printf("pull: %v", err)
+		}
+	}()
+}
 
-	// tcpDial measures TCP connect latency from this host to host:port.
-	func tcpDial(host string, port int, timeout time.Duration) (ok bool, latencyMs int64, errMsg string) {
-		addr := net.JoinHostPort(host, strconv.Itoa(port))
-		start := time.Now()
-		conn, err := net.DialTimeout("tcp", addr, timeout)
-		latencyMs = time.Since(start).Milliseconds()
-		if err != nil {
-			return false, latencyMs, err.Error()
+func (a *Agent) heartbeat(ctx context.Context) error {
+	msg := ""
+	applyErr := ""
+	a.stateMu.Lock()
+	ver := a.version
+	if a.lastApplyMsg != "" {
+		msg = "degraded"
+		// Truncate so heartbeat payload stays small.
+		applyErr = a.lastApplyMsg
+		if len(applyErr) > 800 {
+			applyErr = applyErr[:800] + "…"
 		}
-		_ = conn.Close()
-		return true, latencyMs, ""
 	}
+	a.stateMu.Unlock()
+	body := model.HeartbeatRequest{
+		NodeID:        a.cfg.NodeID,
+		Token:         a.cfg.Token,
+		Role:          a.cfg.Role,
+		ConfigVersion: ver,
+		AgentVersion:  AgentVersion,
+		Hostname:      os.Getenv("AGENT_HOSTNAME"),
+		PublicIP:      os.Getenv("AGENT_PUBLIC_IP"),
+		Message:       msg,
+		ApplyError:    applyErr,
+	}
+	var resp struct {
+		OK            bool  `json:"ok"`
+		ConfigVersion int64 `json:"config_version"`
+		NeedPull      bool  `json:"need_pull"`
+		DialJobs      []struct {
+			ID        string `json:"id"`
+			Host      string `json:"host"`
+			Port      int    `json:"port"`
+			TimeoutMS int    `json:"timeout_ms"`
+		} `json:"dial_jobs"`
+	}
+	if err := a.postJSON(ctx, "/api/agent/heartbeat", body, &resp); err != nil {
+		return err
+	}
+	// Hop-to-hop probe jobs FIRST — never wait on apply for these.
+	for _, job := range resp.DialJobs {
+		if job.ID == "" || job.Host == "" || job.Port <= 0 {
+			continue
+		}
+		timeout := time.Duration(job.TimeoutMS) * time.Millisecond
+		if timeout <= 0 {
+			timeout = 4 * time.Second
+		}
+		ok, lat, errMsg := tcpDial(job.Host, job.Port, timeout)
+		if err := a.postJSON(ctx, "/api/agent/dial-result", map[string]interface{}{
+			"node_id":    a.cfg.NodeID,
+			"token":      a.cfg.Token,
+			"job_id":     job.ID,
+			"ok":         ok,
+			"latency_ms": lat,
+			"error":      errMsg,
+		}, nil); err != nil {
+			log.Printf("dial-result job=%s: %v", job.ID, err)
+		} else {
+			log.Printf("dial-result job=%s %s:%d ok=%v lat=%dms %s",
+				job.ID, job.Host, job.Port, ok, lat, errMsg)
+		}
+	}
+	if resp.NeedPull {
+		a.schedulePull(ctx)
+	}
+	return nil
+}
+
+// tcpDial measures TCP connect latency from this host to host:port.
+func tcpDial(host string, port int, timeout time.Duration) (ok bool, latencyMs int64, errMsg string) {
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
+	start := time.Now()
+	conn, err := net.DialTimeout("tcp", addr, timeout)
+	latencyMs = time.Since(start).Milliseconds()
+	if err != nil {
+		return false, latencyMs, err.Error()
+	}
+	_ = conn.Close()
+	return true, latencyMs, ""
+}
 
 func (a *Agent) pullAndApply(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.cfg.PanelURL+"/api/agent/config", nil)
@@ -221,112 +256,116 @@ func (a *Agent) pullAndApply(ctx context.Context) error {
 	}
 
 	// persist last_good payload (even on failed apply — useful for debug)
-		_ = os.WriteFile(filepath.Join(a.cfg.DataDir, "desired.json"), raw, 0o600)
+	_ = os.WriteFile(filepath.Join(a.cfg.DataDir, "desired.json"), raw, 0o600)
 
-		if err := a.apply(ctx, &cfg); err != nil {
-			a.lastApplyMsg = err.Error()
-			// Do NOT advance version on failure/partial required-plugin failure —
-			// next pull/heartbeat will retry the same config version.
-			return err
+	if err := a.apply(ctx, &cfg); err != nil {
+		a.stateMu.Lock()
+		a.lastApplyMsg = err.Error()
+		a.stateMu.Unlock()
+		// Do NOT advance version on failure/partial required-plugin failure —
+		// next pull/heartbeat will retry the same config version.
+		return err
+	}
+	a.stateMu.Lock()
+	a.lastApplyMsg = ""
+	a.version = cfg.Version
+	a.stateMu.Unlock()
+	_ = os.WriteFile(filepath.Join(a.cfg.DataDir, "version"), []byte(fmt.Sprintf("%d", cfg.Version)), 0o644)
+	log.Printf("applied config version=%d plugins=%d users=%d", cfg.Version, len(cfg.Plugins), len(cfg.Users))
+	return nil
+}
+
+func (a *Agent) apply(ctx context.Context, cfg *model.AgentDesiredConfig) error {
+	// Apply order: mita/mieru processes first, then socks_in (may use local mieru upstream), then nft.
+	order := map[string]int{
+		"mita_server":  10,
+		"mieru_client": 20,
+		"socks_in":     30,
+		"nft_forward":  40,
+	}
+	// Role-required plugins must succeed before we accept the config version.
+	required := requiredPlugins(cfg)
+	plugins := append([]map[string]interface{}{}, cfg.Plugins...)
+	for i := 0; i < len(plugins); i++ {
+		for j := i + 1; j < len(plugins); j++ {
+			ti, _ := plugins[i]["type"].(string)
+			tj, _ := plugins[j]["type"].(string)
+			if order[ti] > order[tj] {
+				plugins[i], plugins[j] = plugins[j], plugins[i]
+			}
 		}
-		a.lastApplyMsg = ""
-		a.version = cfg.Version
-		_ = os.WriteFile(filepath.Join(a.cfg.DataDir, "version"), []byte(fmt.Sprintf("%d", a.version)), 0o644)
-		log.Printf("applied config version=%d plugins=%d users=%d", cfg.Version, len(cfg.Plugins), len(cfg.Users))
-		return nil
 	}
 
-	func (a *Agent) apply(ctx context.Context, cfg *model.AgentDesiredConfig) error {
-		// Apply order: mita/mieru processes first, then socks_in (may use local mieru upstream), then nft.
-		order := map[string]int{
-			"mita_server":  10,
-			"mieru_client": 20,
-			"socks_in":     30,
-			"nft_forward":  40,
-		}
-		// Role-required plugins must succeed before we accept the config version.
-		required := requiredPlugins(cfg)
-		plugins := append([]map[string]interface{}{}, cfg.Plugins...)
-		for i := 0; i < len(plugins); i++ {
-			for j := i + 1; j < len(plugins); j++ {
-				ti, _ := plugins[i]["type"].(string)
-				tj, _ := plugins[j]["type"].(string)
-				if order[ti] > order[tj] {
-					plugins[i], plugins[j] = plugins[j], plugins[i]
-				}
-			}
-		}
+	// Convert typed users → []map so plugins' type asserts always work after JSON round-trips too.
+	usersMaps := usersToMaps(cfg.Users)
 
-		// Convert typed users → []map so plugins' type asserts always work after JSON round-trips too.
-		usersMaps := usersToMaps(cfg.Users)
-
-		var firstErr error
-		okCount := 0
-		okByType := map[string]bool{}
-		for _, p := range plugins {
-			typ, _ := p["type"].(string)
-			pluginCfg, _ := p["config"].(map[string]interface{})
-			if pluginCfg == nil {
-				pluginCfg = map[string]interface{}{}
-			}
-			switch typ {
-			case "nft_forward":
-				rules := make([]interface{}, 0, len(cfg.Forwards))
-				for _, f := range cfg.Forwards {
-					rules = append(rules, map[string]interface{}{
-						"listen_port": f.ListenPort,
-						"target_host": f.TargetHost,
-						"target_port": f.TargetPort,
-						"comment":     f.Comment,
-					})
-				}
-				pluginCfg["rules"] = rules
-			case "mita_server", "socks_in", "mieru_client":
-				pluginCfg["users"] = usersMaps
-			}
-			pl, ok := a.registry.Get(typ)
-			if !ok {
-				log.Printf("unknown plugin %s — skip", typ)
-				continue
-			}
-			if err := pl.Apply(ctx, pluginCfg); err != nil {
-				// Continue remaining plugins so public listeners (socks_in) still come up
-				// even if mita/mieru fail (e.g. download race). Required plugins block version bump.
-				log.Printf("plugin %s apply error: %v", typ, err)
-				if firstErr == nil {
-					firstErr = fmt.Errorf("plugin %s: %w", typ, err)
-				}
-				continue
-			}
-			okCount++
-			okByType[typ] = true
+	var firstErr error
+	okCount := 0
+	okByType := map[string]bool{}
+	for _, p := range plugins {
+		typ, _ := p["type"].(string)
+		pluginCfg, _ := p["config"].(map[string]interface{})
+		if pluginCfg == nil {
+			pluginCfg = map[string]interface{}{}
 		}
-		// seed counters for known users on exit
-		for _, u := range cfg.Users {
-			if _, ok := a.counters[u.UserID]; !ok {
-				a.counters[u.UserID] = &userCounter{}
+		switch typ {
+		case "nft_forward":
+			rules := make([]interface{}, 0, len(cfg.Forwards))
+			for _, f := range cfg.Forwards {
+				rules = append(rules, map[string]interface{}{
+					"listen_port": f.ListenPort,
+					"target_host": f.TargetHost,
+					"target_port": f.TargetPort,
+					"comment":     f.Comment,
+				})
 			}
+			pluginCfg["rules"] = rules
+		case "mita_server", "socks_in", "mieru_client":
+			pluginCfg["users"] = usersMaps
 		}
-		if okCount == 0 && firstErr != nil {
-			return firstErr
+		pl, ok := a.registry.Get(typ)
+		if !ok {
+			log.Printf("unknown plugin %s — skip", typ)
+			continue
 		}
-		// Fail if any required plugin for this role did not succeed → retry same version.
-		for _, typ := range required {
-			if !okByType[typ] {
-				err := firstErr
-				if err == nil {
-					err = fmt.Errorf("required plugin %s missing or failed", typ)
-				}
-				log.Printf("partial apply incomplete (need %v, ok=%v): %v", required, okByType, err)
-				return fmt.Errorf("partial apply: %w", err)
+		if err := pl.Apply(ctx, pluginCfg); err != nil {
+			// Continue remaining plugins so public listeners (socks_in) still come up
+			// even if mita/mieru fail (e.g. download race). Required plugins block version bump.
+			log.Printf("plugin %s apply error: %v", typ, err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("plugin %s: %w", typ, err)
 			}
+			continue
 		}
-		if firstErr != nil {
-			// optional plugin failed but required ones OK
-			log.Printf("partial apply (optional only): %v (ok=%d)", firstErr, okCount)
-		}
-		return nil
+		okCount++
+		okByType[typ] = true
 	}
+	// seed counters for known users on exit
+	for _, u := range cfg.Users {
+		if _, ok := a.counters[u.UserID]; !ok {
+			a.counters[u.UserID] = &userCounter{}
+		}
+	}
+	if okCount == 0 && firstErr != nil {
+		return firstErr
+	}
+	// Fail if any required plugin for this role did not succeed → retry same version.
+	for _, typ := range required {
+		if !okByType[typ] {
+			err := firstErr
+			if err == nil {
+				err = fmt.Errorf("required plugin %s missing or failed", typ)
+			}
+			log.Printf("partial apply incomplete (need %v, ok=%v): %v", required, okByType, err)
+			return fmt.Errorf("partial apply: %w", err)
+		}
+	}
+	if firstErr != nil {
+		// optional plugin failed but required ones OK
+		log.Printf("partial apply (optional only): %v (ok=%d)", firstErr, okCount)
+	}
+	return nil
+}
 
 // requiredPlugins lists plugin types that must succeed for the role to be healthy.
 func requiredPlugins(cfg *model.AgentDesiredConfig) []string {
