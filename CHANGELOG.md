@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.5] - 2026-08-01
+
+### Changed — 用户二维码改为可扫码节点链接
+- 管理端「扫码使用」二维码内容改为 `socks5://user:pass@host:port#name`，手机客户端扫码即可导入。
+- 不再把 Clash 订阅 URL 编进二维码（订阅链接仍可复制，仅作次要用途）。
+- 新增 `GET /api/admin/users/:id/share` 返回节点链接与入口列表。
+
+### Ops
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | bash
+```
+面板升级即可（节点 agent 可不升）。
+
 ## [0.3.4] - 2026-08-01
 
 ### Fixed — hop probe false timeout + apply blocking heartbeat

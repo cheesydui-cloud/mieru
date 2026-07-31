@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"strconv"
@@ -125,6 +126,7 @@ func (s *Server) Router() *gin.Engine {
 		admin.GET("/users", s.listUsers)
 		admin.POST("/users", s.createUser)
 		admin.GET("/users/:id", s.getUser)
+		admin.GET("/users/:id/share", s.getUserShare)
 		admin.PUT("/users/:id", s.updateUser)
 		admin.DELETE("/users/:id", s.deleteUser)
 		admin.POST("/users/:id/reset-password", s.resetUserPassword)
@@ -1108,11 +1110,15 @@ func (s *Server) createUser(c *gin.Context) {
 	_ = s.gen.RebuildAll()
 	s.store.Audit("admin", "create_user", fmt.Sprintf("%d", u.ID), u.Username)
 	base := s.publicBase(c)
+	share := s.userSharePayload(u)
 	c.JSON(http.StatusCreated, gin.H{
 		"user":           u,
 		"proxy_password": u.ProxyPassword,
 		"sub_token":      u.SubToken,
 		"subscription":   base + "/sub/" + u.SubToken,
+		"share_url":      share["share_url"],
+		"share_urls":     share["share_urls"],
+		"entries":        share["entries"],
 	})
 }
 
@@ -1124,7 +1130,15 @@ func (s *Server) getUser(c *gin.Context) {
 		return
 	}
 	sample, _ := s.store.GetRate(u.ID)
-	c.JSON(http.StatusOK, gin.H{"user": u, "rate": sample, "subscription": s.publicBase(c) + "/sub/" + u.SubToken})
+	share := s.userSharePayload(u)
+	c.JSON(http.StatusOK, gin.H{
+		"user":         u,
+		"rate":         sample,
+		"subscription": s.publicBase(c) + "/sub/" + u.SubToken,
+		"share_url":    share["share_url"],
+		"share_urls":   share["share_urls"],
+		"entries":      share["entries"],
+	})
 }
 
 func (s *Server) updateUser(c *gin.Context) {
@@ -1450,31 +1464,19 @@ func (s *Server) nodeInstallCmd(c *gin.Context) {
 	})
 }
 
-func (s *Server) subscription(c *gin.Context) {
-	u, err := s.store.GetUserBySubToken(c.Param("token"))
-	if err != nil {
-		c.String(http.StatusNotFound, "not found")
-		return
-	}
-	_ = s.store.RefreshUserStatuses()
-	if u2, err := s.store.GetUser(u.ID); err == nil {
-		u = u2
-	}
-	if u.Status != model.StatusActive {
-		c.String(http.StatusForbidden, "account not active: "+u.Status)
-		return
-	}
+// entryProxy is a client-facing SOCKS5 entry (first hop of the user's route).
+type entryProxy struct {
+	Name string `json:"name"`
+	Host string `json:"host"`
+	Port int    `json:"port"`
+}
 
-	type entryProxy struct {
-		Name string
-		Host string
-		Port int
-	}
+// resolveUserEntries returns SOCKS5 entry endpoints for a user (route-bound preferred).
+func (s *Server) resolveUserEntries(u *model.User) []entryProxy {
 	seen := map[string]bool{}
 	proxies := []entryProxy{}
 
-	// Prefer entry endpoints from the user's bound route (supports external entry).
-	if u.RouteID != nil {
+	if u != nil && u.RouteID != nil {
 		if r, err := s.store.GetRoute(*u.RouteID); err == nil && r.Enabled {
 			var hops []model.Hop
 			_ = json.Unmarshal([]byte(r.HopsJSON), &hops)
@@ -1498,7 +1500,6 @@ func (s *Server) subscription(c *gin.Context) {
 					}
 					seen[key] = true
 					proxies = append(proxies, entryProxy{Name: name, Host: host, Port: port})
-					// only first external/entry hop is the client entry
 					break
 				}
 				if h.NodeID == "" {
@@ -1509,7 +1510,6 @@ func (s *Server) subscription(c *gin.Context) {
 					continue
 				}
 				if n.Role != model.RoleEntry && n.Role != model.RoleHybrid {
-					// first hop might be relay when only relay+exit — skip for client entry
 					continue
 				}
 				host := n.PublicHost()
@@ -1532,7 +1532,6 @@ func (s *Server) subscription(c *gin.Context) {
 		}
 	}
 
-	// Fallback: all entry/hybrid nodes (legacy / unbound route).
 	if len(proxies) == 0 {
 		nodes, _ := s.store.ListNodes()
 		for _, n := range nodes {
@@ -1556,6 +1555,95 @@ func (s *Server) subscription(c *gin.Context) {
 			proxies = append(proxies, entryProxy{Name: name, Host: host, Port: port})
 		}
 	}
+	return proxies
+}
+
+// socks5ShareURL builds a standard socks5://user:pass@host:port#name link
+// that Shadowrocket / Quantumult / Surge / many Android clients can scan directly.
+func socks5ShareURL(username, password, host string, port int, name string) string {
+	if host == "" || port <= 0 {
+		return ""
+	}
+	u := url.URL{
+		Scheme: "socks5",
+		User:   url.UserPassword(username, password),
+		Host:   net.JoinHostPort(host, strconv.Itoa(port)),
+	}
+	if name != "" {
+		u.Fragment = name
+	}
+	return u.String()
+}
+
+func (s *Server) userSharePayload(u *model.User) gin.H {
+	entries := s.resolveUserEntries(u)
+	links := make([]gin.H, 0, len(entries))
+	primary := ""
+	for _, e := range entries {
+		link := socks5ShareURL(u.Username, u.ProxyPassword, e.Host, e.Port, e.Name)
+		if link == "" {
+			continue
+		}
+		if primary == "" {
+			primary = link
+		}
+		links = append(links, gin.H{
+			"name": e.Name,
+			"host": e.Host,
+			"port": e.Port,
+			"url":  link,
+		})
+	}
+	// Multi-node: one URL per line (common for bulk import apps).
+	joined := ""
+	if len(links) > 0 {
+		parts := make([]string, 0, len(links))
+		for _, l := range links {
+			if s, ok := l["url"].(string); ok && s != "" {
+				parts = append(parts, s)
+			}
+		}
+		joined = strings.Join(parts, "\n")
+	}
+	return gin.H{
+		"username":       u.Username,
+		"proxy_password": u.ProxyPassword,
+		"entries":        links,
+		"share_url":      primary, // first entry — encode this in QR for one-tap import
+		"share_urls":     joined,  // all entries, newline-separated
+		"sub_token":      u.SubToken,
+	}
+}
+
+func (s *Server) getUserShare(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	u, err := s.store.GetUser(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	payload := s.userSharePayload(u)
+	// publicBase needs request for correct host — fix subscription field
+	payload["subscription"] = s.publicBase(c) + "/sub/" + u.SubToken
+	c.JSON(http.StatusOK, payload)
+}
+
+func (s *Server) subscription(c *gin.Context) {
+	u, err := s.store.GetUserBySubToken(c.Param("token"))
+	if err != nil {
+		c.String(http.StatusNotFound, "not found")
+		return
+	}
+	_ = s.store.RefreshUserStatuses()
+	if u2, err := s.store.GetUser(u.ID); err == nil {
+		u = u2
+	}
+	if u.Status != model.StatusActive {
+		c.String(http.StatusForbidden, "account not active: "+u.Status)
+		return
+	}
+
+	proxies := s.resolveUserEntries(u)
 
 	var b strings.Builder
 	b.WriteString("# mieru-panel subscription\n")

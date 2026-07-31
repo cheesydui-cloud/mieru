@@ -17,12 +17,15 @@ const form = reactive({
   note: '',
 })
 
-// subscription modal
+// share / QR modal — encodes socks5:// node link (not subscription URL)
 const subShow = ref(false)
 const subUser = ref(null)
-const subLink = ref('')
+const shareURL = ref('') // primary socks5:// for QR
+const shareURLs = ref('') // all entries newline-separated
+const subLink = ref('') // Clash YAML subscription (secondary)
 const subQR = ref('')
 const subLoading = ref(false)
+const entries = ref([])
 
 let timer
 
@@ -84,7 +87,6 @@ async function resetSub(id) {
   const res = await api(`/api/admin/users/${id}/reset-sub`, { method: 'POST' })
   toast.value = `新订阅已生成`
   await load()
-  // if modal open for this user, refresh
   if (subShow.value && subUser.value?.id === id) {
     await openSub({ ...subUser.value, subscription: res.subscription, sub_token: res.sub_token })
   }
@@ -111,33 +113,56 @@ function subURL(tokenPath) {
   return `${location.origin}${tokenPath}`
 }
 
-function userSubURL(u) {
-  if (!u) return ''
-  if (u.subscription) return subURL(u.subscription)
-  if (u.sub_token) return `${location.origin}/sub/${u.sub_token}`
-  return ''
+async function makeQR(text) {
+  if (!text) return ''
+  return QRCode.toDataURL(text, {
+    width: 280,
+    margin: 2,
+    color: { dark: '#0f172a', light: '#ffffff' },
+    errorCorrectionLevel: 'M',
+  })
 }
 
 async function openSub(u) {
   subUser.value = u
-  subLink.value = userSubURL(u)
+  shareURL.value = ''
+  shareURLs.value = ''
+  subLink.value = ''
   subQR.value = ''
+  entries.value = []
   subShow.value = true
   subLoading.value = true
   try {
-    if (!subLink.value && u?.id) {
-      const detail = await api(`/api/admin/users/${u.id}`)
-      if (detail?.subscription) {
-        subLink.value = subURL(detail.subscription)
-        subUser.value = { ...u, ...(detail.user || {}), subscription: detail.subscription }
+    let detail = null
+    if (u?.id) {
+      // dedicated share endpoint returns socks5:// with password
+      try {
+        detail = await api(`/api/admin/users/${u.id}/share`)
+      } catch {
+        detail = await api(`/api/admin/users/${u.id}`)
       }
     }
-    if (subLink.value) {
-      subQR.value = await QRCode.toDataURL(subLink.value, {
-        width: 240,
-        margin: 2,
-        color: { dark: '#0f172a', light: '#ffffff' },
-      })
+    if (detail) {
+      shareURL.value = detail.share_url || ''
+      shareURLs.value = detail.share_urls || detail.share_url || ''
+      entries.value = Array.isArray(detail.entries) ? detail.entries : []
+      subLink.value = subURL(detail.subscription || '')
+      if (detail.user) {
+        subUser.value = { ...u, ...detail.user }
+      }
+      // create-user response may already carry share_url
+    }
+    if (!shareURL.value && created.value && created.value.user?.id === u?.id) {
+      shareURL.value = created.value.share_url || ''
+      shareURLs.value = created.value.share_urls || shareURL.value
+      entries.value = created.value.entries || []
+    }
+    if (!shareURL.value && u?.share_url) {
+      shareURL.value = u.share_url
+    }
+    // QR encodes the node link, NOT the http subscription URL
+    if (shareURL.value) {
+      subQR.value = await makeQR(shareURL.value)
     }
   } catch (e) {
     error.value = e.message || '生成二维码失败'
@@ -162,7 +187,7 @@ onUnmounted(() => clearInterval(timer))
   </div>
 
   <div class="panel-toolbar">
-    <span class="muted" style="font-size:13px">开户、绑定线路、订阅与代理密码</span>
+    <span class="muted" style="font-size:13px">开户、绑定线路、扫码导入节点</span>
     <button class="btn btn-primary btn-sm" @click="openCreate">开户</button>
   </div>
 
@@ -204,7 +229,7 @@ onUnmounted(() => clearInterval(timer))
           <td class="mono">{{ u.route_id || '—' }}</td>
           <td>
             <div class="row-actions">
-              <button class="btn btn-primary btn-sm" @click="openSub(u)">订阅地址</button>
+              <button class="btn btn-primary btn-sm" @click="openSub(u)">扫码使用</button>
               <button class="btn btn-ghost btn-sm" @click="resetPw(u.id)">重置密码</button>
               <button class="btn btn-ghost btn-sm" @click="resetSub(u.id)">重置订阅</button>
               <button class="btn btn-danger btn-sm" @click="remove(u.id)">删除</button>
@@ -252,17 +277,23 @@ onUnmounted(() => clearInterval(timer))
           <div class="kv">
             <dt>代理密码</dt>
             <dd>{{ created.proxy_password }}</dd>
-            <dt>订阅</dt>
-            <dd style="word-break:break-all">{{ subURL(created.subscription) }}</dd>
+            <dt>节点链接</dt>
+            <dd style="word-break:break-all" class="mono">{{ created.share_url || '（无入口节点）' }}</dd>
           </div>
           <div class="row-actions" style="margin-top:10px">
             <button class="btn btn-ghost btn-sm" @click="copy(created.proxy_password)">复制密码</button>
-            <button class="btn btn-ghost btn-sm" @click="copy(subURL(created.subscription))">复制订阅</button>
+            <button
+              class="btn btn-ghost btn-sm"
+              :disabled="!created.share_url"
+              @click="copy(created.share_url)"
+            >
+              复制节点链接
+            </button>
             <button
               class="btn btn-primary btn-sm"
-              @click="openSub({ id: created.user?.id, username: created.user?.username || form.username, subscription: created.subscription, sub_token: created.sub_token })"
+              @click="openSub({ id: created.user?.id, username: created.user?.username || form.username, share_url: created.share_url })"
             >
-              查看二维码
+              扫码使用
             </button>
           </div>
         </div>
@@ -274,11 +305,11 @@ onUnmounted(() => clearInterval(timer))
     </div>
   </div>
 
-  <!-- subscription + QR -->
+  <!-- QR: socks5:// node link (scan to import), not subscription URL -->
   <div v-if="subShow" class="modal-mask" @click.self="subShow = false">
-    <div class="modal" style="width:min(480px,100%)">
+    <div class="modal" style="width:min(520px,100%)">
       <div class="modal-hd">
-        <h3>订阅地址 · {{ subUser?.username || '' }}</h3>
+        <h3>扫码使用 · {{ subUser?.username || '' }}</h3>
         <button class="btn btn-ghost btn-sm" @click="subShow = false">关闭</button>
       </div>
       <div class="modal-bd" style="text-align:center">
@@ -286,29 +317,59 @@ onUnmounted(() => clearInterval(timer))
         <template v-else>
           <div
             v-if="subQR"
-            style="display:inline-block;padding:12px;background:#fff;border-radius:12px;border:1px solid var(--border);margin-bottom:14px"
+            style="display:inline-block;padding:14px;background:#fff;border-radius:12px;border:1px solid var(--border);margin-bottom:14px"
           >
-            <img :src="subQR" alt="订阅二维码" width="240" height="240" style="display:block" />
+            <img :src="subQR" alt="节点二维码" width="280" height="280" style="display:block" />
           </div>
-          <div v-else class="muted" style="padding:16px">无法生成二维码（缺少订阅链接）</div>
+          <div v-else class="muted" style="padding:16px">
+            无法生成二维码（用户未绑定可用入口，或入口缺少公网地址/端口）
+          </div>
+
           <div class="field" style="text-align:left">
-            <label>订阅链接（Clash / 兼容客户端）</label>
+            <label>节点链接（扫码内容 · socks5://）</label>
             <textarea
               readonly
               rows="3"
               class="mono"
               style="width:100%;resize:vertical;background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;padding:12px;font-size:12px"
+              :value="shareURL"
+            />
+          </div>
+
+          <div v-if="entries.length > 1" class="field" style="text-align:left;margin-top:10px">
+            <label>全部入口</label>
+            <div
+              v-for="(e, i) in entries"
+              :key="i"
+              class="mono"
+              style="font-size:12px;word-break:break-all;padding:6px 0;border-bottom:1px solid var(--border)"
+            >
+              {{ e.name }} · {{ e.host }}:{{ e.port }}
+              <button class="btn btn-ghost btn-sm" style="margin-left:8px" @click="copy(e.url)">复制</button>
+            </div>
+          </div>
+
+          <div class="field" style="text-align:left;margin-top:12px">
+            <label class="muted">Clash 订阅（可选，YAML 下载地址）</label>
+            <textarea
+              readonly
+              rows="2"
+              class="mono"
+              style="width:100%;resize:vertical;background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;padding:12px;font-size:11px;opacity:0.85"
               :value="subLink"
             />
           </div>
-          <div class="muted" style="font-size:12px;line-height:1.55;margin-top:8px;text-align:left">
-            扫码或复制链接导入客户端。重置订阅会使本链接立即失效。
+
+          <div class="muted" style="font-size:12px;line-height:1.55;margin-top:10px;text-align:left">
+            用 Shadowrocket / Quantumult X / Surge / 小火箭等扫描上方二维码，直接导入 SOCKS5 节点。
+            不要扫 Clash 订阅地址。骨干 mieru 对客户端透明。
           </div>
         </template>
       </div>
       <div class="modal-ft">
         <button class="btn btn-ghost" @click="subShow = false">关闭</button>
-        <button class="btn btn-primary" :disabled="!subLink" @click="copy(subLink)">复制链接</button>
+        <button class="btn btn-ghost" :disabled="!subLink" @click="copy(subLink)">复制订阅</button>
+        <button class="btn btn-primary" :disabled="!shareURL" @click="copy(shareURL)">复制节点链接</button>
       </div>
     </div>
   </div>
