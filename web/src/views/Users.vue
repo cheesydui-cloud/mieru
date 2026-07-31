@@ -14,6 +14,8 @@ const form = reactive({
   expire_at: '',
   traffic_limit_gb: 100,
   route_id: null,
+  entry_host: '',
+  entry_port: null,
   note: '',
 })
 
@@ -51,6 +53,8 @@ function openCreate() {
     expire_at: '',
     traffic_limit_gb: 100,
     route_id: routes.value[0]?.id || null,
+    entry_host: '',
+    entry_port: null,
     note: '',
   })
   created.value = null
@@ -64,6 +68,8 @@ async function create() {
       expire_at: form.expire_at || undefined,
       traffic_limit_bytes: Math.round(Number(form.traffic_limit_gb || 0) * 1024 * 1024 * 1024),
       route_id: form.route_id ? Number(form.route_id) : null,
+      entry_host: (form.entry_host || '').trim() || undefined,
+      entry_port: form.entry_port ? Number(form.entry_port) : undefined,
       note: form.note,
     }
     created.value = await api('/api/admin/users', {
@@ -268,6 +274,17 @@ onUnmounted(() => clearInterval(timer))
               <option v-for="r in routes" :key="r.id" :value="r.id">{{ r.name }} (#{{ r.id }})</option>
             </select>
           </div>
+          <div class="field">
+            <label>公网入口 IP/域名（可选）</label>
+            <input v-model="form.entry_host" placeholder="留空则用线路第一跳公网地址" />
+          </div>
+          <div class="field">
+            <label>入口端口（可选）</label>
+            <input v-model.number="form.entry_port" type="number" min="1" max="65535" placeholder="留空用第一跳端口" />
+          </div>
+        </div>
+        <div class="muted" style="font-size:12px;line-height:1.5;margin:-4px 0 10px">
+          客户端扫码连的是这里的入口。商家给了独立公网 IP/域名时填写；不填则自动用线路第一跳（如 cm7）的公网 IP/域名与端口。
         </div>
         <div class="field">
           <label>备注</label>

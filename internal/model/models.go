@@ -14,13 +14,13 @@ const (
 )
 
 const (
-	StatusActive   = "active"
-	StatusDisabled = "disabled"
-	StatusExpired  = "expired"
+	StatusActive    = "active"
+	StatusDisabled  = "disabled"
+	StatusExpired   = "expired"
 	StatusOverQuota = "over_quota"
-	StatusOffline  = "offline"
-	StatusOnline   = "online"
-	StatusDegraded = "degraded"
+	StatusOffline   = "offline"
+	StatusOnline    = "online"
+	StatusDegraded  = "degraded"
 )
 
 type Admin struct {
@@ -31,29 +31,29 @@ type Admin struct {
 }
 
 type Node struct {
-	ID           string    `json:"id"`
-	Name         string    `json:"name"`
-	Role         string    `json:"role"` // entry|relay|exit|hybrid
-	Region       string    `json:"region"`
-	Tags         string    `json:"tags"` // comma-separated
-	PublicIP     string    `json:"public_ip"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Role     string `json:"role"` // entry|relay|exit|hybrid
+	Region   string `json:"region"`
+	Tags     string `json:"tags"` // comma-separated
+	PublicIP string `json:"public_ip"`
 	// PrivateIP is the LAN / IX internal address used by previous hops
 	// (e.g. entry→relay, relay→exit on the same fabric). Empty = use PublicIP/Hostname.
-	PrivateIP    string    `json:"private_ip"`
-	Hostname     string    `json:"hostname"` // domain preferred for clients
-	AltHostnames string    `json:"alt_hostnames"`
+	PrivateIP    string `json:"private_ip"`
+	Hostname     string `json:"hostname"` // domain preferred for clients
+	AltHostnames string `json:"alt_hostnames"`
 	// PortMin/PortMax: node port range (start-end). Client/subscription uses PortMin as primary.
-// 0/0 = role default range. ListenPort is kept for backward compat (= PortMin when set).
-	ListenPort int `json:"listen_port"`
-	PortMin    int `json:"port_min"`
-	PortMax    int `json:"port_max"`
-	AgentToken   string    `json:"-"`
-	Status       string    `json:"status"`
-	LastSeen     *time.Time `json:"last_seen,omitempty"`
-	ConfigVersion int64    `json:"config_version"`
-	MetaJSON     string    `json:"meta_json"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	// 0/0 = role default range. ListenPort is kept for backward compat (= PortMin when set).
+	ListenPort    int        `json:"listen_port"`
+	PortMin       int        `json:"port_min"`
+	PortMax       int        `json:"port_max"`
+	AgentToken    string     `json:"-"`
+	Status        string     `json:"status"`
+	LastSeen      *time.Time `json:"last_seen,omitempty"`
+	ConfigVersion int64      `json:"config_version"`
+	MetaJSON      string     `json:"meta_json"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
 }
 
 // NormalizePorts: UI only uses start/end; primary listen = start port.
@@ -108,7 +108,8 @@ func HybridMitaPort(socksPort int) int {
 
 // EffectiveListenPort: primary public port clients / probes / upstreams use.
 // Always consistent with what configgen binds for the role's public service:
-//   entry/relay/hybrid → socks_in; exit → mita.
+//
+//	entry/relay/hybrid → socks_in; exit → mita.
 func (n *Node) EffectiveListenPort() int {
 	if n.PortMin > 0 {
 		return n.PortMin
@@ -203,11 +204,11 @@ func (n *Node) PortInRange(userID int64) int {
 }
 
 type Capability struct {
-	ID       int64  `json:"id"`
-	NodeID   string `json:"node_id"`
-	Type     string `json:"type"` // nft_forward|mieru_client|mita_server|socks_in
-	Enabled  bool   `json:"enabled"`
-	Listen   string `json:"listen"`
+	ID         int64  `json:"id"`
+	NodeID     string `json:"node_id"`
+	Type       string `json:"type"` // nft_forward|mieru_client|mita_server|socks_in
+	Enabled    bool   `json:"enabled"`
+	Listen     string `json:"listen"`
 	ConfigJSON string `json:"config_json"`
 }
 
@@ -216,7 +217,7 @@ type Route struct {
 	ID        int64     `json:"id"`
 	Name      string    `json:"name"`
 	Enabled   bool      `json:"enabled"`
-	Strategy  string    `json:"strategy"` // sticky|wrr|failover
+	Strategy  string    `json:"strategy"`  // sticky|wrr|failover
 	HopsJSON  string    `json:"hops_json"` // [{node_id, order, capability_type}]
 	Weight    int       `json:"weight"`
 	Health    string    `json:"health"`
@@ -224,36 +225,40 @@ type Route struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-	// Hop is one step in a route. NodeID is empty when External is true
-	// (merchant-provided entry IP/domain with no Agent).
-	type Hop struct {
-		NodeID         string `json:"node_id,omitempty"`
-		Order          int    `json:"order"`
-		CapabilityType string `json:"capability_type,omitempty"`
-		// External entry: no panel node / no Agent; only client-facing endpoint.
-		External bool   `json:"external,omitempty"`
-		Host     string `json:"host,omitempty"` // IP or domain for clients
-		Port     int    `json:"port,omitempty"` // client port (0 = default)
-		Name     string `json:"name,omitempty"` // display name in subscription
-	}
+// Hop is one step in a route. NodeID is empty when External is true
+// (merchant-provided entry IP/domain with no Agent).
+type Hop struct {
+	NodeID         string `json:"node_id,omitempty"`
+	Order          int    `json:"order"`
+	CapabilityType string `json:"capability_type,omitempty"`
+	// External entry: no panel node / no Agent; only client-facing endpoint.
+	External bool   `json:"external,omitempty"`
+	Host     string `json:"host,omitempty"` // IP or domain for clients
+	Port     int    `json:"port,omitempty"` // client port (0 = default)
+	Name     string `json:"name,omitempty"` // display name in subscription
+}
 
 type User struct {
-	ID               int64      `json:"id"`
-	Username         string     `json:"username"`
-	PasswordHash     string     `json:"-"`
-	ProxyPassword    string     `json:"proxy_password,omitempty"` // plain returned only on create/reset
-	Status           string     `json:"status"`
-	ExpireAt         *time.Time `json:"expire_at,omitempty"`
-	TrafficLimitBytes int64     `json:"traffic_limit_bytes"`
-	TrafficUsedBytes  int64     `json:"traffic_used_bytes"`
-	SpeedLimitBps    int64      `json:"speed_limit_bps"`
-	MaxSessions      int        `json:"max_sessions"`
-	StickyExitID     string     `json:"sticky_exit_id,omitempty"`
-	SubToken         string     `json:"sub_token,omitempty"`
-	RouteID          *int64     `json:"route_id,omitempty"`
-	Note             string     `json:"note"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	ID                int64      `json:"id"`
+	Username          string     `json:"username"`
+	PasswordHash      string     `json:"-"`
+	ProxyPassword     string     `json:"proxy_password,omitempty"` // plain returned only on create/reset
+	Status            string     `json:"status"`
+	ExpireAt          *time.Time `json:"expire_at,omitempty"`
+	TrafficLimitBytes int64      `json:"traffic_limit_bytes"`
+	TrafficUsedBytes  int64      `json:"traffic_used_bytes"`
+	SpeedLimitBps     int64      `json:"speed_limit_bps"`
+	MaxSessions       int        `json:"max_sessions"`
+	StickyExitID      string     `json:"sticky_exit_id,omitempty"`
+	SubToken          string     `json:"sub_token,omitempty"`
+	RouteID           *int64     `json:"route_id,omitempty"`
+	// EntryHost/EntryPort: optional client-facing public entry override (IP or domain).
+	// Empty host = resolve from first hop of bound route (or first entry/relay node).
+	EntryHost string    `json:"entry_host,omitempty"`
+	EntryPort int       `json:"entry_port,omitempty"`
+	Note      string    `json:"note"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type TrafficHourly struct {
@@ -267,12 +272,12 @@ type TrafficHourly struct {
 }
 
 type TrafficSample struct {
-	UserID    int64   `json:"user_id"`
-	UpBps     int64   `json:"up_bps"`
-	DownBps   int64   `json:"down_bps"`
-	UpBytes   int64   `json:"up_bytes"`
-	DownBytes int64   `json:"down_bytes"`
-	TS        int64   `json:"ts"`
+	UserID    int64 `json:"user_id"`
+	UpBps     int64 `json:"up_bps"`
+	DownBps   int64 `json:"down_bps"`
+	UpBytes   int64 `json:"up_bytes"`
+	DownBytes int64 `json:"down_bytes"`
+	TS        int64 `json:"ts"`
 }
 
 type AuditLog struct {
@@ -344,11 +349,11 @@ type TrafficReportSample struct {
 }
 
 type DashboardStats struct {
-	OnlineNodes   int   `json:"online_nodes"`
-	TotalNodes    int   `json:"total_nodes"`
-	ActiveUsers   int   `json:"active_users"`
-	TotalUsers    int   `json:"total_users"`
-	TodayUp       int64 `json:"today_up"`
-	TodayDown     int64 `json:"today_down"`
-	UnhealthyNodes int  `json:"unhealthy_nodes"`
+	OnlineNodes    int   `json:"online_nodes"`
+	TotalNodes     int   `json:"total_nodes"`
+	ActiveUsers    int   `json:"active_users"`
+	TotalUsers     int   `json:"total_users"`
+	TodayUp        int64 `json:"today_up"`
+	TodayDown      int64 `json:"today_down"`
+	UnhealthyNodes int   `json:"unhealthy_nodes"`
 }

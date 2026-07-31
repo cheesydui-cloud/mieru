@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.6] - 2026-08-01
+
+### Added — 开户可选手动公网入口
+- 开户表单可填 **公网入口 IP/域名** 与端口；写入用户 `entry_host` / `entry_port`。
+- 未填写时：扫码链接默认用线路**第一跳**的公网地址与端口（含 relay 角色，如 cm7）。
+- 二维码仍为 `socks5://` 节点链接（客户端入口协议；骨干仍是 mieru，不影响隧道隐蔽性）。
+
+### Ops
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | bash
+```
+
 ## [0.3.5] - 2026-08-01
 
 ### Changed — 用户二维码改为可扫码节点链接

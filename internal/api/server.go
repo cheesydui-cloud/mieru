@@ -1061,6 +1061,8 @@ func (s *Server) createUser(c *gin.Context) {
 		MaxSessions       int    `json:"max_sessions"`
 		StickyExitID      string `json:"sticky_exit_id"`
 		RouteID           *int64 `json:"route_id"`
+		EntryHost         string `json:"entry_host"`
+		EntryPort         int    `json:"entry_port"`
 		Note              string `json:"note"`
 		ProxyPassword     string `json:"proxy_password"`
 	}
@@ -1087,6 +1089,8 @@ func (s *Server) createUser(c *gin.Context) {
 		MaxSessions:       req.MaxSessions,
 		StickyExitID:      req.StickyExitID,
 		RouteID:           req.RouteID,
+		EntryHost:         strings.TrimSpace(req.EntryHost),
+		EntryPort:         req.EntryPort,
 		Note:              req.Note,
 		ProxyPassword:     req.ProxyPassword,
 		Status:            model.StatusActive,
@@ -1149,15 +1153,17 @@ func (s *Server) updateUser(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Status            string `json:"status"`
-		ExpireAt          string `json:"expire_at"`
-		TrafficLimitBytes *int64 `json:"traffic_limit_bytes"`
-		SpeedLimitBps     *int64 `json:"speed_limit_bps"`
-		MaxSessions       *int   `json:"max_sessions"`
-		StickyExitID      string `json:"sticky_exit_id"`
-		RouteID           *int64 `json:"route_id"`
-		Note              string `json:"note"`
-		ClearExpire       bool   `json:"clear_expire"`
+		Status            string  `json:"status"`
+		ExpireAt          string  `json:"expire_at"`
+		TrafficLimitBytes *int64  `json:"traffic_limit_bytes"`
+		SpeedLimitBps     *int64  `json:"speed_limit_bps"`
+		MaxSessions       *int    `json:"max_sessions"`
+		StickyExitID      string  `json:"sticky_exit_id"`
+		RouteID           *int64  `json:"route_id"`
+		EntryHost         *string `json:"entry_host"`
+		EntryPort         *int    `json:"entry_port"`
+		Note              string  `json:"note"`
+		ClearExpire       bool    `json:"clear_expire"`
 	}
 	if err := c.BindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
@@ -1187,6 +1193,12 @@ func (s *Server) updateUser(c *gin.Context) {
 	u.StickyExitID = req.StickyExitID
 	if req.RouteID != nil {
 		u.RouteID = req.RouteID
+	}
+	if req.EntryHost != nil {
+		u.EntryHost = strings.TrimSpace(*req.EntryHost)
+	}
+	if req.EntryPort != nil {
+		u.EntryPort = *req.EntryPort
 	}
 	u.Note = req.Note
 	if err := s.store.UpdateUser(u); err != nil {
@@ -1465,16 +1477,70 @@ func (s *Server) nodeInstallCmd(c *gin.Context) {
 }
 
 // entryProxy is a client-facing SOCKS5 entry (first hop of the user's route).
+// entryProxy is a client-facing SOCKS5 entry (first hop / manual public entry).
 type entryProxy struct {
 	Name string `json:"name"`
 	Host string `json:"host"`
 	Port int    `json:"port"`
 }
 
-// resolveUserEntries returns SOCKS5 entry endpoints for a user (route-bound preferred).
+// firstHopServicePort returns the public service port of the user's first agent hop.
+func (s *Server) firstHopServicePort(u *model.User) int {
+	if u == nil || u.RouteID == nil {
+		return 0
+	}
+	r, err := s.store.GetRoute(*u.RouteID)
+	if err != nil {
+		return 0
+	}
+	var hops []model.Hop
+	_ = json.Unmarshal([]byte(r.HopsJSON), &hops)
+	for _, h := range hops {
+		if h.External || (h.NodeID == "" && h.Host != "") {
+			if h.Port > 0 {
+				return h.Port
+			}
+			return 1080
+		}
+		if h.NodeID == "" {
+			continue
+		}
+		n, err := s.store.GetNode(h.NodeID)
+		if err != nil {
+			continue
+		}
+		if n.Role == model.RoleExit {
+			continue
+		}
+		return n.PublicServicePort()
+	}
+	return 0
+}
+
+// resolveUserEntries returns client-facing entry endpoints for a user.
+// Priority: user.EntryHost override → first hop of bound route → first entry/relay/hybrid node.
 func (s *Server) resolveUserEntries(u *model.User) []entryProxy {
 	seen := map[string]bool{}
 	proxies := []entryProxy{}
+
+	// Manual public entry (IP or domain) set on the user at create/edit time.
+	if u != nil {
+		host := strings.TrimSpace(u.EntryHost)
+		if host != "" {
+			port := u.EntryPort
+			if port <= 0 {
+				port = s.firstHopServicePort(u)
+			}
+			if port <= 0 {
+				port = 1080
+			}
+			name := host
+			if u.Username != "" {
+				name = u.Username + "@" + host
+			}
+			return []entryProxy{{Name: name, Host: host, Port: port}}
+		}
+	}
 
 	if u != nil && u.RouteID != nil {
 		if r, err := s.store.GetRoute(*u.RouteID); err == nil && r.Enabled {
@@ -1509,7 +1575,8 @@ func (s *Server) resolveUserEntries(u *model.User) []entryProxy {
 				if err != nil {
 					continue
 				}
-				if n.Role != model.RoleEntry && n.Role != model.RoleHybrid {
+				// Client entry may be entry / hybrid / relay (relay exposes public socks_in).
+				if n.Role != model.RoleEntry && n.Role != model.RoleHybrid && n.Role != model.RoleRelay {
 					continue
 				}
 				host := n.PublicHost()
@@ -1535,7 +1602,7 @@ func (s *Server) resolveUserEntries(u *model.User) []entryProxy {
 	if len(proxies) == 0 {
 		nodes, _ := s.store.ListNodes()
 		for _, n := range nodes {
-			if n.Role != model.RoleEntry && n.Role != model.RoleHybrid {
+			if n.Role != model.RoleEntry && n.Role != model.RoleHybrid && n.Role != model.RoleRelay {
 				continue
 			}
 			host := n.PublicHost()
@@ -1558,8 +1625,6 @@ func (s *Server) resolveUserEntries(u *model.User) []entryProxy {
 	return proxies
 }
 
-// socks5ShareURL builds a standard socks5://user:pass@host:port#name link
-// that Shadowrocket / Quantumult / Surge / many Android clients can scan directly.
 func socks5ShareURL(username, password, host string, port int, name string) string {
 	if host == "" || port <= 0 {
 		return ""

@@ -26,7 +26,7 @@ import (
 	"github.com/cheesydui-cloud/mieru/internal/plugins/socksin"
 )
 
-const AgentVersion = "0.3.5"
+const AgentVersion = "0.3.6"
 
 type Agent struct {
 	cfg      config.AgentConfig
