@@ -82,52 +82,53 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 		mtu = 1400
 	}
 
-	// ipAddress vs domainName — official client expects one or the other.
-	ipAddr, domain := "", ""
-	if ip := net.ParseIP(server); ip != nil {
-		ipAddr = server
-	} else {
-		domain = server
-	}
+		// ipAddress vs domainName — official/OneClick set one; omit the other.
+		serverEntry := map[string]interface{}{
+			"portBindings": []map[string]interface{}{},
+		}
+		if ip := net.ParseIP(server); ip != nil {
+			serverEntry["ipAddress"] = server
+			// OneClick always includes domainName as "" for IP hosts
+			serverEntry["domainName"] = ""
+		} else {
+			serverEntry["domainName"] = server
+			serverEntry["ipAddress"] = ""
+		}
 
-	protocol, _ := cfg["protocol"].(string)
-	if protocol == "" {
-		protocol = "TCP"
-	}
-	protocol = strings.ToUpper(protocol)
+		protocol, _ := cfg["protocol"].(string)
+		if protocol == "" {
+			protocol = "TCP"
+		}
+		protocol = strings.ToUpper(protocol)
+		serverEntry["portBindings"] = []map[string]interface{}{
+			{"port": port, "protocol": protocol},
+		}
 
-	mieruCfg := map[string]interface{}{
-		"profiles": []map[string]interface{}{
-			{
-				"profileName": "panel-exit",
-				"user": map[string]string{
-					"name":     linkUser,
-					"password": linkPass,
-				},
-				"servers": []map[string]interface{}{
-					{
-						"ipAddress":  ipAddr,
-						"domainName": domain,
-						"portBindings": []map[string]interface{}{
-							{"port": port, "protocol": protocol},
-						},
+		// Profile name "default" matches OneClick export for easier manual debug.
+		mieruCfg := map[string]interface{}{
+			"profiles": []map[string]interface{}{
+				{
+					"profileName": "default",
+					"user": map[string]string{
+						"name":     linkUser,
+						"password": linkPass,
 					},
+					"servers": []map[string]interface{}{serverEntry},
+					"mtu":     mtu,
+					"multiplexing": map[string]string{
+						"level": muxLevel,
+					},
+					"handshakeMode": handshake,
 				},
-				"mtu": mtu,
-				"multiplexing": map[string]string{
-					"level": muxLevel,
-				},
-				"handshakeMode": handshake,
 			},
-		},
-		"activeProfile":      "panel-exit",
-		"rpcPort":            rpcPort,
-		"socks5Port":         socksPort,
-		"loggingLevel":       "INFO",
-		"socks5ListenLAN":    true, // local socks_in on 127.0.0.1 must reach it
-		"httpProxyPort":      0,
-		"httpProxyListenLAN": false,
-	}
+			"activeProfile":      "default",
+			"rpcPort":            rpcPort,
+			"socks5Port":         socksPort,
+			"loggingLevel":       "INFO",
+			"socks5ListenLAN":    true, // local socks_in on 127.0.0.1 must reach it
+			"httpProxyPort":      0,
+			"httpProxyListenLAN": false,
+		}
 
 	cfgPath := filepath.Join(p.DataDir, "mieru-config.json")
 	raw, err := json.MarshalIndent(mieruCfg, "", "  ")

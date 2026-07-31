@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.3.0] - 2026-08-01
+
+### Data plane refactor (OneClick-aligned)
+
+Based on **ike-sh/mieru-OneClick 2.1.1** + official mita lifecycle.
+
+- **Stable backbone credentials** (`backbone_user` / `backbone_pass` in settings): relay↔exit tunnel no longer depends on whichever end-user was first in the list.
+- **Hybrid rewrite**: `mita` + local `mieru_client(127.0.0.1)` + public `socks_in` — same shape as OneClick single-node (client → local socks → mita on same host).
+- **Entry → Exit**: uses local mieru to mita (not bare SOCKS to mita port).
+- **Entry → Relay**: still SOCKS chain with end-user auth.
+- **mieru client**: `MULTIPLEXING_OFF`, `HANDSHAKE_NO_WAIT`, `mtu 1400`, profile `default` (OneClick defaults).
+- **mita users**: always `allowPrivateIP` + `allowLoopbackIP` (IX / hybrid loopback).
+- **socks_in**: wait for local mieru upstream before listen.
+- **Admin**: `GET /api/admin/diagnose`, `GET /api/admin/nodes/:id/desired` (passwords redacted).
+
+### Ops
+```bash
+# Panel
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | \
+  MIERU_VERSION=v0.3.0 bash
+
+# Every node agent (entry / relay / exit / hybrid)
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | \
+  MIERU_VERSION=v0.3.0 bash -s -- \
+  --panel-url http://面板:8080 --node-id ... --token ... --role exit|relay|entry|hybrid
+```
+Then in panel: **重建配置** → wait agents pull → 测通断. Fill **内网 IP** on IX hops.
+
 ## [0.2.5] - 2026-07-31
 
 ### Added

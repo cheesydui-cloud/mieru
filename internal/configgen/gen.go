@@ -1,26 +1,42 @@
 package configgen
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/cheesydui-cloud/mieru/internal/model"
 	"github.com/cheesydui-cloud/mieru/internal/store"
 )
 
-// Local control ports for mieru client on relay — never equal node public listen.
+// Local control ports for mieru client — never equal node public listen.
 const (
 	localMieruSocks = 19080
 	localMieruRPC   = 18964
 )
 
+// Backbone settings keys (panel-managed tunnel credentials, not end-user accounts).
+const (
+	SettingBackboneUser = "backbone_user"
+	SettingBackbonePass = "backbone_pass"
+)
+
 // Builder builds per-node desired configs from routes + users.
-// Data plane:
 //
-//	Exit  → mita_server (real process) on EffectiveListenPort / explicit range
-//	Relay → mieru_client (→ exit mita) + socks_in (public, upstream local mieru socks5)
-//	Entry → socks_in (public, upstream next hop PublicServicePort)
-//	Hybrid → mita on HybridMitaPort + socks_in on EffectiveListenPort
+// Data plane (aligned with ike-sh/mieru-OneClick lifecycle + multi-hop panel):
+//
+//	Exit    → mita_server (users = panel users + backbone)
+//	Relay   → mieru_client(→exit mita, backbone) + socks_in(public → local mieru socks)
+//	Entry   → if next is exit: mieru_client + socks_in(local)
+//	        → if next is relay/hybrid: socks_in(→ next PublicServicePort)
+//	Hybrid  → mita + mieru_client(127.0.0.1:mita) + socks_in(→ local mieru)
+//	          (OneClick single-node shape: client talks mita on same host)
+//
+// Backbone credentials are stable panel settings so relay↔exit never depends on
+// which sticky end-user was "first" in the user list.
 type Builder struct {
 	Store *store.Store
 }
@@ -43,9 +59,10 @@ func (b *Builder) RebuildAll() error {
 		routeByID[r.ID] = r
 	}
 
-	// Backbone credentials: prefer a non-sticky active user so every exit accepts it.
-	// Fall back to first active user (still inject onto every exit below).
-	linkUser, linkPass := pickLinkUser(users)
+	linkUser, linkPass, err := b.ensureBackbone()
+	if err != nil {
+		return fmt.Errorf("backbone: %w", err)
+	}
 
 	for _, n := range nodes {
 		cfg := model.AgentDesiredConfig{
@@ -60,7 +77,6 @@ func (b *Builder) RebuildAll() error {
 		case model.RoleExit:
 			cfg.Users = exitUsers(users, n.ID, linkUser, linkPass)
 			pmin, pmax := n.EffectivePortRange()
-			// Prefer single primary port when range collapses; multi-port only if operator set span.
 			listen := n.MitaPrimaryPort()
 			cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
 				"type": "mita_server",
@@ -72,12 +88,17 @@ func (b *Builder) RebuildAll() error {
 			})
 
 		case model.RoleHybrid:
+			// OneClick single-node shape on the hybrid box:
+			//   mita (exit) ← mieru client (loopback) ← public socks_in
+			// Relays elsewhere still dial mita on MitaPrimaryPort with backbone.
 			cfg.Users = exitUsers(users, n.ID, linkUser, linkPass)
 			socksPort := n.PublicServicePort()
 			mitaPort := n.MitaPrimaryPort()
 			if mitaPort == socksPort {
 				mitaPort = model.HybridMitaPort(socksPort)
 			}
+			socksLocal, rpcLocal := localPorts(socksPort)
+
 			cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
 				"type": "mita_server",
 				"config": map[string]interface{}{
@@ -87,12 +108,31 @@ func (b *Builder) RebuildAll() error {
 				},
 			})
 			cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
+				"type": "mieru_client",
+				"config": map[string]interface{}{
+					"server":        "127.0.0.1",
+					"port":          mitaPort,
+					"exit_id":       n.ID,
+					"socks5_port":   socksLocal,
+					"rpc_port":      rpcLocal,
+					"link_user":     linkUser,
+					"link_password": linkPass,
+					// OneClick defaults
+					"multiplexing":   "MULTIPLEXING_OFF",
+					"handshake_mode": "HANDSHAKE_NO_WAIT",
+					"mtu":            1400,
+				},
+			})
+			cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
 				"type": "socks_in",
 				"config": map[string]interface{}{
-					"auth":        "users",
-					"listen_port": socksPort,
-					"port_min":    socksPort,
-					"port_max":    socksPort,
+					"auth":          "users",
+					"listen_port":   socksPort,
+					"port_min":      socksPort,
+					"port_max":      socksPort,
+					"upstream_host": "127.0.0.1",
+					"upstream_port": socksLocal,
+					"via":           "mieru_client",
 				},
 			})
 
@@ -105,87 +145,69 @@ func (b *Builder) RebuildAll() error {
 					Enabled:  true,
 				})
 			}
-			upHost, upPort := "", 0
-			// find next hop from routes involving this entry
-			for _, r := range routes {
-				if !r.Enabled {
-					continue
-				}
-				var hops []model.Hop
-				_ = json.Unmarshal([]byte(r.HopsJSON), &hops)
-				involved := false
-				for _, h := range hops {
-					if h.NodeID == n.ID {
-						involved = true
-						break
-					}
-				}
-				if !involved {
-					continue
-				}
-				next := b.nextAgentHopAfter(hops, n.ID)
-				if next == nil {
-					continue
-				}
-					// Prefer next hop private/LAN IP (IX fabric) when set.
-					host := next.DialHost()
-					if host != "" {
-						upHost = host
-						upPort = next.PublicServicePort()
-						break
-					}
-				}
-				// fallback: any user route next hop
-				if upHost == "" {
-					for _, u := range users {
-						if u.RouteID == nil {
-							continue
-						}
-						r, ok := routeByID[*u.RouteID]
-						if !ok || !r.Enabled {
-							continue
-						}
-						var hops []model.Hop
-						_ = json.Unmarshal([]byte(r.HopsJSON), &hops)
-						next := b.nextAgentHopAfter(hops, n.ID)
-						if next == nil && len(hops) > 0 {
-							for _, h := range hops {
-								if h.NodeID == "" || h.External {
-									continue
-								}
-								if nn, err := b.Store.GetNode(h.NodeID); err == nil {
-									next = nn
-									break
-								}
-							}
-						}
-						if next == nil {
-							continue
-						}
-						host := next.DialHost()
-						if host != "" {
-							upHost = host
-							upPort = next.PublicServicePort()
-							break
-						}
-					}
-				}
 
+			next := b.resolveNextHop(n.ID, routes, users, routeByID)
 			emin, emax := n.EffectivePortRange()
-			socksCfg := map[string]interface{}{
-				"auth":        "users",
-				"listen_port": n.PublicServicePort(),
-				"port_min":    emin,
-				"port_max":    emax,
+			pubPort := n.PublicServicePort()
+
+			// Entry → Exit: talk mita via local mieru (OneClick client shape).
+			// Entry → Relay/Hybrid: chain SOCKS with end-user credentials.
+			if next != nil && next.Role == model.RoleExit {
+				host := next.DialHost()
+				mitaPort := next.MitaPrimaryPort()
+				socksLocal, rpcLocal := localPorts(pubPort)
+				if host != "" && mitaPort > 0 {
+					cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
+						"type": "mieru_client",
+						"config": map[string]interface{}{
+							"server":         host,
+							"port":           mitaPort,
+							"exit_id":        next.ID,
+							"socks5_port":    socksLocal,
+							"rpc_port":       rpcLocal,
+							"link_user":      linkUser,
+							"link_password":  linkPass,
+							"multiplexing":   "MULTIPLEXING_OFF",
+							"handshake_mode": "HANDSHAKE_NO_WAIT",
+							"mtu":            1400,
+						},
+					})
+					cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
+						"type": "socks_in",
+						"config": map[string]interface{}{
+							"auth":          "users",
+							"listen_port":   pubPort,
+							"port_min":      emin,
+							"port_max":      emax,
+							"upstream_host": "127.0.0.1",
+							"upstream_port": socksLocal,
+							"via":           "mieru_client",
+						},
+					})
+				}
 			}
-			if upHost != "" && upPort > 0 {
-				socksCfg["upstream_host"] = upHost
-				socksCfg["upstream_port"] = upPort
+			if len(cfg.Plugins) == 0 {
+				socksCfg := map[string]interface{}{
+					"auth":        "users",
+					"listen_port": pubPort,
+					"port_min":    emin,
+					"port_max":    emax,
+				}
+				if next != nil {
+					host := next.DialHost()
+					upPort := next.PublicServicePort()
+					if host != "" && upPort > 0 {
+						socksCfg["upstream_host"] = host
+						socksCfg["upstream_port"] = upPort
+						socksCfg["next_role"] = next.Role
+						socksCfg["next_id"] = next.ID
+					}
+				}
+				cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
+					"type":   "socks_in",
+					"config": socksCfg,
+				})
 			}
-			cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
-				"type":   "socks_in",
-				"config": socksCfg,
-			})
 
 		case model.RoleRelay:
 			for _, u := range users {
@@ -198,34 +220,25 @@ func (b *Builder) RebuildAll() error {
 				})
 			}
 
-			// Prefer exits that appear on enabled routes with this relay; stable order by node id.
 			exitList := b.exitsForRelay(routes, n.ID)
 			pubPort := n.PublicServicePort()
-			// Keep local mieru control ports off the public listen port.
-			socksLocal := localMieruSocks
-			rpcLocal := localMieruRPC
-			if pubPort == socksLocal {
-				socksLocal = 19081
-			}
-			if pubPort == rpcLocal {
-				rpcLocal = 18965
-			}
+			socksLocal, rpcLocal := localPorts(pubPort)
 
-				if len(exitList) > 0 {
-					ex := exitList[0]
-					// Prefer exit private/LAN IP so relay on same IX uses fabric path.
-					host := ex.DialHost()
-					if host != "" {
-						mcfg := map[string]interface{}{
-							"server":      host,
-							"port":        ex.MitaPrimaryPort(),
-							"exit_id":     ex.ID,
-							"socks5_port": socksLocal,
-							"rpc_port":    rpcLocal,
-						}
-					if linkUser != "" {
-						mcfg["link_user"] = linkUser
-						mcfg["link_password"] = linkPass
+			if len(exitList) > 0 {
+				ex := exitList[0]
+				host := ex.DialHost()
+				if host != "" {
+					mcfg := map[string]interface{}{
+						"server":         host,
+						"port":           ex.MitaPrimaryPort(),
+						"exit_id":        ex.ID,
+						"socks5_port":    socksLocal,
+						"rpc_port":       rpcLocal,
+						"link_user":      linkUser,
+						"link_password":  linkPass,
+						"multiplexing":   "MULTIPLEXING_OFF",
+						"handshake_mode": "HANDSHAKE_NO_WAIT",
+						"mtu":            1400,
 					}
 					cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
 						"type":   "mieru_client",
@@ -245,7 +258,6 @@ func (b *Builder) RebuildAll() error {
 				socksCfg["upstream_host"] = "127.0.0.1"
 				socksCfg["upstream_port"] = socksLocal
 				socksCfg["via"] = "mieru_client"
-				// Local mieru socks is typically no-auth; dialViaSocks5 already offers 0x00.
 			}
 			if routeHasExternalEntryTo(routes, n.ID) {
 				socksCfg["via_external"] = true
@@ -269,21 +281,105 @@ func (b *Builder) RebuildAll() error {
 	return nil
 }
 
-// pickLinkUser chooses backbone credentials present on as many exits as possible.
-func pickLinkUser(users []model.User) (string, string) {
-	// 1) non-sticky first
-	for _, u := range users {
-		if u.Username != "" && u.ProxyPassword != "" && u.StickyExitID == "" {
-			return u.Username, u.ProxyPassword
+// ensureBackbone returns stable tunnel credentials, creating them once if missing.
+func (b *Builder) ensureBackbone() (user, pass string, err error) {
+	user, _ = b.Store.GetSetting(SettingBackboneUser)
+	pass, _ = b.Store.GetSetting(SettingBackbonePass)
+	user = strings.TrimSpace(user)
+	pass = strings.TrimSpace(pass)
+	if user != "" && pass != "" {
+		return user, pass, nil
+	}
+	// Generate once — do not rotate on every rebuild (would desync live agents mid-apply).
+	user = "bb_" + randomHex(6)
+	pass = randomHex(16)
+	if err := b.Store.SetSetting(SettingBackboneUser, user); err != nil {
+		return "", "", err
+	}
+	if err := b.Store.SetSetting(SettingBackbonePass, pass); err != nil {
+		return "", "", err
+	}
+	return user, pass, nil
+}
+
+func randomHex(nBytes int) string {
+	b := make([]byte, nBytes)
+	if _, err := rand.Read(b); err != nil {
+		// extremely unlikely; still return something non-empty
+		return fmt.Sprintf("x%dx", nBytes)
+	}
+	return hex.EncodeToString(b)
+}
+
+func localPorts(pubPort int) (socksLocal, rpcLocal int) {
+	socksLocal = localMieruSocks
+	rpcLocal = localMieruRPC
+	if pubPort == socksLocal {
+		socksLocal = 19081
+	}
+	if pubPort == rpcLocal {
+		rpcLocal = 18965
+	}
+	if rpcLocal == socksLocal {
+		rpcLocal = socksLocal + 1
+	}
+	return socksLocal, rpcLocal
+}
+
+// resolveNextHop finds the node after `nodeID` on any enabled route involving it.
+// Prefer routes that actually list this node; fall back to first hop of user-bound routes.
+func (b *Builder) resolveNextHop(nodeID string, routes []model.Route, users []model.User, routeByID map[int64]model.Route) *model.Node {
+	for _, r := range routes {
+		if !r.Enabled {
+			continue
+		}
+		var hops []model.Hop
+		_ = json.Unmarshal([]byte(r.HopsJSON), &hops)
+		involved := false
+		for _, h := range hops {
+			if h.NodeID == nodeID {
+				involved = true
+				break
+			}
+		}
+		if !involved {
+			continue
+		}
+		if next := b.nextAgentHopAfter(hops, nodeID); next != nil {
+			return next
 		}
 	}
-	// 2) any active
+	// Fallback: user-bound routes
 	for _, u := range users {
-		if u.Username != "" && u.ProxyPassword != "" {
-			return u.Username, u.ProxyPassword
+		if u.RouteID == nil {
+			continue
+		}
+		r, ok := routeByID[*u.RouteID]
+		if !ok || !r.Enabled {
+			continue
+		}
+		var hops []model.Hop
+		_ = json.Unmarshal([]byte(r.HopsJSON), &hops)
+		next := b.nextAgentHopAfter(hops, nodeID)
+		if next == nil && len(hops) > 0 {
+			// node may be implicit first hop — take first agent hop
+			for _, h := range hops {
+				if h.NodeID == "" || h.External {
+					continue
+				}
+				if nn, err := b.Store.GetNode(h.NodeID); err == nil {
+					// if this entry is not in hops, still use first real hop as upstream
+					if nodeID != nn.ID {
+						return nn
+					}
+				}
+			}
+		}
+		if next != nil {
+			return next
 		}
 	}
-	return "", ""
+	return nil
 }
 
 // exitUsers builds mita user list: sticky filter + always include backbone link user.
@@ -303,7 +399,8 @@ func exitUsers(users []model.User, exitID, linkUser, linkPass string) []model.Ag
 		})
 		seen[u.Username] = true
 	}
-	// Ensure backbone credentials exist even if sticky filtered them out.
+	// Backbone always present so mieru_client on relays/hybrid can authenticate
+	// even when no end-user is sticky to this exit.
 	if linkUser != "" && linkPass != "" && !seen[linkUser] {
 		out = append(out, model.AgentUser{
 			UserID:   0,
@@ -313,6 +410,7 @@ func exitUsers(users []model.User, exitID, linkUser, linkPass string) []model.Ag
 			MitaUser: linkUser,
 		})
 	}
+	// Refuse empty — mita plugin will fail closed; surface via empty list.
 	return out
 }
 
@@ -333,7 +431,6 @@ func (b *Builder) exitsForRelay(routes []model.Route, relayID string) []model.No
 			}
 		}
 		if !hasRelay {
-			// also accept any exit if no route mentions this relay (orphan relay fallback)
 			continue
 		}
 		for _, h := range hops {
@@ -346,8 +443,22 @@ func (b *Builder) exitsForRelay(routes []model.Route, relayID string) []model.No
 				}
 			}
 		}
+		// Also: any exit/hybrid after the relay in hop order
+		for i, h := range hops {
+			if h.NodeID != relayID {
+				continue
+			}
+			for j := i + 1; j < len(hops); j++ {
+				if hops[j].NodeID == "" || hops[j].External {
+					continue
+				}
+				if ex, err := b.Store.GetNode(hops[j].NodeID); err == nil && (ex.Role == model.RoleExit || ex.Role == model.RoleHybrid) {
+					found[ex.ID] = *ex
+				}
+			}
+		}
 	}
-	// Fallback: if no route mentions this relay, pick any exit (legacy behaviour, stable sort).
+	// Fallback: any exit on any enabled route (orphan relay).
 	if len(found) == 0 {
 		for _, r := range routes {
 			if !r.Enabled {
@@ -359,10 +470,8 @@ func (b *Builder) exitsForRelay(routes []model.Route, relayID string) []model.No
 				if h.NodeID == "" {
 					continue
 				}
-				if h.CapabilityType == "mita_server" || h.Order == len(hops)-1 {
-					if ex, err := b.Store.GetNode(h.NodeID); err == nil && (ex.Role == model.RoleExit || ex.Role == model.RoleHybrid) {
-						found[ex.ID] = *ex
-					}
+				if ex, err := b.Store.GetNode(h.NodeID); err == nil && (ex.Role == model.RoleExit || ex.Role == model.RoleHybrid) {
+					found[ex.ID] = *ex
 				}
 			}
 		}

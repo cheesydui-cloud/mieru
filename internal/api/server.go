@@ -137,6 +137,8 @@ func (s *Server) Router() *gin.Engine {
 			admin.PUT("/settings", s.putSettings)
 			admin.POST("/admin-password", s.changeAdminPassword)
 			admin.GET("/nodes/:id/install", s.nodeInstallCmd)
+			admin.GET("/diagnose", s.diagnose)
+			admin.GET("/nodes/:id/desired", s.nodeDesiredConfig)
 		}
 
 	portal := r.Group("/api/me")
@@ -478,7 +480,196 @@ func (s *Server) rebuildAll(c *gin.Context) {
 		return
 	}
 	s.store.Audit("admin", "rebuild_all", "*", "")
-	c.JSON(http.StatusOK, gin.H{"ok": true})
+	// surface backbone (username only) so ops can confirm tunnel identity
+	bbUser, _ := s.store.GetSetting(configgen.SettingBackboneUser)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "backbone_user": bbUser})
+}
+
+// diagnose returns a human-readable health snapshot of the multi-hop data plane.
+// Secrets (passwords) are never included — only usernames / hosts / plugin types.
+func (s *Server) diagnose(c *gin.Context) {
+	nodes, err := s.store.ListNodes()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	users, _ := s.store.ListActiveProxyUsers()
+	routes, _ := s.store.ListRoutes()
+	bbUser, _ := s.store.GetSetting(configgen.SettingBackboneUser)
+	bbPass, _ := s.store.GetSetting(configgen.SettingBackbonePass)
+
+	type nodeDiag struct {
+		ID            string                   `json:"id"`
+		Name          string                   `json:"name"`
+		Role          string                   `json:"role"`
+		Status        string                   `json:"status"`
+		PublicIP      string                   `json:"public_ip"`
+		PrivateIP     string                   `json:"private_ip"`
+		DialHost      string                   `json:"dial_host"`
+		PublicPort    int                      `json:"public_port"`
+		MitaPort      int                      `json:"mita_port,omitempty"`
+		ConfigVersion int64                    `json:"config_version"`
+		Plugins       []map[string]interface{} `json:"plugins"`
+		UserCount     int                      `json:"user_count"`
+		Issues        []string                 `json:"issues"`
+	}
+	out := make([]nodeDiag, 0, len(nodes))
+	globalIssues := []string{}
+	if len(users) == 0 {
+		globalIssues = append(globalIssues, "no active proxy users — socks_in/mita will refuse to start")
+	}
+	if bbUser == "" || bbPass == "" {
+		globalIssues = append(globalIssues, "backbone credentials missing — click 重建配置 to generate")
+	}
+	enabledRoutes := 0
+	for _, r := range routes {
+		if r.Enabled {
+			enabledRoutes++
+		}
+	}
+	if enabledRoutes == 0 {
+		globalIssues = append(globalIssues, "no enabled routes — entry/relay upstreams may be empty")
+	}
+
+	for _, n := range nodes {
+		d := nodeDiag{
+			ID:            n.ID,
+			Name:          n.Name,
+			Role:          n.Role,
+			Status:        n.Status,
+			PublicIP:      n.PublicIP,
+			PrivateIP:     n.PrivateIP,
+			DialHost:      n.DialHost(),
+			PublicPort:    n.PublicServicePort(),
+			ConfigVersion: n.ConfigVersion,
+			Issues:        []string{},
+		}
+		if n.Role == model.RoleExit || n.Role == model.RoleHybrid {
+			d.MitaPort = n.MitaPrimaryPort()
+		}
+		if n.DialHost() == "" {
+			d.Issues = append(d.Issues, "no public_ip / private_ip / hostname — previous hop cannot dial")
+		}
+		if n.Status != model.StatusOnline && n.Status != model.StatusDegraded {
+			d.Issues = append(d.Issues, "agent offline or never heartbeated")
+		}
+		if n.Status == model.StatusDegraded {
+			d.Issues = append(d.Issues, "agent reports degraded (last apply failed — check journalctl -u mieru-agent)")
+		}
+		_, raw, err := s.store.GetDesiredConfig(n.ID)
+		if err != nil || raw == "" {
+			d.Issues = append(d.Issues, "no desired config — rebuild needed")
+		} else {
+			var cfg model.AgentDesiredConfig
+			if json.Unmarshal([]byte(raw), &cfg) == nil {
+				d.UserCount = len(cfg.Users)
+				// redact plugin configs to host/port/type only
+				for _, p := range cfg.Plugins {
+					typ, _ := p["type"].(string)
+					pc, _ := p["config"].(map[string]interface{})
+					summary := map[string]interface{}{"type": typ}
+					if pc != nil {
+						for _, k := range []string{"listen_port", "port", "server", "upstream_host", "upstream_port", "via", "socks5_port", "port_min", "port_max", "exit_id"} {
+							if v, ok := pc[k]; ok {
+								summary[k] = v
+							}
+						}
+						if _, ok := pc["link_user"]; ok {
+							summary["link_user"] = pc["link_user"]
+						}
+					}
+					d.Plugins = append(d.Plugins, summary)
+				}
+				// role-specific checks
+				has := map[string]bool{}
+				for _, p := range cfg.Plugins {
+					t, _ := p["type"].(string)
+					has[t] = true
+				}
+				switch n.Role {
+				case model.RoleExit:
+					if !has["mita_server"] {
+						d.Issues = append(d.Issues, "missing mita_server plugin")
+					}
+					if d.UserCount == 0 {
+						d.Issues = append(d.Issues, "mita has zero users")
+					}
+				case model.RoleRelay:
+					if !has["mieru_client"] {
+						d.Issues = append(d.Issues, "missing mieru_client — no exit resolved for this relay")
+					}
+					if !has["socks_in"] {
+						d.Issues = append(d.Issues, "missing socks_in")
+					}
+				case model.RoleEntry:
+					if !has["socks_in"] {
+						d.Issues = append(d.Issues, "missing socks_in")
+					}
+				case model.RoleHybrid:
+					if !has["mita_server"] || !has["mieru_client"] || !has["socks_in"] {
+						d.Issues = append(d.Issues, "hybrid needs mita_server + mieru_client + socks_in")
+					}
+				}
+			}
+		}
+		out = append(out, d)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"version":        s.Version,
+		"backbone_user":  bbUser,
+		"backbone_set":   bbUser != "" && bbPass != "",
+		"active_users":   len(users),
+		"enabled_routes": enabledRoutes,
+		"global_issues":  globalIssues,
+		"nodes":          out,
+		"topology_hint":  "Client → Entry/External SOCKS → Relay socks_in → mieru → Exit mita → Internet. Hybrid = mita+local mieru+socks on one host.",
+	})
+}
+
+func (s *Server) nodeDesiredConfig(c *gin.Context) {
+	id := c.Param("id")
+	ver, raw, err := s.store.GetDesiredConfig(id)
+	if err != nil || raw == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no desired config — rebuild first"})
+		return
+	}
+	// Redact passwords before returning to admin UI.
+	var cfg map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		c.JSON(http.StatusOK, gin.H{"version": ver, "raw": raw})
+		return
+	}
+	if users, ok := cfg["users"].([]interface{}); ok {
+		for _, u := range users {
+			if m, ok := u.(map[string]interface{}); ok {
+				if _, has := m["password"]; has {
+					m["password"] = "***"
+				}
+			}
+		}
+	}
+	if plugins, ok := cfg["plugins"].([]interface{}); ok {
+		for _, p := range plugins {
+			if pm, ok := p.(map[string]interface{}); ok {
+				if pc, ok := pm["config"].(map[string]interface{}); ok {
+					if _, has := pc["link_password"]; has {
+						pc["link_password"] = "***"
+					}
+					if users, ok := pc["users"].([]interface{}); ok {
+						for _, u := range users {
+							if m, ok := u.(map[string]interface{}); ok {
+								if _, has := m["password"]; has {
+									m["password"] = "***"
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"version": ver, "config": cfg})
 }
 
 func (s *Server) listRoutes(c *gin.Context) {
@@ -1127,7 +1318,7 @@ func (s *Server) buildInstallCmd(c *gin.Context, n *model.Node) installInfo {
 }
 
 func (s *Server) getSettings(c *gin.Context) {
-	m, err := s.store.GetSettings("panel_url", "panel_name")
+	m, err := s.store.GetSettings("panel_url", "panel_name", configgen.SettingBackboneUser)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -1141,11 +1332,13 @@ func (s *Server) getSettings(c *gin.Context) {
 		name = "Mieru Panel"
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"panel_url":     panelURL,
-		"panel_name":    name,
-		"panel_url_set": m["panel_url"] != "",
-		"version":       s.Version,
-		"admin_user":    s.cfg.AdminUser,
+		"panel_url":      panelURL,
+		"panel_name":     name,
+		"panel_url_set":  m["panel_url"] != "",
+		"version":        s.Version,
+		"admin_user":     s.cfg.AdminUser,
+		"backbone_user":  m[configgen.SettingBackboneUser],
+		"backbone_ready": m[configgen.SettingBackboneUser] != "",
 	})
 }
 

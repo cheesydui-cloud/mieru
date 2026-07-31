@@ -59,6 +59,20 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 			upstream = net.JoinHostPort(upHost, strconv.Itoa(upPort))
 		}
 
+		// When upstream is local mieru socks, wait briefly so order races don't leave
+		// socks_in open with a dead backend (agent applies mita/mieru before socks_in).
+		if via, _ := cfg["via"].(string); via == "mieru_client" && upstream != "" {
+			deadline := time.Now().Add(8 * time.Second)
+			for time.Now().Before(deadline) {
+				c, err := net.DialTimeout("tcp", upstream, 400*time.Millisecond)
+				if err == nil {
+					_ = c.Close()
+					break
+				}
+				time.Sleep(200 * time.Millisecond)
+			}
+		}
+
 		listenAddr := net.JoinHostPort("0.0.0.0", strconv.Itoa(port))
 		return p.restart(listenAddr, users, upstream)
 	}

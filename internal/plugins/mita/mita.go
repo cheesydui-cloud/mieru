@@ -45,39 +45,46 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 		return fmt.Errorf("mita_server: no users — refuse to start (need ≥1 active panel user for auth)")
 	}
 
-	// Single primary port by default; multi-port range only when operator set a real span
-	// that still includes the primary listen port.
-	portBindings := []map[string]interface{}{}
-	if pmin > 0 && pmax > pmin {
-		// If primary is outside range, still bind primary so probe/relay match.
-		if port < pmin || port > pmax {
-			portBindings = append(portBindings, map[string]interface{}{
-				"port":     port,
-				"protocol": "TCP",
-			})
+		// Single primary port by default; multi-port range only when operator set a real span.
+		// OneClick binds TCP (and optionally UDP); panel data-plane is TCP end-to-end.
+		portBindings := []map[string]interface{}{}
+		addBinding := func(proto string) {
+			if pmin > 0 && pmax > pmin {
+				if port < pmin || port > pmax {
+					portBindings = append(portBindings, map[string]interface{}{
+						"port":     port,
+						"protocol": proto,
+					})
+				}
+				portBindings = append(portBindings, map[string]interface{}{
+					"portRange": fmt.Sprintf("%d-%d", pmin, pmax),
+					"protocol":  proto,
+				})
+			} else {
+				portBindings = append(portBindings, map[string]interface{}{
+					"port":     port,
+					"protocol": proto,
+				})
+			}
 		}
-		portBindings = append(portBindings, map[string]interface{}{
-			"portRange": fmt.Sprintf("%d-%d", pmin, pmax),
-			"protocol":  "TCP",
-		})
-	} else {
-		portBindings = append(portBindings, map[string]interface{}{
-			"port":     port,
-			"protocol": "TCP",
-		})
-	}
+		addBinding("TCP")
+		// Optional UDP if operator asks (default off — matches simple OneClick TCP install).
+		if v, ok := cfg["enable_udp"].(bool); ok && v {
+			addBinding("UDP")
+		}
 
-	mtu := toInt(cfg["mtu"])
-	if mtu < 1280 || mtu > 1500 {
-		mtu = 1400
-	}
+		mtu := toInt(cfg["mtu"])
+		if mtu < 1280 || mtu > 1500 {
+			mtu = 1400
+		}
 
-	mitaCfg := map[string]interface{}{
-		"portBindings": portBindings,
-		"users":        users,
-		"loggingLevel": "INFO",
-		"mtu":          mtu,
-	}
+		// Server shape mirrors OneClick write_server_config (single-instance path).
+		mitaCfg := map[string]interface{}{
+			"portBindings": portBindings,
+			"users":        users,
+			"loggingLevel": "INFO",
+			"mtu":          mtu,
+		}
 
 	cfgPath := filepath.Join(p.DataDir, "mita-config.json")
 	raw, err := json.MarshalIndent(mitaCfg, "", "  ")
