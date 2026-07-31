@@ -34,7 +34,25 @@ export async function api(path, options = {}) {
   const token = getToken()
   if (token) headers.Authorization = `Bearer ${token}`
 
-  const res = await fetch(path, { ...options, headers })
+  // Hop probe waits for agent heartbeat (default 15s); allow longer timeout.
+  const timeoutMs = options.timeoutMs || (path.includes('/probe') ? 60000 : 0)
+  let signal = options.signal
+  let timer
+  if (timeoutMs > 0 && !signal && typeof AbortController !== 'undefined') {
+    const ac = new AbortController()
+    signal = ac.signal
+    timer = setTimeout(() => ac.abort(), timeoutMs)
+  }
+
+  let res
+  try {
+    res = await fetch(path, { ...options, headers, signal })
+  } catch (e) {
+    if (timer) clearTimeout(timer)
+    if (e && e.name === 'AbortError') throw new Error('请求超时（探测可能需等待 Agent 心跳）')
+    throw e
+  }
+  if (timer) clearTimeout(timer)
   const text = await res.text()
   let data = null
   try {

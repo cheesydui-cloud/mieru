@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,7 +24,7 @@ import (
 	"github.com/cheesydui-cloud/mieru/internal/plugins/socksin"
 )
 
-const AgentVersion = "0.2.5"
+const AgentVersion = "0.2.6"
 
 type Agent struct {
 	cfg      config.AgentConfig
@@ -118,29 +120,67 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 }
 
-func (a *Agent) heartbeat(ctx context.Context) error {
-	body := model.HeartbeatRequest{
-		NodeID:        a.cfg.NodeID,
-		Token:         a.cfg.Token,
-		Role:          a.cfg.Role,
-		ConfigVersion: a.version,
-		AgentVersion:  AgentVersion,
-		Hostname:      os.Getenv("AGENT_HOSTNAME"),
-		PublicIP:      os.Getenv("AGENT_PUBLIC_IP"),
+	func (a *Agent) heartbeat(ctx context.Context) error {
+		body := model.HeartbeatRequest{
+			NodeID:        a.cfg.NodeID,
+			Token:         a.cfg.Token,
+			Role:          a.cfg.Role,
+			ConfigVersion: a.version,
+			AgentVersion:  AgentVersion,
+			Hostname:      os.Getenv("AGENT_HOSTNAME"),
+			PublicIP:      os.Getenv("AGENT_PUBLIC_IP"),
+		}
+		var resp struct {
+			OK            bool `json:"ok"`
+			ConfigVersion int64 `json:"config_version"`
+			NeedPull      bool `json:"need_pull"`
+			DialJobs      []struct {
+				ID        string `json:"id"`
+				Host      string `json:"host"`
+				Port      int    `json:"port"`
+				TimeoutMS int    `json:"timeout_ms"`
+			} `json:"dial_jobs"`
+		}
+		if err := a.postJSON(ctx, "/api/agent/heartbeat", body, &resp); err != nil {
+			return err
+		}
+		// Hop-to-hop probe jobs: dial target from this node and report result.
+		for _, job := range resp.DialJobs {
+			if job.ID == "" || job.Host == "" || job.Port <= 0 {
+				continue
+			}
+			timeout := time.Duration(job.TimeoutMS) * time.Millisecond
+			if timeout <= 0 {
+				timeout = 4 * time.Second
+			}
+			ok, lat, errMsg := tcpDial(job.Host, job.Port, timeout)
+			_ = a.postJSON(ctx, "/api/agent/dial-result", map[string]interface{}{
+				"node_id":     a.cfg.NodeID,
+				"token":       a.cfg.Token,
+				"job_id":      job.ID,
+				"ok":          ok,
+				"latency_ms":  lat,
+				"error":       errMsg,
+			}, nil)
+		}
+		if resp.NeedPull {
+			return a.pullAndApply(ctx)
+		}
+		return nil
 	}
-	var resp struct {
-		OK            bool  `json:"ok"`
-		ConfigVersion int64 `json:"config_version"`
-		NeedPull      bool  `json:"need_pull"`
+
+	// tcpDial measures TCP connect latency from this host to host:port.
+	func tcpDial(host string, port int, timeout time.Duration) (ok bool, latencyMs int64, errMsg string) {
+		addr := net.JoinHostPort(host, strconv.Itoa(port))
+		start := time.Now()
+		conn, err := net.DialTimeout("tcp", addr, timeout)
+		latencyMs = time.Since(start).Milliseconds()
+		if err != nil {
+			return false, latencyMs, err.Error()
+		}
+		_ = conn.Close()
+		return true, latencyMs, ""
 	}
-	if err := a.postJSON(ctx, "/api/agent/heartbeat", body, &resp); err != nil {
-		return err
-	}
-	if resp.NeedPull {
-		return a.pullAndApply(ctx)
-	}
-	return nil
-}
 
 func (a *Agent) pullAndApply(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.cfg.PanelURL+"/api/agent/config", nil)

@@ -21,6 +21,7 @@ const form = reactive({
   region: '',
   tags: 'residential',
   public_ip: '',
+  private_ip: '',
   hostname: '',
   alt_hostnames: '',
   port_min: 8964,
@@ -34,6 +35,7 @@ function blankForm() {
     region: '',
     tags: 'residential',
     public_ip: '',
+    private_ip: '',
     hostname: '',
     alt_hostnames: '',
     port_min: 8964,
@@ -48,6 +50,7 @@ function fillForm(n) {
     region: n.region || '',
     tags: n.tags || '',
     public_ip: n.public_ip || '',
+    private_ip: n.private_ip || '',
     hostname: n.hostname || '',
     alt_hostnames: n.alt_hostnames || '',
     port_min: n.port_min > 0 ? n.port_min : n.listen_port > 0 ? n.listen_port : 8964,
@@ -136,6 +139,7 @@ function payload() {
     region: form.region,
     tags,
     public_ip: form.public_ip,
+    private_ip: form.private_ip,
     hostname: form.hostname,
     alt_hostnames: form.alt_hostnames,
     port_min: min,
@@ -291,6 +295,7 @@ onUnmounted(() => {
           <th>类型</th>
           <th>在线</th>
           <th>公网 IP</th>
+          <th>内网 IP</th>
           <th>域名</th>
           <th>mita 端口</th>
           <th>区域</th>
@@ -313,6 +318,7 @@ onUnmounted(() => {
             </span>
           </td>
           <td class="mono">{{ n.public_ip || '—' }}</td>
+          <td class="mono">{{ n.private_ip || '—' }}</td>
           <td class="mono">{{ n.hostname || '—' }}</td>
           <td class="mono" style="font-size: 12px">{{ portLabel(n) }}</td>
           <td>{{ n.region || '—' }}</td>
@@ -374,7 +380,11 @@ onUnmounted(() => {
               <input v-model="form.public_ip" placeholder="家宽公网 IP" />
             </div>
             <div class="field">
-              <label>域名（可选）</label>
+              <label>内网 IP</label>
+              <input v-model="form.private_ip" placeholder="IX 内网，中继可达" />
+            </div>
+            <div class="field">
+              <label>接入域名（可选）</label>
               <input v-model="form.hostname" placeholder="exit1.example.com" />
             </div>
             <div class="field">

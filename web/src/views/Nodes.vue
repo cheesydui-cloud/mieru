@@ -20,6 +20,7 @@ const form = reactive({
   region: '',
   tags: '',
   public_ip: '',
+  private_ip: '',
   hostname: '',
   alt_hostnames: '',
   port_min: 10001,
@@ -33,6 +34,7 @@ function blankForm() {
     region: '',
     tags: '',
     public_ip: '',
+    private_ip: '',
     hostname: '',
     alt_hostnames: '',
     port_min: 10001,
@@ -47,6 +49,7 @@ function fillForm(n) {
     region: n.region || '',
     tags: n.tags || '',
     public_ip: n.public_ip || '',
+    private_ip: n.private_ip || '',
     hostname: n.hostname || '',
     alt_hostnames: n.alt_hostnames || '',
     port_min: n.port_min > 0 ? n.port_min : (n.listen_port > 0 ? n.listen_port : 10001),
@@ -115,6 +118,7 @@ function payload() {
     region: form.region,
     tags: form.tags,
     public_ip: form.public_ip,
+    private_ip: form.private_ip,
     hostname: form.hostname,
     alt_hostnames: form.alt_hostnames,
     // only start/end; backend treats start as primary listen
@@ -255,6 +259,7 @@ onUnmounted(() => {
           <th>在线</th>
           <th>接入域名</th>
           <th>公网 IP</th>
+          <th>内网 IP</th>
           <th>端口</th>
           <th>区域</th>
           <th>状态</th>
@@ -275,6 +280,7 @@ onUnmounted(() => {
           </td>
           <td class="mono">{{ n.hostname || '—' }}</td>
           <td class="mono">{{ n.public_ip || '—' }}</td>
+          <td class="mono">{{ n.private_ip || '—' }}</td>
           <td class="mono" style="font-size:12px">{{ portLabel(n) }}</td>
           <td>{{ n.region || '—' }}</td>
           <td><span class="badge">{{ n.status || '—' }}</span></td>
@@ -329,6 +335,10 @@ onUnmounted(() => {
               <input v-model="form.public_ip" placeholder="x.x.x.x" />
             </div>
             <div class="field">
+              <label>内网 IP</label>
+              <input v-model="form.private_ip" placeholder="IX/机房内网，如 10.x.x.x" />
+            </div>
+            <div class="field">
               <label>区域</label>
               <input v-model="form.region" placeholder="cn / us / sh-ix" />
             </div>
@@ -349,6 +359,7 @@ onUnmounted(() => {
             只填端口范围，例如 <code class="mono">10001</code> ～ <code class="mono">20000</code>。
             起始端口同时作为订阅/客户端主端口；范围内端口用于按用户分配转发。
             都填 <code class="mono">0</code> 则用角色默认范围。
+            <strong>内网 IP</strong>：上一跳连本节点时优先用（入口→中继、中继→落地在 IX 内网互通时填）。
             <span v-if="mode === 'edit'" class="mono"> · ID：{{ editingId }}</span>
           </div>
         </template>

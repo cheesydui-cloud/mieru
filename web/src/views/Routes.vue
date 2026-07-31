@@ -283,7 +283,7 @@ onMounted(load)
   </div>
 
   <div class="panel-toolbar">
-    <span class="muted" style="font-size:13px">Entry → Relay(mieru) → Exit(mita) · 编辑 / 测通断 / 外部入口</span>
+    <span class="muted" style="font-size:13px">Entry → Relay(mieru) → Exit(mita) · 按跳测通断 · 内网 IP</span>
     <button class="btn btn-primary btn-sm" @click="openCreate">新建线路</button>
   </div>
 
@@ -453,8 +453,8 @@ onMounted(load)
         <table class="data" v-if="probeDetail.hops?.length">
           <thead>
             <tr>
-              <th>跳</th>
-              <th>地址</th>
+              <th>链路</th>
+              <th>目标</th>
               <th>结果</th>
               <th>延迟</th>
             </tr>
@@ -463,20 +463,22 @@ onMounted(load)
             <tr v-for="(h, i) in probeDetail.hops" :key="i">
               <td>
                 <div>{{ h.label || '—' }}</div>
-                <div class="muted" style="font-size:11px">{{ h.kind }}{{ h.agent_status ? ' · agent ' + h.agent_status : '' }}</div>
+                <div class="muted" style="font-size:11px">
+                  {{ h.via ? 'via ' + h.via : h.kind }}{{ h.agent_status ? ' · ' + h.agent_status : '' }}
+                </div>
               </td>
-              <td class="mono">{{ h.host }}:{{ h.port }}</td>
+              <td class="mono">{{ h.host }}{{ h.port ? ':' + h.port : '' }}</td>
               <td>
-                <span class="badge" :class="h.ok ? 'badge-ok' : 'badge-bad'">{{ h.ok ? '通' : '不通' }}</span>
-                <div v-if="h.error" class="muted" style="font-size:11px;max-width:180px;word-break:break-all">{{ h.error }}</div>
+                <span class="badge" :class="h.ok ? 'badge-ok' : 'badge-bad'">{{ h.ok ? '通' : (h.via === 'skip' ? '跳过' : '不通') }}</span>
+                <div v-if="h.error" class="muted" style="font-size:11px;max-width:220px;word-break:break-all">{{ h.error }}</div>
               </td>
               <td class="mono">{{ h.ok ? h.latency_ms + ' ms' : '—' }}</td>
             </tr>
           </tbody>
         </table>
         <div class="muted" style="font-size:12px;margin-top:12px;line-height:1.6">
-          从<strong>面板主机</strong>对每个 hop 的 IP:端口做 TCP 连通检测（不验证 SOCKS 账号）。
-          商家入口若仅允许客户端 IP 访问，面板测不通也属正常，以用户端为准。
+          {{ probeDetail.note || '按跳测通：从上一跳 Agent 拨测下一跳（优先内网 IP）。' }}
+          探测可能需等待 Agent 心跳（约 15s），请稍候。
         </div>
       </div>
       <div class="modal-ft">

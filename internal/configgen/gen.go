@@ -127,54 +127,49 @@ func (b *Builder) RebuildAll() error {
 				if next == nil {
 					continue
 				}
-				host := next.PublicIP
-				if host == "" {
-					host = next.Hostname
-				}
-				if host != "" {
-					upHost = host
-					upPort = next.PublicServicePort()
-					break
-				}
-			}
-			// fallback: any user route next hop
-			if upHost == "" {
-				for _, u := range users {
-					if u.RouteID == nil {
-						continue
-					}
-					r, ok := routeByID[*u.RouteID]
-					if !ok || !r.Enabled {
-						continue
-					}
-					var hops []model.Hop
-					_ = json.Unmarshal([]byte(r.HopsJSON), &hops)
-					next := b.nextAgentHopAfter(hops, n.ID)
-					if next == nil && len(hops) > 0 {
-						for _, h := range hops {
-							if h.NodeID == "" || h.External {
-								continue
-							}
-							if nn, err := b.Store.GetNode(h.NodeID); err == nil {
-								next = nn
-								break
-							}
-						}
-					}
-					if next == nil {
-						continue
-					}
-					host := next.PublicIP
-					if host == "" {
-						host = next.Hostname
-					}
+					// Prefer next hop private/LAN IP (IX fabric) when set.
+					host := next.DialHost()
 					if host != "" {
 						upHost = host
 						upPort = next.PublicServicePort()
 						break
 					}
 				}
-			}
+				// fallback: any user route next hop
+				if upHost == "" {
+					for _, u := range users {
+						if u.RouteID == nil {
+							continue
+						}
+						r, ok := routeByID[*u.RouteID]
+						if !ok || !r.Enabled {
+							continue
+						}
+						var hops []model.Hop
+						_ = json.Unmarshal([]byte(r.HopsJSON), &hops)
+						next := b.nextAgentHopAfter(hops, n.ID)
+						if next == nil && len(hops) > 0 {
+							for _, h := range hops {
+								if h.NodeID == "" || h.External {
+									continue
+								}
+								if nn, err := b.Store.GetNode(h.NodeID); err == nil {
+									next = nn
+									break
+								}
+							}
+						}
+						if next == nil {
+							continue
+						}
+						host := next.DialHost()
+						if host != "" {
+							upHost = host
+							upPort = next.PublicServicePort()
+							break
+						}
+					}
+				}
 
 			emin, emax := n.EffectivePortRange()
 			socksCfg := map[string]interface{}{
@@ -216,20 +211,18 @@ func (b *Builder) RebuildAll() error {
 				rpcLocal = 18965
 			}
 
-			if len(exitList) > 0 {
-				ex := exitList[0]
-				host := ex.PublicIP
-				if host == "" {
-					host = ex.Hostname
-				}
-				if host != "" {
-					mcfg := map[string]interface{}{
-						"server":      host,
-						"port":        ex.MitaPrimaryPort(),
-						"exit_id":     ex.ID,
-						"socks5_port": socksLocal,
-						"rpc_port":    rpcLocal,
-					}
+				if len(exitList) > 0 {
+					ex := exitList[0]
+					// Prefer exit private/LAN IP so relay on same IX uses fabric path.
+					host := ex.DialHost()
+					if host != "" {
+						mcfg := map[string]interface{}{
+							"server":      host,
+							"port":        ex.MitaPrimaryPort(),
+							"exit_id":     ex.ID,
+							"socks5_port": socksLocal,
+							"rpc_port":    rpcLocal,
+						}
 					if linkUser != "" {
 						mcfg["link_user"] = linkUser
 						mcfg["link_password"] = linkPass

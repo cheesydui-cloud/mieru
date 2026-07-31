@@ -11,6 +11,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cheesydui-cloud/mieru/internal/auth"
@@ -21,7 +22,22 @@ import (
 	"github.com/cheesydui-cloud/mieru/web"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
+
+// dialJob is a one-shot TCP probe the panel asks an agent to perform.
+type dialJob struct {
+	ID      string `json:"id"`
+	Host    string `json:"host"`
+	Port    int    `json:"port"`
+	Timeout int    `json:"timeout_ms"` // client-side dial timeout hint
+}
+
+type dialResult struct {
+	OK      bool
+	Latency int64
+	Error   string
+}
 
 type Server struct {
 	cfg     config.PanelConfig
@@ -29,15 +45,22 @@ type Server struct {
 	jwt     *auth.TokenManager
 	gen     *configgen.Builder
 	Version string
+
+	// pending dials: nodeID → jobID → waiting channel
+	dialMu   sync.Mutex
+	dialWait map[string]map[string]chan dialResult // nodeID -> jobID -> ch
+	dialJobs map[string][]dialJob                  // nodeID -> queued jobs
 }
 
 func New(cfg config.PanelConfig, st *store.Store) *Server {
 	return &Server{
-		cfg:     cfg,
-		store:   st,
-		jwt:     auth.NewTokenManager(cfg.JWTSecret),
-		gen:     &configgen.Builder{Store: st},
-		Version: "dev",
+		cfg:      cfg,
+		store:    st,
+		jwt:      auth.NewTokenManager(cfg.JWTSecret),
+		gen:      &configgen.Builder{Store: st},
+		Version:  "dev",
+		dialWait: map[string]map[string]chan dialResult{},
+		dialJobs: map[string][]dialJob{},
 	}
 }
 
@@ -73,12 +96,13 @@ func (s *Server) Router() *gin.Engine {
 	r.GET("/api/sub/:token", s.subscription)
 	r.POST("/api/auth/login", s.login)
 
-	agent := r.Group("/api/agent")
-	{
-		agent.POST("/heartbeat", s.agentHeartbeat)
-		agent.GET("/config", s.agentConfig)
-		agent.POST("/traffic", s.agentTraffic)
-	}
+		agent := r.Group("/api/agent")
+		{
+			agent.POST("/heartbeat", s.agentHeartbeat)
+			agent.GET("/config", s.agentConfig)
+			agent.POST("/traffic", s.agentTraffic)
+			agent.POST("/dial-result", s.agentDialResult)
+		}
 
 	admin := r.Group("/api/admin")
 	admin.Use(s.requireAdmin())
@@ -337,6 +361,8 @@ func (s *Server) createNode(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name and role required"})
 		return
 	}
+	req.PrivateIP = strings.TrimSpace(req.PrivateIP)
+	req.PublicIP = strings.TrimSpace(req.PublicIP)
 	req.NormalizePorts()
 	if err := validateNodePorts(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -394,24 +420,25 @@ func (s *Server) updateNode(c *gin.Context) {
 	n.Role = req.Role
 	n.Region = req.Region
 	n.Tags = req.Tags
-	n.PublicIP = req.PublicIP
-	n.Hostname = req.Hostname
-	n.AltHostnames = req.AltHostnames
-	n.ListenPort = req.ListenPort
-	n.PortMin = req.PortMin
-	n.PortMax = req.PortMax
-	n.NormalizePorts()
-	if req.Status != "" {
-		n.Status = req.Status
-	}
-	if req.MetaJSON != "" {
-		n.MetaJSON = req.MetaJSON
-	}
-	if err := validateNodePorts(n); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	if err := s.store.UpdateNode(n); err != nil {
+		n.PublicIP = req.PublicIP
+		n.PrivateIP = strings.TrimSpace(req.PrivateIP)
+		n.Hostname = req.Hostname
+		n.AltHostnames = req.AltHostnames
+		n.ListenPort = req.ListenPort
+		n.PortMin = req.PortMin
+		n.PortMax = req.PortMax
+		n.NormalizePorts()
+		if req.Status != "" {
+			n.Status = req.Status
+		}
+		if req.MetaJSON != "" {
+			n.MetaJSON = req.MetaJSON
+		}
+		if err := validateNodePorts(n); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if err := s.store.UpdateNode(n); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -524,8 +551,9 @@ func (s *Server) deleteRoute(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-// probeRoute checks TCP reachability of each hop endpoint from the panel host
-// and updates route.health. This is connectivity (port open), not full proxy auth.
+// probeRoute tests hop-to-hop reachability (entry→relay, relay→exit), not panel→each hop.
+// For each consecutive pair, dial is executed on the source node agent when online;
+// external entry has no agent so that leg is informational only.
 func (s *Server) probeRoute(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	r, err := s.store.GetRoute(id)
@@ -537,85 +565,186 @@ func (s *Server) probeRoute(c *gin.Context) {
 	_ = json.Unmarshal([]byte(r.HopsJSON), &hops)
 
 	type hopResult struct {
-		Label   string `json:"label"`
-		Kind    string `json:"kind"` // external|node
-		Host    string `json:"host"`
-		Port    int    `json:"port"`
-		OK      bool   `json:"ok"`
-		Latency int64  `json:"latency_ms"`
-		Error   string `json:"error,omitempty"`
-		NodeID  string `json:"node_id,omitempty"`
-		Status  string `json:"agent_status,omitempty"`
+		Label    string `json:"label"`
+		Kind     string `json:"kind"` // leg|node|external|info
+		From     string `json:"from,omitempty"`
+		To       string `json:"to,omitempty"`
+		Host     string `json:"host"`
+		Port     int    `json:"port"`
+		OK       bool   `json:"ok"`
+		Latency  int64  `json:"latency_ms"`
+		Error    string `json:"error,omitempty"`
+		NodeID   string `json:"node_id,omitempty"`
+		FromID   string `json:"from_id,omitempty"`
+		ToID     string `json:"to_id,omitempty"`
+		Status   string `json:"agent_status,omitempty"`
+		Via      string `json:"via,omitempty"` // agent|panel|skip
 	}
-	results := make([]hopResult, 0, len(hops))
-	allOK := len(hops) > 0
+	results := make([]hopResult, 0)
+	allOK := true
 	anyOK := false
+	legCount := 0
 
+	// Resolve hop endpoint for dial target (prefer private IP).
+	type resolvedHop struct {
+		hop    model.Hop
+		node   *model.Node
+		label  string
+		host   string
+		port   int
+		kind   string // external|node
+		online bool
+	}
+	resolved := make([]resolvedHop, 0, len(hops))
 	for _, h := range hops {
-		hr := hopResult{}
+		rh := resolvedHop{hop: h}
 		if h.External || (h.NodeID == "" && h.Host != "") {
-			hr.Kind = "external"
-			hr.Host = strings.TrimSpace(h.Host)
-			hr.Port = h.Port
-			if hr.Port <= 0 {
-				hr.Port = 1080
+			rh.kind = "external"
+			rh.host = strings.TrimSpace(h.Host)
+			rh.port = h.Port
+			if rh.port <= 0 {
+				rh.port = 1080
 			}
-			hr.Label = h.Name
-			if hr.Label == "" {
-				hr.Label = hr.Host
+			rh.label = h.Name
+			if rh.label == "" {
+				rh.label = rh.host
 			}
-		} else if h.NodeID != "" {
-			hr.Kind = "node"
-			hr.NodeID = h.NodeID
-			n, err := s.store.GetNode(h.NodeID)
-			if err != nil {
-				hr.OK = false
-				hr.Error = "node not found"
-				hr.Label = h.NodeID
-				results = append(results, hr)
+			resolved = append(resolved, rh)
+			continue
+		}
+		if h.NodeID == "" {
+			continue
+		}
+		n, err := s.store.GetNode(h.NodeID)
+		if err != nil {
+			rh.kind = "node"
+			rh.label = h.NodeID
+			resolved = append(resolved, rh)
+			continue
+		}
+		rh.kind = "node"
+		rh.node = n
+		rh.label = n.Name
+		rh.online = n.Status == model.StatusOnline || n.Status == model.StatusDegraded
+		// Target port: next hop's service port depending on role.
+		// exit/hybrid-as-exit → mita; otherwise public socks.
+		switch n.Role {
+		case model.RoleExit:
+			rh.port = n.MitaPrimaryPort()
+		case model.RoleHybrid:
+			// When used as exit after a relay, dial mita; as entry/middle hop use socks.
+			// Default to PublicServicePort; adjusted per leg below.
+			rh.port = n.PublicServicePort()
+		default:
+			rh.port = n.PublicServicePort()
+		}
+		if h.Port > 0 {
+			rh.port = h.Port
+		}
+		rh.host = n.DialHost()
+		resolved = append(resolved, rh)
+	}
+
+	// Build consecutive legs: hop[i] → hop[i+1]
+	for i := 0; i+1 < len(resolved); i++ {
+		from := resolved[i]
+		to := resolved[i+1]
+		legCount++
+
+		// Adjust target port: if destination is exit or hybrid after relay, use mita.
+		toPort := to.port
+		if to.node != nil {
+			if to.node.Role == model.RoleExit {
+				toPort = to.node.MitaPrimaryPort()
+			} else if to.node.Role == model.RoleHybrid {
+				// relay/entry → hybrid: if previous is relay/entry socks path to hybrid's socks;
+				// if previous is relay with mieru, dial mita on hybrid.
+				if from.node != nil && (from.node.Role == model.RoleRelay || from.node.Role == model.RoleHybrid) {
+					// Prefer mita when source is a relay (mieru client → mita).
+					if from.node.Role == model.RoleRelay {
+						toPort = to.node.MitaPrimaryPort()
+					} else {
+						toPort = to.node.PublicServicePort()
+					}
+				} else {
+					toPort = to.node.PublicServicePort()
+				}
+			} else {
+				toPort = to.node.PublicServicePort()
+			}
+			if to.hop.Port > 0 {
+				toPort = to.hop.Port
+			}
+		}
+		toHost := to.host
+		if to.node != nil {
+			toHost = to.node.DialHost()
+		}
+
+		hr := hopResult{
+			Label:  from.label + " → " + to.label,
+			Kind:   "leg",
+			From:   from.label,
+			To:     to.label,
+			Host:   toHost,
+			Port:   toPort,
+			FromID: from.hop.NodeID,
+			ToID:   to.hop.NodeID,
+		}
+		if to.node != nil {
+			hr.NodeID = to.node.ID
+			hr.Status = to.node.Status
+		}
+
+		// External entry cannot dial outbound via agent — skip with info.
+		if from.kind == "external" || from.node == nil {
+			hr.Via = "skip"
+			hr.OK = false
+			hr.Error = "外部入口无 Agent，无法从入口侧测到下一跳；请确认商家 DNAT 到中继 " + toHost + ":" + strconv.Itoa(toPort)
+			// Don't count as hard fail for overall health if later legs exist —
+			// mark degraded path: treat as non-blocking info when other legs exist.
+			allOK = false
+			results = append(results, hr)
+			continue
+		}
+
+		if toHost == "" || toPort <= 0 {
+			hr.Via = "skip"
+			hr.OK = false
+			hr.Error = "下一跳缺少地址/端口（请填写公网 IP 或内网 IP）"
+			allOK = false
+			results = append(results, hr)
+			continue
+		}
+
+		// Prefer agent-side dial from source node.
+		if from.online && from.node != nil {
+			hr.Via = "agent"
+			ok, lat, errMsg := s.requestAgentDial(from.node.ID, toHost, toPort, 5*time.Second)
+			hr.OK = ok
+			hr.Latency = lat
+			if !ok {
+				hr.Error = errMsg
+				if hr.Error == "" {
+					hr.Error = "agent dial failed"
+				}
 				allOK = false
-				continue
+			} else {
+				anyOK = true
 			}
-			hr.Label = n.Name
-			hr.Status = n.Status
-			host := n.Hostname
-			if host == "" {
-				host = n.PublicIP
-			}
-			// prefer IP for panel→node probe when both set
-			if n.PublicIP != "" {
-				host = n.PublicIP
-			}
-			hr.Host = host
-			// Probe public service (socks for entry/relay/hybrid, mita for exit).
-			hr.Port = n.PublicServicePort()
-			if h.Port > 0 {
-				hr.Port = h.Port
-			}
-		} else {
-			hr.OK = false
-			hr.Error = "empty hop"
-			hr.Label = "?"
 			results = append(results, hr)
-			allOK = false
 			continue
 		}
 
-		if hr.Host == "" || hr.Port <= 0 {
-			hr.OK = false
-			hr.Error = "missing host/port"
-			results = append(results, hr)
-			allOK = false
-			continue
-		}
-
-		addr := net.JoinHostPort(hr.Host, strconv.Itoa(hr.Port))
+		// Fallback: panel dials target (only useful when panel can reach private net — rare).
+		hr.Via = "panel"
+		addr := net.JoinHostPort(toHost, strconv.Itoa(toPort))
 		start := time.Now()
 		conn, err := net.DialTimeout("tcp", addr, 4*time.Second)
 		hr.Latency = time.Since(start).Milliseconds()
 		if err != nil {
 			hr.OK = false
-			hr.Error = err.Error()
+			hr.Error = "源节点 Agent 离线，面板代测失败: " + err.Error()
 			allOK = false
 		} else {
 			_ = conn.Close()
@@ -625,10 +754,50 @@ func (s *Server) probeRoute(c *gin.Context) {
 		results = append(results, hr)
 	}
 
-	health := "unknown"
-	if len(hops) == 0 {
-		health = "unknown"
+	// Single-hop routes: no leg to test — report node self-listen from agent if possible.
+	if legCount == 0 && len(resolved) == 1 {
+		rh := resolved[0]
+		hr := hopResult{
+			Label:  rh.label + "（单跳自检）",
+			Kind:   "node",
+			Host:   rh.host,
+			Port:   rh.port,
+			NodeID: rh.hop.NodeID,
+		}
+		if rh.node != nil {
+			hr.Status = rh.node.Status
+			hr.Host = rh.node.DialHost()
+			hr.Port = rh.node.PublicServicePort()
+		}
+		if rh.node != nil && rh.online {
+			// dial 127.0.0.1 on agent
+			hr.Via = "agent"
+			ok, lat, errMsg := s.requestAgentDial(rh.node.ID, "127.0.0.1", hr.Port, 3*time.Second)
+			hr.OK = ok
+			hr.Latency = lat
+			if !ok {
+				hr.Error = errMsg
+				allOK = false
+			} else {
+				anyOK = true
+			}
+		} else {
+			hr.Via = "skip"
+			hr.OK = false
+			hr.Error = "无法测通：无连续跳且节点离线"
+			allOK = false
+		}
+		results = append(results, hr)
+		legCount = 1
+	}
+
+	if legCount == 0 {
 		allOK = false
+	}
+
+	health := "unknown"
+	if legCount == 0 {
+		health = "unknown"
 	} else if allOK {
 		health = "ok"
 	} else if anyOK {
@@ -640,11 +809,11 @@ func (s *Server) probeRoute(c *gin.Context) {
 	r.Health = health
 
 	c.JSON(http.StatusOK, gin.H{
-		"route_id": id,
-		"health":   health,
-		"hops":     results,
+		"route_id":   id,
+		"health":     health,
+		"hops":       results,
 		"checked_at": time.Now().UTC().Format(time.RFC3339),
-		"note":     "TCP connect from panel host; not full proxy authentication",
+		"note":       "按跳测通：从上一跳 Agent 拨测下一跳（优先内网 IP）。外部入口无 Agent 时该跳仅提示。",
 	})
 }
 
@@ -655,22 +824,25 @@ func (s *Server) listUsers(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	type row struct {
-		model.User
-		UpBps   int64 `json:"up_bps"`
-		DownBps int64 `json:"down_bps"`
-	}
-	out := make([]row, 0, len(list))
-	for _, u := range list {
-		r := row{User: u}
-		if sample, ok := s.store.GetRate(u.ID); ok {
-			r.UpBps = sample.UpBps
-			r.DownBps = sample.DownBps
+	base := s.publicBase(c)
+		type row struct {
+			model.User
+			UpBps        int64  `json:"up_bps"`
+			DownBps      int64  `json:"down_bps"`
+			Subscription string `json:"subscription"`
 		}
-		out = append(out, r)
+		out := make([]row, 0, len(list))
+		for _, u := range list {
+			r := row{User: u, Subscription: base + "/sub/" + u.SubToken}
+			// list still returns sub_token via model.User (needed for admin QR)
+			if sample, ok := s.store.GetRate(u.ID); ok {
+				r.UpBps = sample.UpBps
+				r.DownBps = sample.DownBps
+			}
+			out = append(out, r)
+		}
+		c.JSON(http.StatusOK, out)
 	}
-	c.JSON(http.StatusOK, out)
-}
 
 func (s *Server) createUser(c *gin.Context) {
 	var req struct {
@@ -688,8 +860,16 @@ func (s *Server) createUser(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
 		return
 	}
+	req.Username = strings.TrimSpace(req.Username)
 	if req.Username == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "username required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请填写用户名"})
+		return
+	}
+	// 用户名全局唯一 —— 重复时给中文提示，避免 SQLite UNIQUE 原文
+	if existing, err := s.store.GetUserByUsername(req.Username); err == nil && existing != nil {
+		c.JSON(http.StatusConflict, gin.H{
+			"error": fmt.Sprintf("用户名「%s」已存在（#%d），请换一个名字，或直接使用列表里的该用户", req.Username, existing.ID),
+		})
 		return
 	}
 	u := &model.User{
@@ -711,7 +891,12 @@ func (s *Server) createUser(c *gin.Context) {
 		}
 	}
 	if err := s.store.CreateUser(u); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		msg := err.Error()
+		if strings.Contains(strings.ToLower(msg), "unique") || strings.Contains(msg, "UNIQUE") {
+			c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("用户名「%s」已存在，请换一个名字", req.Username)})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": msg})
 		return
 	}
 	_ = s.gen.RebuildAll()
@@ -854,14 +1039,11 @@ func (s *Server) myProfile(c *gin.Context) {
 	nodes, _ := s.store.ListNodes()
 	for _, n := range nodes {
 		if n.Role == model.RoleEntry || n.Role == model.RoleHybrid {
-			host := n.Hostname
-			if host == "" {
-				host = n.PublicIP
-			}
-			if host == "" {
-				continue
-			}
-			entries = append(entries, gin.H{"name": n.Name, "host": host, "status": n.Status, "region": n.Region})
+				host := n.PublicHost()
+				if host == "" {
+					continue
+				}
+				entries = append(entries, gin.H{"name": n.Name, "host": host, "status": n.Status, "region": n.Region})
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -1122,44 +1304,38 @@ func (s *Server) nodeInstallCmd(c *gin.Context) {
 						// first hop might be relay when only relay+exit — skip for client entry
 						continue
 					}
-					host := n.Hostname
-					if host == "" {
-						host = n.PublicIP
+						host := n.PublicHost()
+						if host == "" {
+							continue
+						}
+						name := n.Name
+						if name == "" {
+							name = host
+						}
+						port := n.PublicServicePort()
+						key := fmt.Sprintf("%s:%d", host, port)
+						if seen[key] {
+							continue
+						}
+						seen[key] = true
+						proxies = append(proxies, entryProxy{Name: name, Host: host, Port: port})
+						break
 					}
+				}
+			}
+
+			// Fallback: all entry/hybrid nodes (legacy / unbound route).
+			if len(proxies) == 0 {
+				nodes, _ := s.store.ListNodes()
+				for _, n := range nodes {
+					if n.Role != model.RoleEntry && n.Role != model.RoleHybrid {
+						continue
+					}
+					host := n.PublicHost()
 					if host == "" {
 						continue
 					}
 					name := n.Name
-					if name == "" {
-						name = host
-					}
-					port := n.PublicServicePort()
-					key := fmt.Sprintf("%s:%d", host, port)
-					if seen[key] {
-						continue
-					}
-					seen[key] = true
-					proxies = append(proxies, entryProxy{Name: name, Host: host, Port: port})
-					break
-				}
-			}
-		}
-
-		// Fallback: all entry/hybrid nodes (legacy / unbound route).
-		if len(proxies) == 0 {
-			nodes, _ := s.store.ListNodes()
-			for _, n := range nodes {
-				if n.Role != model.RoleEntry && n.Role != model.RoleHybrid {
-					continue
-				}
-				host := n.Hostname
-				if host == "" {
-					host = n.PublicIP
-				}
-				if host == "" {
-					continue
-				}
-				name := n.Name
 				if name == "" {
 					name = host
 				}
@@ -1214,7 +1390,125 @@ func (s *Server) agentHeartbeat(c *gin.Context) {
 	_ = s.store.Heartbeat(req.NodeID, req.PublicIP, req.Hostname, status)
 	n, _ := s.store.GetNode(req.NodeID)
 	needPull := n != nil && n.ConfigVersion > req.ConfigVersion
-	c.JSON(http.StatusOK, gin.H{"ok": true, "config_version": n.ConfigVersion, "need_pull": needPull})
+	// Drain pending dial jobs for this agent (hop-to-hop probe).
+	jobs := s.takeDialJobs(req.NodeID)
+	c.JSON(http.StatusOK, gin.H{
+		"ok":             true,
+		"config_version": n.ConfigVersion,
+		"need_pull":      needPull,
+		"dial_jobs":      jobs,
+	})
+}
+
+func (s *Server) agentDialResult(c *gin.Context) {
+	var req struct {
+		NodeID  string `json:"node_id"`
+		Token   string `json:"token"`
+		JobID   string `json:"job_id"`
+		OK      bool   `json:"ok"`
+		Latency int64  `json:"latency_ms"`
+		Error   string `json:"error"`
+	}
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
+		return
+	}
+	if _, err := s.store.GetNodeByToken(req.NodeID, req.Token); err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	s.completeDial(req.NodeID, req.JobID, dialResult{OK: req.OK, Latency: req.Latency, Error: req.Error})
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// requestAgentDial queues a TCP dial job for the agent and waits for the result.
+// Agent picks it up on next heartbeat (agents heartbeat every few seconds).
+func (s *Server) requestAgentDial(nodeID, host string, port int, wait time.Duration) (ok bool, latencyMs int64, errMsg string) {
+	if nodeID == "" || host == "" || port <= 0 {
+		return false, 0, "invalid dial target"
+	}
+	jobID := strings.ReplaceAll(uuid.NewString(), "-", "")
+	ch := make(chan dialResult, 1)
+
+	s.dialMu.Lock()
+	if s.dialWait[nodeID] == nil {
+		s.dialWait[nodeID] = map[string]chan dialResult{}
+	}
+	s.dialWait[nodeID][jobID] = ch
+	s.dialJobs[nodeID] = append(s.dialJobs[nodeID], dialJob{
+		ID:      jobID,
+		Host:    host,
+		Port:    port,
+		Timeout: 4000,
+	})
+	s.dialMu.Unlock()
+
+	defer func() {
+		s.dialMu.Lock()
+		if m := s.dialWait[nodeID]; m != nil {
+			delete(m, jobID)
+			if len(m) == 0 {
+				delete(s.dialWait, nodeID)
+			}
+		}
+		// drop unconsumed job if still queued
+		if jobs := s.dialJobs[nodeID]; len(jobs) > 0 {
+			kept := jobs[:0]
+			for _, j := range jobs {
+				if j.ID != jobID {
+					kept = append(kept, j)
+				}
+			}
+			if len(kept) == 0 {
+				delete(s.dialJobs, nodeID)
+			} else {
+				s.dialJobs[nodeID] = kept
+			}
+		}
+		s.dialMu.Unlock()
+	}()
+
+	// Agents pick jobs on heartbeat (default 15s) — wait at least one full cycle + slack.
+	if wait < 22*time.Second {
+		wait = 22 * time.Second
+	}
+	select {
+	case res := <-ch:
+		if res.OK {
+			return true, res.Latency, ""
+		}
+		msg := res.Error
+		if msg == "" {
+			msg = "dial failed"
+		}
+		return false, res.Latency, msg
+	case <-time.After(wait):
+		return false, 0, "等待 Agent 拨测超时（节点可能离线或心跳间隔过长）"
+	}
+}
+
+func (s *Server) takeDialJobs(nodeID string) []dialJob {
+	s.dialMu.Lock()
+	defer s.dialMu.Unlock()
+	jobs := s.dialJobs[nodeID]
+	delete(s.dialJobs, nodeID)
+	if jobs == nil {
+		return []dialJob{}
+	}
+	return jobs
+}
+
+func (s *Server) completeDial(nodeID, jobID string, res dialResult) {
+	s.dialMu.Lock()
+	defer s.dialMu.Unlock()
+	if m := s.dialWait[nodeID]; m != nil {
+		if ch, ok := m[jobID]; ok {
+			select {
+			case ch <- res:
+			default:
+			}
+		}
+	}
 }
 
 func (s *Server) agentConfig(c *gin.Context) {

@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS nodes (
   region TEXT DEFAULT '',
   tags TEXT DEFAULT '',
   public_ip TEXT DEFAULT '',
+  private_ip TEXT DEFAULT '',
   hostname TEXT DEFAULT '',
   alt_hostnames TEXT DEFAULT '',
   agent_token TEXT NOT NULL,
@@ -153,6 +154,7 @@ CREATE TABLE IF NOT EXISTS settings (
 			`ALTER TABLE nodes ADD COLUMN listen_port INTEGER NOT NULL DEFAULT 0`,
 			`ALTER TABLE nodes ADD COLUMN port_min INTEGER NOT NULL DEFAULT 0`,
 			`ALTER TABLE nodes ADD COLUMN port_max INTEGER NOT NULL DEFAULT 0`,
+			`ALTER TABLE nodes ADD COLUMN private_ip TEXT DEFAULT ''`,
 		} {
 			_, _ = s.db.Exec(q) // ignore "duplicate column" on fresh DBs
 		}
@@ -287,9 +289,9 @@ func (s *Store) CreateNode(n *model.Node) error {
 		n.ConfigVersion = 1
 	}
 	ts := now()
-	_, err := s.db.Exec(`INSERT INTO nodes(id,name,role,region,tags,public_ip,hostname,alt_hostnames,agent_token,status,last_seen,config_version,meta_json,created_at,updated_at,listen_port,port_min,port_max)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		n.ID, n.Name, n.Role, n.Region, n.Tags, n.PublicIP, n.Hostname, n.AltHostnames, n.AgentToken,
+	_, err := s.db.Exec(`INSERT INTO nodes(id,name,role,region,tags,public_ip,private_ip,hostname,alt_hostnames,agent_token,status,last_seen,config_version,meta_json,created_at,updated_at,listen_port,port_min,port_max)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		n.ID, n.Name, n.Role, n.Region, n.Tags, n.PublicIP, n.PrivateIP, n.Hostname, n.AltHostnames, n.AgentToken,
 		n.Status, nil, n.ConfigVersion, n.MetaJSON, ts, ts, n.ListenPort, n.PortMin, n.PortMax)
 	if err != nil {
 		return err
@@ -301,8 +303,8 @@ func (s *Store) CreateNode(n *model.Node) error {
 
 func (s *Store) UpdateNode(n *model.Node) error {
 	ts := now()
-	_, err := s.db.Exec(`UPDATE nodes SET name=?, role=?, region=?, tags=?, public_ip=?, hostname=?, alt_hostnames=?, status=?, meta_json=?, listen_port=?, port_min=?, port_max=?, updated_at=? WHERE id=?`,
-		n.Name, n.Role, n.Region, n.Tags, n.PublicIP, n.Hostname, n.AltHostnames, n.Status, n.MetaJSON, n.ListenPort, n.PortMin, n.PortMax, ts, n.ID)
+	_, err := s.db.Exec(`UPDATE nodes SET name=?, role=?, region=?, tags=?, public_ip=?, private_ip=?, hostname=?, alt_hostnames=?, status=?, meta_json=?, listen_port=?, port_min=?, port_max=?, updated_at=? WHERE id=?`,
+		n.Name, n.Role, n.Region, n.Tags, n.PublicIP, n.PrivateIP, n.Hostname, n.AltHostnames, n.Status, n.MetaJSON, n.ListenPort, n.PortMin, n.PortMax, ts, n.ID)
 	return err
 }
 
@@ -318,7 +320,7 @@ func (s *Store) BumpNodeConfigVersion(nodeID string) (int64, error) {
 }
 
 func (s *Store) GetNode(id string) (*model.Node, error) {
-	row := s.db.QueryRow(`SELECT id,name,role,region,tags,public_ip,hostname,alt_hostnames,agent_token,status,last_seen,config_version,meta_json,created_at,updated_at,listen_port,port_min,port_max FROM nodes WHERE id=?`, id)
+	row := s.db.QueryRow(`SELECT id,name,role,region,tags,public_ip,private_ip,hostname,alt_hostnames,agent_token,status,last_seen,config_version,meta_json,created_at,updated_at,listen_port,port_min,port_max FROM nodes WHERE id=?`, id)
 	return scanNode(row)
 }
 
@@ -334,7 +336,7 @@ func (s *Store) GetNodeByToken(id, token string) (*model.Node, error) {
 }
 
 func (s *Store) ListNodes() ([]model.Node, error) {
-	rows, err := s.db.Query(`SELECT id,name,role,region,tags,public_ip,hostname,alt_hostnames,agent_token,status,last_seen,config_version,meta_json,created_at,updated_at,listen_port,port_min,port_max FROM nodes ORDER BY created_at DESC`)
+	rows, err := s.db.Query(`SELECT id,name,role,region,tags,public_ip,private_ip,hostname,alt_hostnames,agent_token,status,last_seen,config_version,meta_json,created_at,updated_at,listen_port,port_min,port_max FROM nodes ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -371,7 +373,7 @@ func scanNode(row scannable) (*model.Node, error) {
 	var n model.Node
 	var lastSeen, created, updated sql.NullString
 	var meta sql.NullString
-	if err := row.Scan(&n.ID, &n.Name, &n.Role, &n.Region, &n.Tags, &n.PublicIP, &n.Hostname, &n.AltHostnames, &n.AgentToken, &n.Status, &lastSeen, &n.ConfigVersion, &meta, &created, &updated, &n.ListenPort, &n.PortMin, &n.PortMax); err != nil {
+	if err := row.Scan(&n.ID, &n.Name, &n.Role, &n.Region, &n.Tags, &n.PublicIP, &n.PrivateIP, &n.Hostname, &n.AltHostnames, &n.AgentToken, &n.Status, &lastSeen, &n.ConfigVersion, &meta, &created, &updated, &n.ListenPort, &n.PortMin, &n.PortMax); err != nil {
 		return nil, err
 	}
 	if lastSeen.Valid {

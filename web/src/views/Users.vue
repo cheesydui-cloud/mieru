@@ -1,5 +1,6 @@
 <script setup>
 import { onMounted, onUnmounted, reactive, ref } from 'vue'
+import QRCode from 'qrcode'
 import { api, copyText, formatBytes, formatBps, statusBadge } from '../api'
 
 const users = ref([])
@@ -15,6 +16,14 @@ const form = reactive({
   route_id: null,
   note: '',
 })
+
+// subscription modal
+const subShow = ref(false)
+const subUser = ref(null)
+const subLink = ref('')
+const subQR = ref('')
+const subLoading = ref(false)
+
 let timer
 
 async function load() {
@@ -71,8 +80,14 @@ async function resetPw(id) {
 }
 
 async function resetSub(id) {
+  if (!confirm('重置订阅后旧链接立即失效，确认？')) return
   const res = await api(`/api/admin/users/${id}/reset-sub`, { method: 'POST' })
-  toast.value = `新订阅：${res.subscription}`
+  toast.value = `新订阅已生成`
+  await load()
+  // if modal open for this user, refresh
+  if (subShow.value && subUser.value?.id === id) {
+    await openSub({ ...subUser.value, subscription: res.subscription, sub_token: res.sub_token })
+  }
 }
 
 async function remove(id) {
@@ -94,6 +109,41 @@ function subURL(tokenPath) {
   if (!tokenPath) return ''
   if (tokenPath.startsWith('http')) return tokenPath
   return `${location.origin}${tokenPath}`
+}
+
+function userSubURL(u) {
+  if (!u) return ''
+  if (u.subscription) return subURL(u.subscription)
+  if (u.sub_token) return `${location.origin}/sub/${u.sub_token}`
+  return ''
+}
+
+async function openSub(u) {
+  subUser.value = u
+  subLink.value = userSubURL(u)
+  subQR.value = ''
+  subShow.value = true
+  subLoading.value = true
+  try {
+    if (!subLink.value && u?.id) {
+      const detail = await api(`/api/admin/users/${u.id}`)
+      if (detail?.subscription) {
+        subLink.value = subURL(detail.subscription)
+        subUser.value = { ...u, ...(detail.user || {}), subscription: detail.subscription }
+      }
+    }
+    if (subLink.value) {
+      subQR.value = await QRCode.toDataURL(subLink.value, {
+        width: 240,
+        margin: 2,
+        color: { dark: '#0f172a', light: '#ffffff' },
+      })
+    }
+  } catch (e) {
+    error.value = e.message || '生成二维码失败'
+  } finally {
+    subLoading.value = false
+  }
 }
 
 onMounted(() => {
@@ -154,6 +204,7 @@ onUnmounted(() => clearInterval(timer))
           <td class="mono">{{ u.route_id || '—' }}</td>
           <td>
             <div class="row-actions">
+              <button class="btn btn-primary btn-sm" @click="openSub(u)">订阅地址</button>
               <button class="btn btn-ghost btn-sm" @click="resetPw(u.id)">重置密码</button>
               <button class="btn btn-ghost btn-sm" @click="resetSub(u.id)">重置订阅</button>
               <button class="btn btn-danger btn-sm" @click="remove(u.id)">删除</button>
@@ -207,12 +258,57 @@ onUnmounted(() => clearInterval(timer))
           <div class="row-actions" style="margin-top:10px">
             <button class="btn btn-ghost btn-sm" @click="copy(created.proxy_password)">复制密码</button>
             <button class="btn btn-ghost btn-sm" @click="copy(subURL(created.subscription))">复制订阅</button>
+            <button
+              class="btn btn-primary btn-sm"
+              @click="openSub({ id: created.user?.id, username: created.user?.username || form.username, subscription: created.subscription, sub_token: created.sub_token })"
+            >
+              查看二维码
+            </button>
           </div>
         </div>
       </div>
       <div class="modal-ft">
         <button class="btn btn-ghost" @click="show = false">关闭</button>
         <button class="btn btn-primary" @click="create">创建</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- subscription + QR -->
+  <div v-if="subShow" class="modal-mask" @click.self="subShow = false">
+    <div class="modal" style="width:min(480px,100%)">
+      <div class="modal-hd">
+        <h3>订阅地址 · {{ subUser?.username || '' }}</h3>
+        <button class="btn btn-ghost btn-sm" @click="subShow = false">关闭</button>
+      </div>
+      <div class="modal-bd" style="text-align:center">
+        <div v-if="subLoading" class="muted" style="padding:24px">生成二维码…</div>
+        <template v-else>
+          <div
+            v-if="subQR"
+            style="display:inline-block;padding:12px;background:#fff;border-radius:12px;border:1px solid var(--border);margin-bottom:14px"
+          >
+            <img :src="subQR" alt="订阅二维码" width="240" height="240" style="display:block" />
+          </div>
+          <div v-else class="muted" style="padding:16px">无法生成二维码（缺少订阅链接）</div>
+          <div class="field" style="text-align:left">
+            <label>订阅链接（Clash / 兼容客户端）</label>
+            <textarea
+              readonly
+              rows="3"
+              class="mono"
+              style="width:100%;resize:vertical;background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;padding:12px;font-size:12px"
+              :value="subLink"
+            />
+          </div>
+          <div class="muted" style="font-size:12px;line-height:1.55;margin-top:8px;text-align:left">
+            扫码或复制链接导入客户端。重置订阅会使本链接立即失效。
+          </div>
+        </template>
+      </div>
+      <div class="modal-ft">
+        <button class="btn btn-ghost" @click="subShow = false">关闭</button>
+        <button class="btn btn-primary" :disabled="!subLink" @click="copy(subLink)">复制链接</button>
       </div>
     </div>
   </div>

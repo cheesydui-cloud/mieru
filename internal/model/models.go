@@ -1,6 +1,9 @@
 package model
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // Node roles are generic — not bound to any cloud vendor.
 const (
@@ -34,6 +37,9 @@ type Node struct {
 	Region       string    `json:"region"`
 	Tags         string    `json:"tags"` // comma-separated
 	PublicIP     string    `json:"public_ip"`
+	// PrivateIP is the LAN / IX internal address used by previous hops
+	// (e.g. entry→relay, relay→exit on the same fabric). Empty = use PublicIP/Hostname.
+	PrivateIP    string    `json:"private_ip"`
 	Hostname     string    `json:"hostname"` // domain preferred for clients
 	AltHostnames string    `json:"alt_hostnames"`
 	// PortMin/PortMax: node port range (start-end). Client/subscription uses PortMin as primary.
@@ -154,6 +160,33 @@ func (n *Node) MitaPrimaryPort() int {
 	default:
 		return n.EffectiveListenPort()
 	}
+}
+
+// DialHost returns the address previous hops should use to reach this node.
+// Prefer private/LAN IP (IX fabric) when set; else public IP; else hostname.
+func (n *Node) DialHost() string {
+	if n == nil {
+		return ""
+	}
+	if ip := strings.TrimSpace(n.PrivateIP); ip != "" {
+		return ip
+	}
+	if ip := strings.TrimSpace(n.PublicIP); ip != "" {
+		return ip
+	}
+	return strings.TrimSpace(n.Hostname)
+}
+
+// PublicHost is client-facing address (subscription / external clients).
+// Prefer hostname, then public IP (never private_ip — clients are off-net).
+func (n *Node) PublicHost() string {
+	if n == nil {
+		return ""
+	}
+	if h := strings.TrimSpace(n.Hostname); h != "" {
+		return h
+	}
+	return strings.TrimSpace(n.PublicIP)
 }
 
 // PortInRange maps userID into the node's allowed port pool (stable).
