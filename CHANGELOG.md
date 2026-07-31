@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.2] - 2026-08-01
+
+### Fixed — cm7 `mieru apply: exit status 1`
+- Root cause: client JSON had `"httpProxyPort": 0`, which **mieru 3.x rejects** (`HTTP proxy port number 0 is invalid`).
+- Agent now **omits** unused `httpProxyPort` and starts with a full config file via `MIERU_CONFIG_JSON_FILE` (no fragile apply-merge).
+
+### Ops
+```bash
+# 只需升级 cm7（relay）agent；面板可一并升
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | \
+  MIERU_VERSION=v0.3.2 bash -s -- \
+  --panel-url http://面板:8080 --node-id n_5cd543dd56fd --token ... --role relay
+# 面板点「重建配置」，等 cm7 变在线
+```
+
 ## [0.3.1] - 2026-08-01
 
 ### Fixed — degraded 可见 + 国内下载

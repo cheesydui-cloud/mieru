@@ -105,6 +105,8 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 		}
 
 		// Profile name "default" matches OneClick export for easier manual debug.
+		// IMPORTANT: do NOT set httpProxyPort=0 — mieru ValidateFullClientConfig rejects it
+		// ("HTTP proxy port number 0 is invalid"). Omit the field entirely when unused.
 		mieruCfg := map[string]interface{}{
 			"profiles": []map[string]interface{}{
 				{
@@ -121,84 +123,66 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 					"handshakeMode": handshake,
 				},
 			},
-			"activeProfile":      "default",
-			"rpcPort":            rpcPort,
-			"socks5Port":         socksPort,
-			"loggingLevel":       "INFO",
-			"socks5ListenLAN":    true, // local socks_in on 127.0.0.1 must reach it
-			"httpProxyPort":      0,
-			"httpProxyListenLAN": false,
+			"activeProfile":   "default",
+			"rpcPort":         rpcPort,
+			"socks5Port":      socksPort,
+			"loggingLevel":    "INFO",
+			"socks5ListenLAN": true, // local socks_in on 127.0.0.1 must reach it
 		}
 
-	cfgPath := filepath.Join(p.DataDir, "mieru-config.json")
-	raw, err := json.MarshalIndent(mieruCfg, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(cfgPath, raw, 0o600); err != nil {
-		return err
-	}
-	_ = os.WriteFile(filepath.Join(p.DataDir, "mieru-client.json"), raw, 0o600)
-	_ = os.WriteFile(filepath.Join(p.DataDir, "socks5.port"), []byte(strconv.Itoa(socksPort)), 0o644)
-	log.Printf("[mieru_client] wrote %s → %s:%d socks5=:%d user=%s mux=%s hs=%s",
-		cfgPath, server, port, socksPort, linkUser, muxLevel, handshake)
-
-	binDir := p.BinDir
-	if binDir == "" {
-		binDir = filepath.Join(p.DataDir, "bin")
-	}
-	bin, err := procutil.EnsureBinary("mieru", binDir)
-	if err != nil {
-		return fmt.Errorf("mieru binary: %w", err)
-	}
-
-	// Prefer explicit config path via env so apply is reliable for non-interactive agent user.
-	env := []string{
-		"MIERU_CONFIG_JSON_FILE=" + cfgPath,
-	}
-
-	// apply (merge into client config store)
-	var applyOut string
-	var applyErr error
-	for i := 0; i < 3; i++ {
-		applyOut, applyErr = procutil.RunCaptureEnv(env, bin, "apply", "config", cfgPath)
-		if applyErr == nil {
-			log.Printf("[mieru_client] apply ok: %s", strings.TrimSpace(applyOut))
-			break
+		// Store file = full client config. mieru reads MIERU_CONFIG_JSON_FILE as the
+		// live config store. We write a complete validated JSON and start directly —
+		// do NOT use `apply config` against a store that may still contain
+		// httpProxyPort:0 from older agents (ValidateFullClientConfig rejects it).
+		cfgPath := filepath.Join(p.DataDir, "mieru-config.json")
+		raw, err := json.MarshalIndent(mieruCfg, "", "  ")
+		if err != nil {
+			return err
 		}
-		// fallback without env
-		applyOut, applyErr = procutil.RunCapture(bin, "apply", "config", cfgPath)
-		if applyErr == nil {
-			log.Printf("[mieru_client] apply ok (no env): %s", strings.TrimSpace(applyOut))
-			break
+		if err := os.WriteFile(cfgPath, raw, 0o600); err != nil {
+			return err
 		}
-		log.Printf("[mieru_client] apply attempt %d: %v (%s)", i+1, applyErr, strings.TrimSpace(applyOut))
-		time.Sleep(time.Second)
-	}
-	if applyErr != nil {
-		return fmt.Errorf("mieru apply: %w (%s)", applyErr, strings.TrimSpace(applyOut))
-	}
+		_ = os.WriteFile(filepath.Join(p.DataDir, "mieru-client.json"), raw, 0o600)
+		_ = os.WriteFile(filepath.Join(p.DataDir, "socks5.port"), []byte(strconv.Itoa(socksPort)), 0o644)
+		// Wipe legacy bad store if present under common names
+		for _, stale := range []string{"client-store.json", "mieru.json"} {
+			_ = os.Remove(filepath.Join(p.DataDir, stale))
+		}
+		log.Printf("[mieru_client] wrote %s → %s:%d socks5=:%d user=%s mux=%s hs=%s",
+			cfgPath, server, port, socksPort, linkUser, muxLevel, handshake)
 
-	_, _ = procutil.RunCaptureEnv(env, bin, "stop")
-	_, _ = procutil.RunCapture(bin, "stop")
-	time.Sleep(400 * time.Millisecond)
+		binDir := p.BinDir
+		if binDir == "" {
+			binDir = filepath.Join(p.DataDir, "bin")
+		}
+		bin, err := procutil.EnsureBinary("mieru", binDir)
+		if err != nil {
+			return fmt.Errorf("mieru binary: %w", err)
+		}
 
-	var startOut string
-	var startErr error
-	for i := 0; i < 5; i++ {
-		startOut, startErr = procutil.RunCaptureEnv(env, bin, "start")
+		env := []string{
+			"MIERU_CONFIG_JSON_FILE=" + cfgPath,
+		}
+
+		// stop any previous instance (same config path)
+		_, _ = procutil.RunCaptureEnv(env, bin, "stop")
+		time.Sleep(400 * time.Millisecond)
+
+		var startOut string
+		var startErr error
+		for i := 0; i < 5; i++ {
+			startOut, startErr = procutil.RunCaptureEnv(env, bin, "start")
+			if startErr == nil {
+				break
+			}
+			log.Printf("[mieru_client] start attempt %d: %v (%s)", i+1, startErr, strings.TrimSpace(startOut))
+			// rewrite config in case something truncated it
+			_ = os.WriteFile(cfgPath, raw, 0o600)
+			time.Sleep(time.Duration(i+1) * 500 * time.Millisecond)
+		}
 		if startErr != nil {
-			startOut, startErr = procutil.RunCapture(bin, "start")
+			return fmt.Errorf("mieru start: %w (%s)", startErr, strings.TrimSpace(startOut))
 		}
-		if startErr == nil {
-			break
-		}
-		log.Printf("[mieru_client] start attempt %d: %v (%s)", i+1, startErr, strings.TrimSpace(startOut))
-		time.Sleep(time.Duration(i+1) * 500 * time.Millisecond)
-	}
-	if startErr != nil {
-		return fmt.Errorf("mieru start: %w (%s)", startErr, strings.TrimSpace(startOut))
-	}
 	log.Printf("[mieru_client] started socks5 127.0.0.1:%d → %s:%d (%s)", socksPort, server, port, strings.TrimSpace(startOut))
 
 	// Connectivity test — log but only soft-fail once; hard-fail if socks not listening.

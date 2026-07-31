@@ -5,7 +5,7 @@
 set -euo pipefail
 
 REPO="${MIERU_REPO:-cheesydui-cloud/mieru}"
-VERSION="${MIERU_VERSION:-v0.3.1}"
+VERSION="${MIERU_VERSION:-v0.3.2}"
 PREFIX="${MIERU_PREFIX:-/usr/local}"
 # Agent has its own install dir — never overwrite panel's /opt/mieru-panel
 INSTALL_DIR="${MIERU_AGENT_INSTALL_DIR:-/opt/mieru-agent}"
