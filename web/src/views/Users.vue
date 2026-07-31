@@ -107,59 +107,62 @@ onUnmounted(() => clearInterval(timer))
   <div v-if="error" class="error">{{ error }}</div>
   <div v-if="toast" class="toast" @click="toast = ''">{{ toast }}</div>
 
-  <div class="panel">
-    <div class="panel-hd">
-      <h2>用户</h2>
-      <button class="btn btn-primary btn-sm" @click="openCreate">开户</button>
-    </div>
-    <div class="panel-bd">
-      <table class="data" v-if="users.length">
-        <thead>
-          <tr>
-            <th>用户</th>
-            <th>状态</th>
-            <th>到期</th>
-            <th>流量</th>
-            <th>实时</th>
-            <th>线路</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="u in users" :key="u.id">
-            <td>
-              <div>{{ u.username }}</div>
-              <div class="muted mono" style="font-size:12px">#{{ u.id }}</div>
-            </td>
-            <td>
-              <span class="badge" :class="statusBadge(u.status)">
-                <span class="dot"></span>{{ u.status }}
-              </span>
-            </td>
-            <td class="mono">{{ u.expire_at ? u.expire_at.slice(0, 10) : '永久' }}</td>
-            <td class="num">
-              {{ formatBytes(u.traffic_used_bytes) }}
-              <span class="muted">/</span>
-              {{ u.traffic_limit_bytes ? formatBytes(u.traffic_limit_bytes) : '∞' }}
-            </td>
-            <td class="num">
-              ↓ {{ formatBps(u.down_bps) }}
-              <span class="muted">·</span>
-              ↑ {{ formatBps(u.up_bps) }}
-            </td>
-            <td class="mono">{{ u.route_id || '—' }}</td>
-            <td>
-              <div class="row-actions">
-                <button class="btn btn-ghost btn-sm" @click="resetPw(u.id)">重置密码</button>
-                <button class="btn btn-ghost btn-sm" @click="resetSub(u.id)">重置订阅</button>
-                <button class="btn btn-danger btn-sm" @click="remove(u.id)">删除</button>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <div v-else class="empty">暂无用户</div>
-    </div>
+  <div class="page-tabs">
+    <div class="page-tab active">用户列表</div>
+  </div>
+
+  <div class="panel-toolbar">
+    <span class="muted" style="font-size:13px">开户、绑定线路、订阅与代理密码</span>
+    <button class="btn btn-primary btn-sm" @click="openCreate">开户</button>
+  </div>
+
+  <div class="table-wrap">
+    <table class="data" v-if="users.length">
+      <thead>
+        <tr>
+          <th>用户</th>
+          <th>状态</th>
+          <th>到期</th>
+          <th>流量</th>
+          <th>实时</th>
+          <th>线路</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="u in users" :key="u.id">
+          <td>
+            <div class="name-link">{{ u.username }}</div>
+            <div class="muted mono" style="font-size:11px">#{{ u.id }}</div>
+          </td>
+          <td>
+            <span class="badge" :class="statusBadge(u.status)">
+              <span class="dot"></span>{{ u.status }}
+            </span>
+          </td>
+          <td class="mono">{{ u.expire_at ? u.expire_at.slice(0, 10) : '永久' }}</td>
+          <td class="num">
+            {{ formatBytes(u.traffic_used_bytes) }}
+            <span class="muted">/</span>
+            {{ u.traffic_limit_bytes ? formatBytes(u.traffic_limit_bytes) : '∞' }}
+          </td>
+          <td class="num">
+            ↓ {{ formatBps(u.down_bps) }}
+            <span class="muted">·</span>
+            ↑ {{ formatBps(u.up_bps) }}
+          </td>
+          <td class="mono">{{ u.route_id || '—' }}</td>
+          <td>
+            <div class="row-actions">
+              <button class="btn btn-ghost btn-sm" @click="resetPw(u.id)">重置密码</button>
+              <button class="btn btn-ghost btn-sm" @click="resetSub(u.id)">重置订阅</button>
+              <button class="btn btn-danger btn-sm" @click="remove(u.id)">删除</button>
+            </div>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    <div v-else class="empty">暂无用户</div>
   </div>
 
   <div v-if="show" class="modal-mask" @click.self="show = false">

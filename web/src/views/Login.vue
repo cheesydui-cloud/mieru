@@ -30,11 +30,10 @@ async function submit() {
 <template>
   <div class="login-page">
     <div class="login-card">
-      <div class="brand" style="padding: 0 0 18px">
+      <div class="brand" style="padding: 0 0 16px; border: none; min-height: auto">
         <div class="brand-mark">M</div>
         <div class="brand-text">
-          <strong>Mieru Panel</strong>
-          <span>多跳编排 · 稳定 · 隐蔽</span>
+          <strong>Mieru 控制台</strong>
         </div>
       </div>
       <h1>登录</h1>
@@ -48,7 +47,7 @@ async function submit() {
           <label>密码</label>
           <input v-model="password" type="password" autocomplete="current-password" />
         </div>
-        <button class="btn btn-primary" style="width: 100%; height: 42px" :disabled="loading">
+        <button class="btn btn-primary" style="width: 100%; height: 40px" :disabled="loading">
           {{ loading ? '登录中…' : '进入控制台' }}
         </button>
         <div v-if="error" class="error">{{ error }}</div>

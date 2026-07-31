@@ -35,31 +35,43 @@ onUnmounted(() => clearInterval(timer))
   <div v-if="error" class="error">{{ error }}</div>
   <div class="grid-stats" v-if="stats">
     <div class="card">
-      <h3>在线节点</h3>
-      <div class="value">{{ stats.online_nodes }}<span class="muted" style="font-size:16px"> / {{ stats.total_nodes }}</span></div>
-      <div class="sub">异常 {{ stats.unhealthy_nodes }}</div>
+      <h3>节点在线 / 总数</h3>
+      <div class="value">{{ stats.online_nodes }}<span class="slash"> / {{ stats.total_nodes }}</span></div>
     </div>
     <div class="card">
-      <h3>活跃用户</h3>
-      <div class="value">{{ stats.active_users }}<span class="muted" style="font-size:16px"> / {{ stats.total_users }}</span></div>
-      <div class="sub">含到期自动停用</div>
+      <h3>用户正常 / 总数</h3>
+      <div class="value">{{ stats.active_users }}<span class="slash"> / {{ stats.total_users }}</span></div>
     </div>
     <div class="card">
       <h3>今日上行</h3>
-      <div class="value">{{ formatBytes(stats.today_up) }}</div>
-      <div class="sub">落地汇总</div>
+      <div class="value" style="font-size:22px">{{ formatBytes(stats.today_up) }}</div>
     </div>
     <div class="card">
       <h3>今日下行</h3>
-      <div class="value">{{ formatBytes(stats.today_down) }}</div>
-      <div class="sub">Exit 权威计量</div>
+      <div class="value" style="font-size:22px">{{ formatBytes(stats.today_down) }}</div>
+    </div>
+    <div class="card">
+      <h3>异常节点</h3>
+      <div class="value">{{ stats.unhealthy_nodes || 0 }}</div>
+    </div>
+    <div class="card">
+      <h3>实时上报用户</h3>
+      <div class="value">{{ rates.length }}</div>
+    </div>
+    <div class="card">
+      <h3>节点总数</h3>
+      <div class="value">{{ stats.total_nodes }}</div>
+    </div>
+    <div class="card">
+      <h3>自动刷新</h3>
+      <div class="value" style="font-size:16px;font-weight:500;color:var(--text-secondary)">5s</div>
     </div>
   </div>
 
   <div class="panel">
     <div class="panel-hd">
       <h2>节点状态</h2>
-      <span class="muted">5s 自动刷新</span>
+      <span class="muted" style="font-size:12px">5s 自动刷新</span>
     </div>
     <div class="panel-bd">
       <table class="data" v-if="nodes.length">
@@ -75,13 +87,13 @@ onUnmounted(() => clearInterval(timer))
         </thead>
         <tbody>
           <tr v-for="n in nodes" :key="n.id">
-            <td>{{ n.name }}</td>
+            <td><span class="name-link">{{ n.name }}</span></td>
             <td><span class="badge">{{ n.role }}</span></td>
             <td class="mono">{{ n.hostname || n.public_ip || '—' }}</td>
             <td>{{ n.region || '—' }}</td>
             <td>
               <span class="badge" :class="statusBadge(n.status)">
-                <span class="dot"></span>{{ n.status }}
+                <span class="dot"></span>{{ n.status === 'online' ? '在线' : n.status }}
               </span>
             </td>
             <td class="num">v{{ n.config_version }}</td>

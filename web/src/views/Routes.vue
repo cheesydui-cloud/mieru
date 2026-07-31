@@ -248,10 +248,10 @@ function healthLabel(h) {
 }
 
 function healthClass(h) {
-  if (h === 'ok') return 'badge-ok'
-  if (h === 'degraded') return 'badge-warn'
-  if (h === 'down') return 'badge-bad'
-  return 'badge-muted'
+  if (h === 'ok') return 'ok'
+  if (h === 'degraded') return 'warn'
+  if (h === 'down') return 'err'
+  return ''
 }
 
 async function probe(r) {
@@ -278,45 +278,44 @@ onMounted(load)
   <div v-if="error" class="error">{{ error }}</div>
   <div v-if="toast" class="toast" @click="toast = ''">{{ toast }}</div>
 
-  <div class="panel">
-    <div class="panel-hd">
-      <div>
-        <h2>线路编排</h2>
-        <div class="muted" style="font-size: 12px; margin-top: 4px">
-          Entry → Relay(mieru) → Exit(mita) · 支持编辑 / 测通断 / 外部入口
-        </div>
-      </div>
-      <button class="btn btn-primary btn-sm" @click="openCreate">＋ 新建线路</button>
-    </div>
-    <div class="panel-bd">
-      <table class="data" v-if="routes.length">
-        <thead>
-          <tr>
-            <th>名称</th>
-            <th>策略</th>
-            <th>Hops</th>
-            <th>健康</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="r in routes" :key="r.id">
-            <td>
-              <div>{{ r.name }}</div>
-              <div class="muted mono" style="font-size:12px">#{{ r.id }}</div>
-            </td>
-            <td><span class="badge">{{ r.strategy }}</span></td>
-            <td>
-              <div class="hops">
-                <template v-for="(h, i) in parseHops(r.hops_json)" :key="i">
-                  <span v-if="i" class="hop-arrow">→</span>
-                  <span class="hop" :class="{ external: h.external || (!h.node_id && h.host) }">{{ hopLabel(h) }}</span>
-                </template>
-                <span v-if="!parseHops(r.hops_json).length" class="muted">无 hops</span>
-              </div>
-            </td>
-            <td>
-              <span class="badge" :class="healthClass(r.health)">{{ healthLabel(r.health) }}</span>
+  <div class="page-tabs">
+    <div class="page-tab active">线路编排</div>
+  </div>
+
+  <div class="panel-toolbar">
+    <span class="muted" style="font-size:13px">Entry → Relay(mieru) → Exit(mita) · 编辑 / 测通断 / 外部入口</span>
+    <button class="btn btn-primary btn-sm" @click="openCreate">新建线路</button>
+  </div>
+
+  <div class="table-wrap">
+    <table class="data" v-if="routes.length">
+      <thead>
+        <tr>
+          <th>名称</th>
+          <th>策略</th>
+          <th>Hops</th>
+          <th>健康</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="r in routes" :key="r.id">
+          <td>
+            <div class="name-link">{{ r.name }}</div>
+            <div class="muted mono" style="font-size:11px">#{{ r.id }}</div>
+          </td>
+          <td><span class="badge">{{ r.strategy }}</span></td>
+          <td>
+            <div class="hops">
+              <template v-for="(h, i) in parseHops(r.hops_json)" :key="i">
+                <span v-if="i" class="hop-arrow">→</span>
+                <span class="hop" :class="{ external: h.external || (!h.node_id && h.host) }">{{ hopLabel(h) }}</span>
+              </template>
+              <span v-if="!parseHops(r.hops_json).length" class="muted">无 hops</span>
+            </div>
+          </td>
+          <td>
+            <span class="badge" :class="healthClass(r.health)">{{ healthLabel(r.health) }}</span>
             </td>
             <td class="actions-cell">
               <div class="row-actions">
@@ -334,15 +333,14 @@ onMounted(load)
           </tr>
         </tbody>
       </table>
-      <div v-else class="empty" style="padding: 48px 24px; text-align: center">
-        <div style="font-size: 16px; margin-bottom: 8px">还没有线路</div>
-        <div class="muted" style="margin-bottom: 20px; max-width: 420px; margin-left: auto; margin-right: auto">
-          先在「节点」里创建 Relay / Exit；入口可选手动填商家 IP，再串成线路。
-        </div>
-        <button class="btn btn-primary" @click="openCreate">新建线路</button>
-        <div v-if="!hasNodes" class="muted" style="margin-top: 12px; font-size: 12px">
-          当前还没有节点，下拉里会是空的 —— 可先去「节点」页添加。
-        </div>
+    <div v-else class="empty" style="padding: 48px 24px; text-align: center">
+      <div style="font-size: 16px; margin-bottom: 8px">还没有线路</div>
+      <div class="muted" style="margin-bottom: 20px; max-width: 420px; margin-left: auto; margin-right: auto">
+        先在「节点」里创建 Relay / Exit；入口可选手动填商家 IP，再串成线路。
+      </div>
+      <button class="btn btn-primary" @click="openCreate">新建线路</button>
+      <div v-if="!hasNodes" class="muted" style="margin-top: 12px; font-size: 12px">
+        当前还没有节点，下拉里会是空的 —— 可先去「节点」页添加。
       </div>
     </div>
   </div>

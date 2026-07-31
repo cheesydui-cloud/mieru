@@ -2,11 +2,11 @@
 # Linux 一键安装 / 升级 Panel
 #   curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | bash
 #   curl -fsSL ... | PANEL_ADMIN_PASS='密码' bash
-#   curl -fsSL ... | MIERU_VERSION=v0.2.1 bash
+#   curl -fsSL ... | MIERU_VERSION=v0.2.2 bash
 set -euo pipefail
 
 REPO="${MIERU_REPO:-cheesydui-cloud/mieru}"
-VERSION="${MIERU_VERSION:-v0.2.1}"
+VERSION="${MIERU_VERSION:-v0.2.2}"
 PREFIX="${MIERU_PREFIX:-/usr/local}"
 INSTALL_DIR="${MIERU_INSTALL_DIR:-/opt/mieru-panel}"
 DATA_DIR="${MIERU_DATA_DIR:-/var/lib/mieru-panel}"

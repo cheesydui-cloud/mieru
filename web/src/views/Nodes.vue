@@ -1,8 +1,9 @@
 <script setup>
-import { onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { api, copyText, statusBadge } from '../api'
 
 const nodes = ref([])
+const filter = ref('')
 const error = ref('')
 const toast = ref('')
 const show = ref(false)
@@ -62,6 +63,20 @@ function portLabel(n) {
   if (n.listen_port > 0) return String(n.listen_port)
   return '默认'
 }
+
+const filteredNodes = computed(() => {
+  const q = (filter.value || '').trim().toLowerCase()
+  if (!q) return nodes.value || []
+  return (nodes.value || []).filter((n) => {
+    return (
+      (n.name || '').toLowerCase().includes(q) ||
+      (n.id || '').toLowerCase().includes(q) ||
+      (n.hostname || '').toLowerCase().includes(q) ||
+      (n.public_ip || '').toLowerCase().includes(q) ||
+      (n.role || '').toLowerCase().includes(q)
+    )
+  })
+})
 
 async function load() {
   try {
@@ -216,66 +231,63 @@ onUnmounted(() => {
   <div v-if="error" class="error">{{ error }}</div>
   <div v-if="toast" class="toast" @click="toast = ''">{{ toast }}</div>
 
-  <div class="panel">
-    <div class="panel-hd">
-      <div>
-        <h2>节点列表</h2>
-        <div class="muted" style="font-size:12px;margin-top:4px">
-          端口只填起始～结束；点「安装命令」复制 Agent 脚本
-        </div>
-      </div>
-      <div class="row-actions">
-        <button class="btn btn-ghost btn-sm" @click="rebuild">重建配置</button>
-        <button class="btn btn-primary btn-sm" @click="openCreate">新建节点</button>
-      </div>
+  <div class="page-tabs">
+    <div class="page-tab active">节点列表</div>
+  </div>
+
+  <div class="panel-toolbar">
+    <input class="input-filter" v-model="filter" placeholder="筛选名称…" />
+    <div class="row-actions">
+      <button class="btn btn-ghost btn-sm" @click="rebuild">重建配置</button>
+      <button class="btn btn-primary btn-sm" @click="openCreate">新增节点</button>
     </div>
-    <div class="panel-bd">
-      <table class="data" v-if="nodes.length">
-        <thead>
-          <tr>
-            <th>名称</th>
-            <th>角色</th>
-            <th>接入域名</th>
-            <th>公网 IP</th>
-            <th>端口范围</th>
-            <th>区域 / 标签</th>
-            <th>状态</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="n in nodes" :key="n.id">
-            <td>
-              <div>{{ n.name }}</div>
-              <div class="muted mono" style="font-size:12px">{{ n.id }}</div>
-            </td>
-            <td><span class="badge">{{ n.role }}</span></td>
-            <td class="mono">{{ n.hostname || '—' }}</td>
-            <td class="mono">{{ n.public_ip || '—' }}</td>
-            <td class="mono" style="font-size:12px">{{ portLabel(n) }}</td>
-            <td>
-              <div>{{ n.region || '—' }}</div>
-              <div class="muted" style="font-size:12px">{{ n.tags || '' }}</div>
-            </td>
-            <td>
-              <span class="badge" :class="statusBadge(n.status)">
-                <span class="dot"></span>{{ n.status }}
-              </span>
-            </td>
-            <td>
-              <div class="row-actions">
-                <button class="btn btn-ghost btn-sm" @click="openEdit(n)">编辑</button>
-                <button class="btn btn-primary btn-sm" @click="showInstall(n.id)">安装命令</button>
-                <button class="btn btn-danger btn-sm" @click="remove(n.id)">删除</button>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <div v-else class="empty" style="padding:40px 20px;text-align:center">
-        <div style="margin-bottom:12px">还没有节点</div>
-        <button class="btn btn-primary" @click="openCreate">新建节点</button>
-      </div>
+  </div>
+
+  <div class="table-wrap">
+    <table class="data" v-if="filteredNodes.length">
+      <thead>
+        <tr>
+          <th>名称</th>
+          <th>角色</th>
+          <th>在线</th>
+          <th>接入域名</th>
+          <th>公网 IP</th>
+          <th>端口</th>
+          <th>区域</th>
+          <th>状态</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="n in filteredNodes" :key="n.id">
+          <td>
+            <div class="name-link">{{ n.name }}</div>
+            <div class="muted mono" style="font-size:11px">{{ n.id }}</div>
+          </td>
+          <td><span class="badge">{{ n.role }}</span></td>
+          <td>
+            <span class="badge" :class="statusBadge(n.status)">
+              <span class="dot"></span>{{ n.status === 'online' ? '在线' : (n.status || '离线') }}
+            </span>
+          </td>
+          <td class="mono">{{ n.hostname || '—' }}</td>
+          <td class="mono">{{ n.public_ip || '—' }}</td>
+          <td class="mono" style="font-size:12px">{{ portLabel(n) }}</td>
+          <td>{{ n.region || '—' }}</td>
+          <td><span class="badge">{{ n.status || '—' }}</span></td>
+          <td>
+            <div class="row-actions">
+              <button class="btn btn-ghost btn-sm" @click="openEdit(n)">编辑</button>
+              <button class="btn btn-ghost btn-sm" @click="showInstall(n.id)">安装命令</button>
+              <button class="btn btn-danger btn-sm" @click="remove(n.id)">删除</button>
+            </div>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    <div v-else class="empty">
+      <div style="margin-bottom:12px">{{ nodes.length ? '无匹配节点' : '还没有节点' }}</div>
+      <button v-if="!nodes.length" class="btn btn-primary" @click="openCreate">新增节点</button>
     </div>
   </div>
 

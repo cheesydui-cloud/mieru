@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.2] - 2026-07-31
+
+### UI — light admin console (weir-style)
+- Light canvas, white cards with thin borders, compact left sidebar + top bar
+- Dashboard metric cards: `标签` + large `n / total` numbers
+- Nodes / Users / Routes: filter toolbar, bordered table shell, green online status
+- Login and shell rebranded as **Mieru 控制台**
+
 ## [0.2.1] - 2026-07-30
 
 ### Fixed — data plane actually listens (OneClick-aligned)
