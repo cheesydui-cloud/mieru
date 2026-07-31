@@ -6,7 +6,7 @@
 set -euo pipefail
 
 REPO="${MIERU_REPO:-cheesydui-cloud/mieru}"
-VERSION="${MIERU_VERSION:-v0.3.0}"
+VERSION="${MIERU_VERSION:-v0.3.1}"
 PREFIX="${MIERU_PREFIX:-/usr/local}"
 INSTALL_DIR="${MIERU_INSTALL_DIR:-/opt/mieru-panel}"
 DATA_DIR="${MIERU_DATA_DIR:-/var/lib/mieru-panel}"
@@ -31,7 +31,13 @@ esac
 
 TARGET="linux-${arch}"
 ASSET="mieru-panel-${VERSION}-${TARGET}.tar.gz"
-URL="https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}"
+URLS=(
+  "https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}"
+  "https://ghfast.top/https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}"
+  "https://mirror.ghproxy.com/https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}"
+  "https://ghproxy.net/https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}"
+  "https://gitdl.cn/https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}"
+)
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
@@ -114,18 +120,26 @@ listener_exe() {
   return 0
 }
 
-echo "==> 下载 ${URL}"
-if ! curl -fL --retry 3 --retry-delay 2 "$URL" -o "$TMP/$ASSET"; then
-  echo "错误: 下载失败 ${URL}" >&2
-  echo "请确认 release 存在: https://github.com/${REPO}/releases/tag/${VERSION}" >&2
+DL_OK=0
+for URL in "${URLS[@]}"; do
+  echo "==> 下载 ${URL}"
+  if curl -fL --connect-timeout 15 --retry 2 --retry-delay 1 "$URL" -o "$TMP/$ASSET"; then
+    SIZE=$(wc -c <"$TMP/$ASSET" | tr -d ' ')
+    if [[ "${SIZE:-0}" -ge 1000000 ]]; then
+      DL_OK=1
+      break
+    fi
+    echo "  文件过小 (${SIZE} bytes)，换镜像…"
+  else
+    echo "  失败，换镜像…"
+  fi
+done
+if [[ "$DL_OK" -ne 1 ]]; then
+  echo "错误: 所有镜像下载失败。请确认 release: https://github.com/${REPO}/releases/tag/${VERSION}" >&2
   exit 1
 fi
-	SIZE=$(wc -c <"$TMP/$ASSET" | tr -d ' ')
-	if [[ "${SIZE:-0}" -lt 1000000 ]]; then
-	  echo "错误: 下载文件过小 (${SIZE} bytes)，可能不是完整 release" >&2
-	  exit 1
-	fi
-	echo "==> 下载完成 ${SIZE} bytes"
+SIZE=$(wc -c <"$TMP/$ASSET" | tr -d ' ')
+echo "==> 下载完成 ${SIZE} bytes"
 
 	# 列出成员：忽略 macOS AppleDouble (._*) / xattr 警告（GNU tar 可能 exit≠0）
 	LIST_FILE="$TMP/tar.list"

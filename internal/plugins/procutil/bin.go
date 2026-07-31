@@ -78,12 +78,37 @@ func EnsureBinary(name, binDir string) (string, error) {
 	}
 
 	asset := fmt.Sprintf("%s_%s_%s_%s.tar.gz", name, ver, goos, arch)
-	url := fmt.Sprintf("https://github.com/enfein/mieru/releases/download/v%s/%s", ver, asset)
-	log.Printf("[procutil] downloading %s → %s", url, dest)
-	if err := downloadAndExtractBinary(url, name, dest); err != nil {
-		return "", fmt.Errorf("download %s: %w", name, err)
+	// Multiple mirrors — CN hosts often cannot reach github.com directly.
+	urls := releaseURLs(ver, asset)
+	var lastErr error
+	for _, url := range urls {
+		log.Printf("[procutil] downloading %s → %s", url, dest)
+		if err := downloadAndExtractBinary(url, name, dest); err != nil {
+			log.Printf("[procutil] download failed: %v", err)
+			lastErr = err
+			continue
+		}
+		return dest, nil
 	}
-	return dest, nil
+	return "", fmt.Errorf("download %s: all mirrors failed (last: %w); install manually: put %s in PATH or %s", name, lastErr, name, dest)
+}
+
+// releaseURLs returns candidate download URLs (GitHub + common CN-friendly mirrors).
+func releaseURLs(ver, asset string) []string {
+	base := fmt.Sprintf("enfein/mieru/releases/download/v%s/%s", ver, asset)
+	urls := []string{
+		"https://github.com/" + base,
+		// ghproxy-style mirrors (may rotate)
+		"https://ghfast.top/https://github.com/" + base,
+		"https://mirror.ghproxy.com/https://github.com/" + base,
+		"https://ghproxy.net/https://github.com/" + base,
+		"https://gitdl.cn/https://github.com/" + base,
+	}
+	// Allow operator override: MIERU_DOWNLOAD_MIRROR=https://my.cdn/prefix
+	if m := strings.TrimRight(os.Getenv("MIERU_DOWNLOAD_MIRROR"), "/"); m != "" {
+		urls = append([]string{m + "/https://github.com/" + base, m + "/" + base}, urls...)
+	}
+	return urls
 }
 
 func tryInstallMitaPackage(ver, arch string) (string, error) {
@@ -91,7 +116,7 @@ func tryInstallMitaPackage(ver, arch string) (string, error) {
 	if os.Geteuid() != 0 {
 		return "", fmt.Errorf("not root")
 	}
-	var url, pkgPath string
+	var pkgPath string
 	tmp := os.TempDir()
 	switch {
 	case fileExists("/usr/bin/dpkg") || fileExists("/usr/bin/apt-get"):
@@ -103,9 +128,8 @@ func tryInstallMitaPackage(ver, arch string) (string, error) {
 			debArch = "arm64"
 		}
 		asset := fmt.Sprintf("mita_%s_%s.deb", ver, debArch)
-		url = fmt.Sprintf("https://github.com/enfein/mieru/releases/download/v%s/%s", ver, asset)
 		pkgPath = filepath.Join(tmp, asset)
-		if err := downloadFile(url, pkgPath); err != nil {
+		if err := downloadFirst(releaseURLs(ver, asset), pkgPath); err != nil {
 			return "", err
 		}
 		cmd := exec.Command("dpkg", "-i", pkgPath)
@@ -129,9 +153,8 @@ func tryInstallMitaPackage(ver, arch string) (string, error) {
 			rpmArch = "aarch64"
 		}
 		asset := fmt.Sprintf("mita-%s-1.%s.rpm", ver, rpmArch)
-		url = fmt.Sprintf("https://github.com/enfein/mieru/releases/download/v%s/%s", ver, asset)
 		pkgPath = filepath.Join(tmp, asset)
-		if err := downloadFile(url, pkgPath); err != nil {
+		if err := downloadFirst(releaseURLs(ver, asset), pkgPath); err != nil {
 			return "", err
 		}
 		var cmd *exec.Cmd
@@ -184,6 +207,22 @@ func downloadFile(url, dest string) error {
 	defer f.Close()
 	_, err = io.Copy(f, res.Body)
 	return err
+}
+
+func downloadFirst(urls []string, dest string) error {
+	var last error
+	for _, u := range urls {
+		log.Printf("[procutil] trying package %s", u)
+		if err := downloadFile(u, dest); err != nil {
+			last = err
+			continue
+		}
+		return nil
+	}
+	if last == nil {
+		last = fmt.Errorf("no urls")
+	}
+	return last
 }
 
 func downloadAndExtractBinary(url, binName, dest string) error {

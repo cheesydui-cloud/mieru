@@ -67,6 +67,13 @@ function portLabel(n) {
   return '默认'
 }
 
+function statusLabel(s) {
+  if (s === 'online') return '在线'
+  if (s === 'degraded') return '异常'
+  if (s === 'offline') return '离线'
+  return s || '离线'
+}
+
 const filteredNodes = computed(() => {
   const q = (filter.value || '').trim().toLowerCase()
   if (!q) return nodes.value || []
@@ -271,11 +278,14 @@ onUnmounted(() => {
           <td>
             <div class="name-link">{{ n.name }}</div>
             <div class="muted mono" style="font-size:11px">{{ n.id }}</div>
+            <div v-if="n.apply_error" class="apply-err" :title="n.apply_error">
+              {{ n.apply_error }}
+            </div>
           </td>
           <td><span class="badge">{{ n.role }}</span></td>
           <td>
             <span class="badge" :class="statusBadge(n.status)">
-              <span class="dot"></span>{{ n.status === 'online' ? '在线' : (n.status || '离线') }}
+              <span class="dot"></span>{{ statusLabel(n.status) }}
             </span>
           </td>
           <td class="mono">{{ n.hostname || '—' }}</td>
@@ -283,7 +293,10 @@ onUnmounted(() => {
           <td class="mono">{{ n.private_ip || '—' }}</td>
           <td class="mono" style="font-size:12px">{{ portLabel(n) }}</td>
           <td>{{ n.region || '—' }}</td>
-          <td><span class="badge">{{ n.status || '—' }}</span></td>
+          <td>
+            <span class="badge" :class="statusBadge(n.status)">{{ n.status || '—' }}</span>
+            <div v-if="n.agent_version" class="muted" style="font-size:11px;margin-top:2px">v{{ n.agent_version }}</div>
+          </td>
           <td>
             <div class="row-actions">
               <button class="btn btn-ghost btn-sm" @click="openEdit(n)">编辑</button>
@@ -439,3 +452,21 @@ onUnmounted(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+.apply-err {
+  margin-top: 4px;
+  max-width: 320px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: #b45309;
+  background: #fff7ed;
+  border: 1px solid #fdba74;
+  border-radius: 6px;
+  padding: 4px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: help;
+}
+</style>

@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.3.1] - 2026-08-01
+
+### Fixed — degraded 可见 + 国内下载
+- Agent 心跳上报 **真实 apply 错误**；节点列表直接显示（无需 SSH journalctl）。
+- 下载 mieru/mita / agent / panel 包时自动尝试 **GitHub 镜像**（ghfast / ghproxy / gitdl）。
+- 安装脚本多镜像回退，国内 VPS 拉 GitHub 更稳。
+
+### Ops
+```bash
+# 面板 + cm7 agent 都升到 v0.3.1 后看节点行下的红色错误文案
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.3.1 bash
+# cm7 上（复制面板「安装命令」或）:
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | \
+  MIERU_VERSION=v0.3.1 bash -s -- --panel-url ... --node-id n_5cd543dd56fd --token ... --role relay
+```
+若仍 degraded：节点名下方会显示具体错误（例如 `download mieru: all mirrors failed`）。可在 cm7 上手动：
+```bash
+# 任选能下到的方式把 mieru 放到 PATH
+curl -fL -o /tmp/mieru.tgz 'https://ghfast.top/https://github.com/enfein/mieru/releases/download/v3.35.0/mieru_3.35.0_linux_amd64.tar.gz'
+tar -xzf /tmp/mieru.tgz -C /usr/local/bin
+chmod +x /usr/local/bin/mieru
+systemctl restart mieru-agent
+```
+
 ## [0.3.0] - 2026-08-01
 
 ### Data plane refactor (OneClick-aligned)

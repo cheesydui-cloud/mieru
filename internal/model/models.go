@@ -323,6 +323,9 @@ type HeartbeatRequest struct {
 	PublicIP      string  `json:"public_ip"`
 	Hostname      string  `json:"hostname"`
 	Message       string  `json:"message"`
+	// ApplyError is the last plugin apply failure (empty = healthy).
+	// Shown on panel so operators don't need SSH to journalctl.
+	ApplyError string `json:"apply_error,omitempty"`
 }
 
 type TrafficReport struct {

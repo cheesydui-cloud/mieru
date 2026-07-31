@@ -5,7 +5,7 @@
 set -euo pipefail
 
 REPO="${MIERU_REPO:-cheesydui-cloud/mieru}"
-VERSION="${MIERU_VERSION:-v0.3.0}"
+VERSION="${MIERU_VERSION:-v0.3.1}"
 PREFIX="${MIERU_PREFIX:-/usr/local}"
 # Agent has its own install dir — never overwrite panel's /opt/mieru-panel
 INSTALL_DIR="${MIERU_AGENT_INSTALL_DIR:-/opt/mieru-agent}"
@@ -58,7 +58,14 @@ case "$arch" in
 esac
 
 ASSET="mieru-panel-${VERSION}-linux-${arch}.tar.gz"
-URL="https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}"
+# Primary + CN-friendly mirrors (github.com often blocked on domestic VPS)
+URLS=(
+  "https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}"
+  "https://ghfast.top/https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}"
+  "https://mirror.ghproxy.com/https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}"
+  "https://ghproxy.net/https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}"
+  "https://gitdl.cn/https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}"
+)
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
@@ -76,16 +83,25 @@ $SUDO pkill -9 -f '/usr/local/bin/mieru-agent' 2>/dev/null || true
 $SUDO pkill -9 -f "${INSTALL_DIR}/agent" 2>/dev/null || true
 sleep 1
 
-echo "==> 下载 ${URL}"
-if ! curl -fL --retry 3 --retry-delay 2 "$URL" -o "$TMP/$ASSET"; then
-  echo "错误: 下载失败 ${URL}" >&2
+DL_OK=0
+for URL in "${URLS[@]}"; do
+  echo "==> 下载 ${URL}"
+  if curl -fL --connect-timeout 15 --retry 2 --retry-delay 1 "$URL" -o "$TMP/$ASSET"; then
+    SIZE=$(wc -c <"$TMP/$ASSET" | tr -d ' ')
+    if [[ "${SIZE:-0}" -ge 1000000 ]]; then
+      DL_OK=1
+      break
+    fi
+    echo "  文件过小 (${SIZE} bytes)，换镜像…"
+  else
+    echo "  失败，换镜像…"
+  fi
+done
+if [[ "$DL_OK" -ne 1 ]]; then
+  echo "错误: 所有镜像下载失败。可手动下载 ${ASSET} 后放到本机，或设置可访问 GitHub 的代理。" >&2
   exit 1
 fi
 SIZE=$(wc -c <"$TMP/$ASSET" | tr -d ' ')
-if [[ "${SIZE:-0}" -lt 1000000 ]]; then
-  echo "错误: 下载文件过小 (${SIZE} bytes)" >&2
-  exit 1
-fi
 
 	$SUDO mkdir -p "$INSTALL_DIR" "$DATA_DIR" "${PREFIX}/bin" "$TMP/extract"
 	# 忽略 macOS xattr / AppleDouble 警告

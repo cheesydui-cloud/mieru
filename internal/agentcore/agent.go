@@ -24,7 +24,7 @@ import (
 	"github.com/cheesydui-cloud/mieru/internal/plugins/socksin"
 )
 
-const AgentVersion = "0.3.0"
+const AgentVersion = "0.3.1"
 
 type Agent struct {
 	cfg      config.AgentConfig
@@ -124,8 +124,14 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	func (a *Agent) heartbeat(ctx context.Context) error {
 		msg := ""
+		applyErr := ""
 		if a.lastApplyMsg != "" {
 			msg = "degraded"
+			// Truncate so heartbeat payload stays small.
+			applyErr = a.lastApplyMsg
+			if len(applyErr) > 800 {
+				applyErr = applyErr[:800] + "…"
+			}
 		}
 		body := model.HeartbeatRequest{
 			NodeID:        a.cfg.NodeID,
@@ -136,6 +142,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			Hostname:      os.Getenv("AGENT_HOSTNAME"),
 			PublicIP:      os.Getenv("AGENT_PUBLIC_IP"),
 			Message:       msg,
+			ApplyError:    applyErr,
 		}
 		var resp struct {
 			OK            bool `json:"ok"`

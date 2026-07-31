@@ -335,7 +335,9 @@ func (s *Server) listNodes(c *gin.Context) {
 	}
 	type nodeOut struct {
 		model.Node
-		AgentToken string `json:"agent_token,omitempty"`
+		AgentToken   string `json:"agent_token,omitempty"`
+		AgentVersion string `json:"agent_version,omitempty"`
+		ApplyError   string `json:"apply_error,omitempty"`
 	}
 	out := make([]nodeOut, 0, len(list))
 	reveal := c.Query("reveal") == "1"
@@ -343,6 +345,18 @@ func (s *Server) listNodes(c *gin.Context) {
 		no := nodeOut{Node: n}
 		no.AgentToken = ""
 		no.Node.AgentToken = ""
+		// surface last apply error from meta_json for degraded nodes
+		if n.MetaJSON != "" {
+			var meta map[string]interface{}
+			if json.Unmarshal([]byte(n.MetaJSON), &meta) == nil {
+				if v, ok := meta["apply_error"].(string); ok {
+					no.ApplyError = v
+				}
+				if v, ok := meta["agent_version"].(string); ok {
+					no.AgentVersion = v
+				}
+			}
+		}
 		if reveal {
 			if full, err := s.store.GetNode(n.ID); err == nil {
 				no.AgentToken = full.AgentToken
@@ -1577,10 +1591,22 @@ func (s *Server) agentHeartbeat(c *gin.Context) {
 		return
 	}
 	status := model.StatusOnline
-	if req.Message == "degraded" {
+	if req.Message == "degraded" || strings.TrimSpace(req.ApplyError) != "" {
 		status = model.StatusDegraded
 	}
-	_ = s.store.Heartbeat(req.NodeID, req.PublicIP, req.Hostname, status)
+	metaPatch := map[string]string{
+		"agent_version": strings.TrimSpace(req.AgentVersion),
+	}
+	if status == model.StatusDegraded {
+		if ae := strings.TrimSpace(req.ApplyError); ae != "" {
+			metaPatch["apply_error"] = ae
+		} else {
+			metaPatch["apply_error"] = "degraded (no detail — upgrade agent)"
+		}
+	} else {
+		metaPatch["apply_error"] = "" // clear previous error
+	}
+	_ = s.store.HeartbeatEx(req.NodeID, req.PublicIP, req.Hostname, status, metaPatch)
 	n, _ := s.store.GetNode(req.NodeID)
 	needPull := n != nil && n.ConfigVersion > req.ConfigVersion
 	// Drain pending dial jobs for this agent (hop-to-hop probe).

@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/cheesydui-cloud/mieru/internal/model"
+	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 	_ "modernc.org/sqlite"
 )
@@ -362,6 +363,37 @@ func (s *Store) Heartbeat(nodeID string, publicIP, hostname string, status strin
 	ts := now()
 	_, err := s.db.Exec(`UPDATE nodes SET last_seen=?, status=?, public_ip=CASE WHEN ?!='' THEN ? ELSE public_ip END, hostname=CASE WHEN ?!='' THEN ? ELSE hostname END, updated_at=? WHERE id=?`,
 		ts, status, publicIP, publicIP, hostname, hostname, ts, nodeID)
+	return err
+}
+
+// HeartbeatEx updates status + optional meta patch (agent_version, apply_error).
+func (s *Store) HeartbeatEx(nodeID string, publicIP, hostname, status string, metaPatch map[string]string) error {
+	if err := s.Heartbeat(nodeID, publicIP, hostname, status); err != nil {
+		return err
+	}
+	if len(metaPatch) == 0 {
+		return nil
+	}
+	n, err := s.GetNode(nodeID)
+	if err != nil {
+		return err
+	}
+	meta := map[string]interface{}{}
+	if n.MetaJSON != "" {
+		_ = json.Unmarshal([]byte(n.MetaJSON), &meta)
+	}
+	if meta == nil {
+		meta = map[string]interface{}{}
+	}
+	for k, v := range metaPatch {
+		if v == "" {
+			delete(meta, k)
+		} else {
+			meta[k] = v
+		}
+	}
+	raw, _ := json.Marshal(meta)
+	_, err = s.db.Exec(`UPDATE nodes SET meta_json=?, updated_at=? WHERE id=?`, string(raw), now(), nodeID)
 	return err
 }
 
