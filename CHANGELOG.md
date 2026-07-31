@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.3] - 2026-08-01
+
+### Fixed — restore working multi-hop after v0.3.2 regression
+- v0.3.2 skipped `mieru apply` and started directly from a hand-written JSON store.
+  That drops the official password hashing / store merge path; user reported line broken again.
+- Restore **official flow**: write patch (no `httpProxyPort`) → wipe poisoned store →
+  `mieru apply config <patch>` into a **separate** store file → stop → start.
+- Still omit `httpProxyPort` (value 0 is invalid on mieru 3.x).
+- Scrub any leftover JSON under agent data dir that still has `httpProxyPort: 0`.
+
+### Ops
+```bash
+# 面板 + 节点都升，然后面板点「重建配置」
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | bash
+```
+
 ## [0.3.2] - 2026-08-01
 
 ### Fixed — cm7 `mieru apply: exit status 1`

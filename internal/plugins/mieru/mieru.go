@@ -20,7 +20,9 @@ import (
 //
 //	multiplexing OFF, handshake HANDSHAKE_NO_WAIT, mtu 1400
 //
-// Official flow: apply config → stop → start.
+// Official flow (v0.3.3): write patch → wipe bad store → apply into store → stop → start.
+// Do NOT set httpProxyPort=0 (ValidateFullClientConfig rejects it).
+// Do NOT skip apply: apply hashes the password and merges into the live store.
 type Plugin struct {
 	DataDir string
 	BinDir  string
@@ -82,110 +84,144 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 		mtu = 1400
 	}
 
-		// ipAddress vs domainName — official/OneClick set one; omit the other.
-		serverEntry := map[string]interface{}{
-			"portBindings": []map[string]interface{}{},
-		}
-		if ip := net.ParseIP(server); ip != nil {
-			serverEntry["ipAddress"] = server
-			// OneClick always includes domainName as "" for IP hosts
-			serverEntry["domainName"] = ""
-		} else {
-			serverEntry["domainName"] = server
-			serverEntry["ipAddress"] = ""
-		}
+	// ipAddress vs domainName — official/OneClick set one; omit the other.
+	serverEntry := map[string]interface{}{
+		"portBindings": []map[string]interface{}{},
+	}
+	if ip := net.ParseIP(server); ip != nil {
+		serverEntry["ipAddress"] = server
+		serverEntry["domainName"] = ""
+	} else {
+		serverEntry["domainName"] = server
+		serverEntry["ipAddress"] = ""
+	}
 
-		protocol, _ := cfg["protocol"].(string)
-		if protocol == "" {
-			protocol = "TCP"
-		}
-		protocol = strings.ToUpper(protocol)
-		serverEntry["portBindings"] = []map[string]interface{}{
-			{"port": port, "protocol": protocol},
-		}
+	protocol, _ := cfg["protocol"].(string)
+	if protocol == "" {
+		protocol = "TCP"
+	}
+	protocol = strings.ToUpper(protocol)
+	serverEntry["portBindings"] = []map[string]interface{}{
+		{"port": port, "protocol": protocol},
+	}
 
-		// Profile name "default" matches OneClick export for easier manual debug.
-		// IMPORTANT: do NOT set httpProxyPort=0 — mieru ValidateFullClientConfig rejects it
-		// ("HTTP proxy port number 0 is invalid"). Omit the field entirely when unused.
-		mieruCfg := map[string]interface{}{
-			"profiles": []map[string]interface{}{
-				{
-					"profileName": "default",
-					"user": map[string]string{
-						"name":     linkUser,
-						"password": linkPass,
-					},
-					"servers": []map[string]interface{}{serverEntry},
-					"mtu":     mtu,
-					"multiplexing": map[string]string{
-						"level": muxLevel,
-					},
-					"handshakeMode": handshake,
+	// Patch for `mieru apply config`. Omit httpProxyPort entirely — value 0 is invalid.
+	mieruCfg := map[string]interface{}{
+		"profiles": []map[string]interface{}{
+			{
+				"profileName": "default",
+				"user": map[string]string{
+					"name":     linkUser,
+					"password": linkPass,
 				},
+				"servers": []map[string]interface{}{serverEntry},
+				"mtu":     mtu,
+				"multiplexing": map[string]string{
+					"level": muxLevel,
+				},
+				"handshakeMode": handshake,
 			},
-			"activeProfile":   "default",
-			"rpcPort":         rpcPort,
-			"socks5Port":      socksPort,
-			"loggingLevel":    "INFO",
-			"socks5ListenLAN": true, // local socks_in on 127.0.0.1 must reach it
-		}
+		},
+		"activeProfile":   "default",
+		"rpcPort":         rpcPort,
+		"socks5Port":      socksPort,
+		"loggingLevel":    "INFO",
+		"socks5ListenLAN": true, // local socks_in on 127.0.0.1 must reach it
+	}
 
-		// Store file = full client config. mieru reads MIERU_CONFIG_JSON_FILE as the
-		// live config store. We write a complete validated JSON and start directly —
-		// do NOT use `apply config` against a store that may still contain
-		// httpProxyPort:0 from older agents (ValidateFullClientConfig rejects it).
-		cfgPath := filepath.Join(p.DataDir, "mieru-config.json")
-		raw, err := json.MarshalIndent(mieruCfg, "", "  ")
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(cfgPath, raw, 0o600); err != nil {
-			return err
-		}
-		_ = os.WriteFile(filepath.Join(p.DataDir, "mieru-client.json"), raw, 0o600)
-		_ = os.WriteFile(filepath.Join(p.DataDir, "socks5.port"), []byte(strconv.Itoa(socksPort)), 0o644)
-		// Wipe legacy bad store if present under common names
-		for _, stale := range []string{"client-store.json", "mieru.json"} {
-			_ = os.Remove(filepath.Join(p.DataDir, stale))
-		}
-		log.Printf("[mieru_client] wrote %s → %s:%d socks5=:%d user=%s mux=%s hs=%s",
-			cfgPath, server, port, socksPort, linkUser, muxLevel, handshake)
+	// patch file = what we apply; store file = live config (MIERU_CONFIG_JSON_FILE).
+	// Keeping them separate matches official client usage and lets apply hash passwords.
+	patchPath := filepath.Join(p.DataDir, "mieru-patch.json")
+	storePath := filepath.Join(p.DataDir, "mieru-config.json")
+	raw, err := json.MarshalIndent(mieruCfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(patchPath, raw, 0o600); err != nil {
+		return err
+	}
+	// Keep debug copy under the old name for ops.
+	_ = os.WriteFile(filepath.Join(p.DataDir, "mieru-client.json"), raw, 0o600)
+	_ = os.WriteFile(filepath.Join(p.DataDir, "socks5.port"), []byte(strconv.Itoa(socksPort)), 0o644)
 
-		binDir := p.BinDir
-		if binDir == "" {
-			binDir = filepath.Join(p.DataDir, "bin")
-		}
-		bin, err := procutil.EnsureBinary("mieru", binDir)
-		if err != nil {
-			return fmt.Errorf("mieru binary: %w", err)
-		}
+	// Drop legacy / poisoned stores. apply merges into existing store and will fail
+	// if the store still has httpProxyPort:0 from older agents.
+	for _, stale := range []string{
+		storePath,
+		filepath.Join(p.DataDir, "client-store.json"),
+		filepath.Join(p.DataDir, "mieru.json"),
+	} {
+		_ = os.Remove(stale)
+	}
+	// Also scrub any other json under data dir that looks like a mieru store with port 0.
+	scrubHTTPProxyPortZero(p.DataDir)
 
-		env := []string{
-			"MIERU_CONFIG_JSON_FILE=" + cfgPath,
-		}
+	log.Printf("[mieru_client] wrote patch %s → %s:%d socks5=:%d user=%s mux=%s hs=%s",
+		patchPath, server, port, socksPort, linkUser, muxLevel, handshake)
 
-		// stop any previous instance (same config path)
-		_, _ = procutil.RunCaptureEnv(env, bin, "stop")
-		time.Sleep(400 * time.Millisecond)
+	binDir := p.BinDir
+	if binDir == "" {
+		binDir = filepath.Join(p.DataDir, "bin")
+	}
+	bin, err := procutil.EnsureBinary("mieru", binDir)
+	if err != nil {
+		return fmt.Errorf("mieru binary: %w", err)
+	}
 
-		var startOut string
-		var startErr error
-		for i := 0; i < 5; i++ {
-			startOut, startErr = procutil.RunCaptureEnv(env, bin, "start")
-			if startErr == nil {
-				break
-			}
-			log.Printf("[mieru_client] start attempt %d: %v (%s)", i+1, startErr, strings.TrimSpace(startOut))
-			// rewrite config in case something truncated it
-			_ = os.WriteFile(cfgPath, raw, 0o600)
-			time.Sleep(time.Duration(i+1) * 500 * time.Millisecond)
+	// Live store path — apply merges patch into this file; start/stop/test read it.
+	env := []string{
+		"MIERU_CONFIG_JSON_FILE=" + storePath,
+	}
+
+	// apply (merge into client config store) — required so password is hashed correctly
+	var applyOut string
+	var applyErr error
+	for i := 0; i < 3; i++ {
+		// Fresh empty store each attempt so a half-written poison cannot stick.
+		_ = os.Remove(storePath)
+		applyOut, applyErr = procutil.RunCaptureEnv(env, bin, "apply", "config", patchPath)
+		if applyErr == nil {
+			log.Printf("[mieru_client] apply ok: %s", strings.TrimSpace(applyOut))
+			break
 		}
+		// fallback without env (default ~/.config/mieru/client_config.json path)
+		applyOut, applyErr = procutil.RunCapture(bin, "apply", "config", patchPath)
+		if applyErr == nil {
+			log.Printf("[mieru_client] apply ok (no env): %s", strings.TrimSpace(applyOut))
+			break
+		}
+		log.Printf("[mieru_client] apply attempt %d: %v (%s)", i+1, applyErr, strings.TrimSpace(applyOut))
+		// If still poisoned, force-wipe again
+		_ = os.Remove(storePath)
+		time.Sleep(time.Second)
+	}
+	if applyErr != nil {
+		return fmt.Errorf("mieru apply: %w (%s)", applyErr, strings.TrimSpace(applyOut))
+	}
+
+	_, _ = procutil.RunCaptureEnv(env, bin, "stop")
+	_, _ = procutil.RunCapture(bin, "stop")
+	time.Sleep(400 * time.Millisecond)
+
+	var startOut string
+	var startErr error
+	for i := 0; i < 5; i++ {
+		startOut, startErr = procutil.RunCaptureEnv(env, bin, "start")
 		if startErr != nil {
-			return fmt.Errorf("mieru start: %w (%s)", startErr, strings.TrimSpace(startOut))
+			startOut, startErr = procutil.RunCapture(bin, "start")
 		}
+		if startErr == nil {
+			break
+		}
+		log.Printf("[mieru_client] start attempt %d: %v (%s)", i+1, startErr, strings.TrimSpace(startOut))
+		time.Sleep(time.Duration(i+1) * 500 * time.Millisecond)
+	}
+	if startErr != nil {
+		return fmt.Errorf("mieru start: %w (%s)", startErr, strings.TrimSpace(startOut))
+	}
 	log.Printf("[mieru_client] started socks5 127.0.0.1:%d → %s:%d (%s)", socksPort, server, port, strings.TrimSpace(startOut))
 
-	// Connectivity test — log but only soft-fail once; hard-fail if socks not listening.
+	// Connectivity test — soft-fail; hard-fail if socks not listening.
 	if out, err := procutil.RunCaptureEnv(env, bin, "test"); err != nil {
 		if out2, err2 := procutil.RunCapture(bin, "test"); err2 != nil {
 			log.Printf("[mieru_client] test (non-fatal): %v (%s)", err2, strings.TrimSpace(out2))
@@ -209,6 +245,62 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 		time.Sleep(200 * time.Millisecond)
 	}
 	return fmt.Errorf("mieru started but local socks5 %s not accepting connections", addr)
+}
+
+// scrubHTTPProxyPortZero removes or rewrites json files under dir that contain
+// "httpProxyPort": 0, which breaks subsequent `mieru apply` merges.
+func scrubHTTPProxyPortZero(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		b, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		// cheap check first
+		if !strings.Contains(string(b), "httpProxyPort") {
+			continue
+		}
+		var m map[string]interface{}
+		if json.Unmarshal(b, &m) != nil {
+			continue
+		}
+		if v, ok := m["httpProxyPort"]; ok {
+			// drop 0 / 0.0 / "0"
+			switch t := v.(type) {
+			case float64:
+				if t == 0 {
+					delete(m, "httpProxyPort")
+				}
+			case int:
+				if t == 0 {
+					delete(m, "httpProxyPort")
+				}
+			case string:
+				if t == "0" || t == "" {
+					delete(m, "httpProxyPort")
+				}
+			case nil:
+				delete(m, "httpProxyPort")
+			}
+			if _, still := m["httpProxyPort"]; !still {
+				// if this looks like a full store and we only fixed port 0, rewrite;
+				// safer for unknown files: just delete so apply starts clean.
+				_ = os.Remove(path)
+				log.Printf("[mieru_client] removed poisoned config with httpProxyPort=0: %s", path)
+			}
+		}
+	}
 }
 
 func extractUsers(v interface{}) []map[string]string {
