@@ -1,26 +1,41 @@
 #!/usr/bin/env bash
 # Linux 一键安装 / 升级 Agent
+#
+# 首次安装（需要参数）:
 #   curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | \
 #     bash -s -- --panel-url http://面板IP:8080 --node-id n_xxx --token tok_xxx --role exit
+#
+# 已安装后的固定升级（无参数，自动读 /etc/mieru-agent.env）:
+#   curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | bash
+#
 set -euo pipefail
 
 REPO="${MIERU_REPO:-cheesydui-cloud/mieru}"
-VERSION="${MIERU_VERSION:-v0.3.2}"
+# 默认跟随 GitHub latest；也可 MIERU_VERSION=v0.3.2 钉死版本
+VERSION="${MIERU_VERSION:-}"
 PREFIX="${MIERU_PREFIX:-/usr/local}"
 # Agent has its own install dir — never overwrite panel's /opt/mieru-panel
 INSTALL_DIR="${MIERU_AGENT_INSTALL_DIR:-/opt/mieru-agent}"
 DATA_DIR="${MIERU_AGENT_DATA:-/var/lib/mieru-agent}"
+ENV_FILE="/etc/mieru-agent.env"
 
 PANEL_URL="${AGENT_PANEL_URL:-}"
 NODE_ID="${AGENT_NODE_ID:-}"
 TOKEN="${AGENT_TOKEN:-}"
-ROLE="${AGENT_ROLE:-exit}"
+ROLE="${AGENT_ROLE:-}"
 NFT_DRYRUN="${AGENT_NFT_DRYRUN:-1}"
 
 usage() {
   cat <<'EOF'
 用法:
+  # 升级（已装过 agent，无参数）
+  bash install-agent.sh
+
+  # 首次安装
   bash install-agent.sh --panel-url URL --node-id ID --token TOKEN [--role exit|entry|relay|hybrid]
+
+环境变量:
+  MIERU_VERSION=v0.3.2   钉死版本（默认拉 GitHub latest）
 EOF
 }
 
@@ -31,16 +46,70 @@ while [[ $# -gt 0 ]]; do
     --token) TOKEN="$2"; shift 2 ;;
     --role) ROLE="$2"; shift 2 ;;
     --nft-dryrun) NFT_DRYRUN="$2"; shift 2 ;;
+    --upgrade|-u) shift ;; # 兼容：显式升级，与无参相同
     -h|--help) usage; exit 0 ;;
     *) echo "未知参数: $1" >&2; usage; exit 1 ;;
   esac
 done
 
+# 无参升级：从已有 env 读取
+load_env_file() {
+  local f="$1" line k v
+  [[ -f "$f" ]] || return 1
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    [[ "$line" =~ ^[A-Z0-9_]+= ]] || continue
+    k="${line%%=*}"
+    v="${line#*=}"
+    case "$k" in
+      AGENT_PANEL_URL) PANEL_URL="${PANEL_URL:-$v}" ;;
+      AGENT_NODE_ID) NODE_ID="${NODE_ID:-$v}" ;;
+      AGENT_TOKEN) TOKEN="${TOKEN:-$v}" ;;
+      AGENT_ROLE) ROLE="${ROLE:-$v}" ;;
+      AGENT_NFT_DRYRUN) NFT_DRYRUN="${NFT_DRYRUN:-$v}" ;;
+      AGENT_DATA) DATA_DIR="${DATA_DIR:-$v}" ;;
+    esac
+  done < "$f"
+  return 0
+}
+
 if [[ -z "$PANEL_URL" || -z "$NODE_ID" || -z "$TOKEN" ]]; then
-  echo "错误: 需要 --panel-url --node-id --token" >&2
+  if load_env_file "$ENV_FILE"; then
+    echo "==> 升级模式：从 ${ENV_FILE} 读取 node=${NODE_ID} role=${ROLE:-exit}"
+  fi
+fi
+
+if [[ -z "$PANEL_URL" || -z "$NODE_ID" || -z "$TOKEN" ]]; then
+  echo "错误: 需要 --panel-url --node-id --token（首次安装）" >&2
+  echo "      或先装过一次，使 ${ENV_FILE} 存在后即可无参升级" >&2
   usage
   exit 1
 fi
+ROLE="${ROLE:-exit}"
+
+# 解析版本：latest 或固定 tag
+resolve_version() {
+  if [[ -n "$VERSION" && "$VERSION" != "latest" ]]; then
+    return 0
+  fi
+  local tag=""
+  tag=$(curl -fsSL --connect-timeout 10 \
+    "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
+    | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1) || true
+  if [[ -z "$tag" ]]; then
+    # API 不通时用镜像/固定回退
+    tag=$(curl -fsSL --connect-timeout 10 \
+      "https://ghfast.top/https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
+      | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1) || true
+  fi
+  if [[ -z "$tag" ]]; then
+    tag="v0.3.2"
+    echo "==> 无法查询 latest，回退 ${tag}"
+  fi
+  VERSION="$tag"
+}
+resolve_version
+echo "==> 目标版本 ${VERSION}"
 
 need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "缺少命令: $1" >&2; exit 1; }; }
 need_cmd curl
@@ -126,11 +195,10 @@ SIZE=$(wc -c <"$TMP/$ASSET" | tr -d ' ')
 	# Only install agent — never overwrite panel binary
 	$SUDO install -m 755 "$AGENT_SRC" "${INSTALL_DIR}/agent"
 	$SUDO install -m 755 "$AGENT_SRC" "${PREFIX}/bin/mieru-agent"
-	sync || true
+		sync || true
 
-ENV_FILE="/etc/mieru-agent.env"
-echo "==> 写入 ${ENV_FILE}"
-$SUDO tee "$ENV_FILE" >/dev/null <<EOF
+	echo "==> 写入 ${ENV_FILE}"
+	$SUDO tee "$ENV_FILE" >/dev/null <<EOF
 AGENT_PANEL_URL=${PANEL_URL}
 AGENT_NODE_ID=${NODE_ID}
 AGENT_TOKEN=${TOKEN}
@@ -138,7 +206,7 @@ AGENT_ROLE=${ROLE}
 AGENT_DATA=${DATA_DIR}
 AGENT_NFT_DRYRUN=${NFT_DRYRUN}
 EOF
-$SUDO chmod 600 "$ENV_FILE"
+	$SUDO chmod 600 "$ENV_FILE"
 
 if command -v systemctl >/dev/null 2>&1; then
   $SUDO tee /etc/systemd/system/mieru-agent.service >/dev/null <<EOF

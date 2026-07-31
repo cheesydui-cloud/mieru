@@ -6,7 +6,8 @@
 set -euo pipefail
 
 REPO="${MIERU_REPO:-cheesydui-cloud/mieru}"
-VERSION="${MIERU_VERSION:-v0.3.2}"
+# 默认拉 GitHub latest；可 MIERU_VERSION=v0.3.2 钉死
+VERSION="${MIERU_VERSION:-}"
 PREFIX="${MIERU_PREFIX:-/usr/local}"
 INSTALL_DIR="${MIERU_INSTALL_DIR:-/opt/mieru-panel}"
 DATA_DIR="${MIERU_DATA_DIR:-/var/lib/mieru-panel}"
@@ -28,6 +29,19 @@ case "$arch" in
   aarch64|arm64) arch=arm64 ;;
   *) echo "不支持的架构: $arch（仅 linux-amd64 / linux-arm64）" >&2; exit 1 ;;
 esac
+
+if [[ -z "$VERSION" || "$VERSION" == "latest" ]]; then
+  tag=$(curl -fsSL --connect-timeout 10 \
+    "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
+    | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1) || true
+  if [[ -z "$tag" ]]; then
+    tag=$(curl -fsSL --connect-timeout 10 \
+      "https://ghfast.top/https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
+      | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1) || true
+  fi
+  VERSION="${tag:-v0.3.2}"
+fi
+echo "==> 目标版本 ${VERSION}"
 
 TARGET="linux-${arch}"
 ASSET="mieru-panel-${VERSION}-${TARGET}.tar.gz"
