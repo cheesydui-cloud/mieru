@@ -17,7 +17,9 @@ import (
 // Plugin manages mita (mieru server) on Exit nodes.
 // Lifecycle mirrors ike-sh/mieru-OneClick + official docs:
 //
-//	ensure daemon (`mita run` via systemd or managed) → apply config → start → status RUNNING
+//	ensure daemon (`mita run` via systemd or managed) → apply config → stop → start → RUNNING
+//
+// Users include allowPrivateIP/allowLoopbackIP so relay→exit over IX LAN works.
 type Plugin struct {
 	DataDir string
 	BinDir  string
@@ -38,38 +40,43 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 	pmin := toInt(cfg["port_min"])
 	pmax := toInt(cfg["port_max"])
 
-		users := extractUsers(cfg["users"])
-		if len(users) == 0 {
-			return fmt.Errorf("mita_server: no users — refuse to start (need ≥1 active panel user for auth)")
-		}
+	users := extractUsers(cfg["users"])
+	if len(users) == 0 {
+		return fmt.Errorf("mita_server: no users — refuse to start (need ≥1 active panel user for auth)")
+	}
 
-		// Single primary port by default; multi-port range only when operator set a real span
-		// that still includes the primary listen port.
-		portBindings := []map[string]interface{}{}
-		if pmin > 0 && pmax > pmin {
-			// If primary is outside range, still bind primary so probe/relay match.
-			if port < pmin || port > pmax {
-				portBindings = append(portBindings, map[string]interface{}{
-					"port":     port,
-					"protocol": "TCP",
-				})
-			}
-			portBindings = append(portBindings, map[string]interface{}{
-				"portRange": fmt.Sprintf("%d-%d", pmin, pmax),
-				"protocol":  "TCP",
-			})
-		} else {
+	// Single primary port by default; multi-port range only when operator set a real span
+	// that still includes the primary listen port.
+	portBindings := []map[string]interface{}{}
+	if pmin > 0 && pmax > pmin {
+		// If primary is outside range, still bind primary so probe/relay match.
+		if port < pmin || port > pmax {
 			portBindings = append(portBindings, map[string]interface{}{
 				"port":     port,
 				"protocol": "TCP",
 			})
 		}
+		portBindings = append(portBindings, map[string]interface{}{
+			"portRange": fmt.Sprintf("%d-%d", pmin, pmax),
+			"protocol":  "TCP",
+		})
+	} else {
+		portBindings = append(portBindings, map[string]interface{}{
+			"port":     port,
+			"protocol": "TCP",
+		})
+	}
+
+	mtu := toInt(cfg["mtu"])
+	if mtu < 1280 || mtu > 1500 {
+		mtu = 1400
+	}
 
 	mitaCfg := map[string]interface{}{
 		"portBindings": portBindings,
 		"users":        users,
 		"loggingLevel": "INFO",
-		"mtu":          1400,
+		"mtu":          mtu,
 	}
 
 	cfgPath := filepath.Join(p.DataDir, "mita-config.json")
@@ -81,7 +88,13 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 		return err
 	}
 	_ = os.WriteFile(filepath.Join(p.DataDir, "mita-users.json"), raw, 0o600)
-	log.Printf("[mita_server] wrote %s users=%d port=%d", cfgPath, len(users), port)
+	desiredNames := make([]string, 0, len(users))
+	for _, u := range users {
+		if n, _ := u["name"].(string); n != "" {
+			desiredNames = append(desiredNames, n)
+		}
+	}
+	log.Printf("[mita_server] wrote %s users=%d port=%d names=%v", cfgPath, len(users), port, desiredNames)
 
 	binDir := p.BinDir
 	if binDir == "" {
@@ -117,6 +130,11 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 		return fmt.Errorf("mita apply config: %w (%s)", applyErr, strings.TrimSpace(applyOut))
 	}
 
+	// OneClick: mita apply MERGES users — delete stale names so revoked passwords disappear.
+	if err := syncMitaUsers(rt, desiredNames); err != nil {
+		log.Printf("[mita_server] user sync warning: %v", err)
+	}
+
 	// stop then start so portBindings take effect (official: apply needs restart except users-only)
 	_, _ = rt.MitaCmd("stop")
 	time.Sleep(400 * time.Millisecond)
@@ -139,13 +157,14 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 	}
 	log.Printf("[mita_server] start ok: %s", strings.TrimSpace(startOut))
 
-	// verify RUNNING
-	for i := 0; i < 8; i++ {
+	// verify RUNNING (OneClick: status is "RUNNING")
+	for i := 0; i < 10; i++ {
 		time.Sleep(500 * time.Millisecond)
 		status, _ := rt.MitaCmd("status")
 		status = strings.TrimSpace(status)
 		log.Printf("[mita_server] status: %s", status)
-		if strings.Contains(strings.ToUpper(status), "RUNNING") {
+		up := strings.ToUpper(status)
+		if strings.Contains(up, "RUNNING") {
 			return nil
 		}
 		_, _ = rt.MitaCmd("start")
@@ -154,9 +173,96 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 	return fmt.Errorf("mita not RUNNING after start (status=%s)", strings.TrimSpace(status))
 }
 
-// extractUsers accepts []interface{}, []map, or JSON-like maps from agent injection.
-func extractUsers(v interface{}) []map[string]string {
-	out := []map[string]string{}
+// syncMitaUsers deletes mita users that are not in the desired set.
+// mita apply merges users; without this, old passwords keep working.
+func syncMitaUsers(rt *procutil.MitaRuntime, desired []string) error {
+	if rt == nil || len(desired) == 0 {
+		return nil
+	}
+	want := map[string]bool{}
+	for _, n := range desired {
+		want[n] = true
+	}
+	// Prefer structured describe; fall back to get users text.
+	desc, err := rt.MitaCmd("describe", "config")
+	actual := parseUserNamesFromDescribe(desc)
+	if len(actual) == 0 {
+		if out, e2 := rt.MitaCmd("get", "users"); e2 == nil {
+			actual = parseUserNamesFromGetUsers(out)
+		}
+		_ = err
+	}
+	for _, name := range actual {
+		if want[name] {
+			continue
+		}
+		log.Printf("[mita_server] delete stale user %q", name)
+		if out, e := rt.MitaCmd("delete", "user", name); e != nil {
+			log.Printf("[mita_server] delete user %s: %v (%s)", name, e, strings.TrimSpace(out))
+		}
+	}
+	return nil
+}
+
+func parseUserNamesFromDescribe(desc string) []string {
+	var cfg struct {
+		Users []struct {
+			Name string `json:"name"`
+		} `json:"users"`
+	}
+	if json.Unmarshal([]byte(desc), &cfg) != nil {
+		// describe may wrap or pretty-print with noise — try find JSON object
+		i := strings.Index(desc, "{")
+		j := strings.LastIndex(desc, "}")
+		if i >= 0 && j > i {
+			_ = json.Unmarshal([]byte(desc[i:j+1]), &cfg)
+		}
+	}
+	out := make([]string, 0, len(cfg.Users))
+	for _, u := range cfg.Users {
+		if u.Name != "" {
+			out = append(out, u.Name)
+		}
+	}
+	return out
+}
+
+func parseUserNamesFromGetUsers(out string) []string {
+	// best-effort: lines / json array
+	var arr []struct {
+		Name string `json:"name"`
+	}
+	if json.Unmarshal([]byte(out), &arr) == nil {
+		names := make([]string, 0, len(arr))
+		for _, u := range arr {
+			if u.Name != "" {
+				names = append(names, u.Name)
+			}
+		}
+		return names
+	}
+	// fallback: look for "name": "..."
+	var names []string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "name:") || strings.Contains(line, `"name"`) {
+			// crude extract
+			if i := strings.Index(line, ":"); i >= 0 {
+				n := strings.Trim(strings.TrimSpace(line[i+1:]), `",`)
+				if n != "" && n != "name" {
+					names = append(names, n)
+				}
+			}
+		}
+	}
+	return names
+}
+
+// extractUsers builds mita user objects.
+// allowPrivateIP / allowLoopbackIP are required for panel multi-hop:
+// relay often dials exit via IX private IP or 127.0.0.1 on hybrid.
+func extractUsers(v interface{}) []map[string]interface{} {
+	out := []map[string]interface{}{}
 	appendOne := func(m map[string]interface{}) {
 		name, _ := m["username"].(string)
 		if name == "" {
@@ -170,9 +276,13 @@ func extractUsers(v interface{}) []map[string]string {
 		if e, ok := m["enabled"].(bool); ok {
 			enabled = e
 		}
-		// json numbers / missing enabled default true
 		if name != "" && pass != "" && enabled {
-			out = append(out, map[string]string{"name": name, "password": pass})
+			out = append(out, map[string]interface{}{
+				"name":            name,
+				"password":        pass,
+				"allowPrivateIP":  true,
+				"allowLoopbackIP": true,
+			})
 		}
 	}
 
@@ -195,11 +305,15 @@ func extractUsers(v interface{}) []map[string]string {
 			}
 			pass := m["password"]
 			if name != "" && pass != "" {
-				out = append(out, map[string]string{"name": name, "password": pass})
+				out = append(out, map[string]interface{}{
+					"name":            name,
+					"password":        pass,
+					"allowPrivateIP":  true,
+					"allowLoopbackIP": true,
+				})
 			}
 		}
 	default:
-		// try re-marshal (handles []model.AgentUser if ever passed raw)
 		if v == nil {
 			return out
 		}

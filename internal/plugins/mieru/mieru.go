@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,8 +16,11 @@ import (
 )
 
 // Plugin manages mieru client on Relay (connects to Exit mita).
-// Official flow: apply config → stop → start (client has no separate `run` daemon requirement;
-// `mieru start` backgrounds the client).
+// Client JSON aligned with ike-sh/mieru-OneClick build_client_json_for:
+//
+//	multiplexing OFF, handshake HANDSHAKE_NO_WAIT, mtu 1400
+//
+// Official flow: apply config → stop → start.
 type Plugin struct {
 	DataDir string
 	BinDir  string
@@ -35,21 +39,22 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 	if server == "" || port <= 0 {
 		return fmt.Errorf("mieru_client: server and port required")
 	}
+	server = strings.TrimSpace(server)
 
-		socksPort := toInt(cfg["socks5_port"])
-		if socksPort <= 0 {
-			socksPort = 19080
+	socksPort := toInt(cfg["socks5_port"])
+	if socksPort <= 0 {
+		socksPort = 19080
+	}
+	rpcPort := toInt(cfg["rpc_port"])
+	if rpcPort <= 0 {
+		rpcPort = 18964 // private control port; never default to public 8964
+	}
+	if rpcPort == socksPort {
+		rpcPort = socksPort + 1
+		if rpcPort > 65535 {
+			rpcPort = socksPort - 1
 		}
-		rpcPort := toInt(cfg["rpc_port"])
-		if rpcPort <= 0 {
-			rpcPort = 18964 // private control port; never default to public 8964
-		}
-		if rpcPort == socksPort {
-			rpcPort = socksPort + 1
-			if rpcPort > 65535 {
-				rpcPort = socksPort - 1
-			}
-		}
+	}
 
 	linkUser, _ := cfg["link_user"].(string)
 	linkPass, _ := cfg["link_password"].(string)
@@ -63,6 +68,34 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 		return fmt.Errorf("mieru_client: no tunnel user/password (need active panel user or link_user)")
 	}
 
+	// Optional overrides (defaults match OneClick 2.1.1 recommended values).
+	muxLevel, _ := cfg["multiplexing"].(string)
+	if muxLevel == "" {
+		muxLevel = "MULTIPLEXING_OFF"
+	}
+	handshake, _ := cfg["handshake_mode"].(string)
+	if handshake == "" {
+		handshake = "HANDSHAKE_NO_WAIT"
+	}
+	mtu := toInt(cfg["mtu"])
+	if mtu < 1280 || mtu > 1500 {
+		mtu = 1400
+	}
+
+	// ipAddress vs domainName — official client expects one or the other.
+	ipAddr, domain := "", ""
+	if ip := net.ParseIP(server); ip != nil {
+		ipAddr = server
+	} else {
+		domain = server
+	}
+
+	protocol, _ := cfg["protocol"].(string)
+	if protocol == "" {
+		protocol = "TCP"
+	}
+	protocol = strings.ToUpper(protocol)
+
 	mieruCfg := map[string]interface{}{
 		"profiles": []map[string]interface{}{
 			{
@@ -73,25 +106,26 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 				},
 				"servers": []map[string]interface{}{
 					{
-						"ipAddress":  server,
-						"domainName": "",
+						"ipAddress":  ipAddr,
+						"domainName": domain,
 						"portBindings": []map[string]interface{}{
-							{"port": port, "protocol": "TCP"},
+							{"port": port, "protocol": protocol},
 						},
 					},
 				},
-				"mtu": 1400,
+				"mtu": mtu,
 				"multiplexing": map[string]string{
-					"level": "MULTIPLEXING_HIGH",
+					"level": muxLevel,
 				},
-				"handshakeMode": "HANDSHAKE_STANDARD",
+				"handshakeMode": handshake,
 			},
 		},
 		"activeProfile":      "panel-exit",
 		"rpcPort":            rpcPort,
 		"socks5Port":         socksPort,
 		"loggingLevel":       "INFO",
-		"socks5ListenLAN":    true,
+		"socks5ListenLAN":    true, // local socks_in on 127.0.0.1 must reach it
+		"httpProxyPort":      0,
 		"httpProxyListenLAN": false,
 	}
 
@@ -105,7 +139,8 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 	}
 	_ = os.WriteFile(filepath.Join(p.DataDir, "mieru-client.json"), raw, 0o600)
 	_ = os.WriteFile(filepath.Join(p.DataDir, "socks5.port"), []byte(strconv.Itoa(socksPort)), 0o644)
-	log.Printf("[mieru_client] wrote %s → %s:%d socks5=:%d user=%s", cfgPath, server, port, socksPort, linkUser)
+	log.Printf("[mieru_client] wrote %s → %s:%d socks5=:%d user=%s mux=%s hs=%s",
+		cfgPath, server, port, socksPort, linkUser, muxLevel, handshake)
 
 	binDir := p.BinDir
 	if binDir == "" {
@@ -165,7 +200,7 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 	}
 	log.Printf("[mieru_client] started socks5 127.0.0.1:%d → %s:%d (%s)", socksPort, server, port, strings.TrimSpace(startOut))
 
-	// non-fatal connectivity test (exit may not be up yet)
+	// Connectivity test — log but only soft-fail once; hard-fail if socks not listening.
 	if out, err := procutil.RunCaptureEnv(env, bin, "test"); err != nil {
 		if out2, err2 := procutil.RunCapture(bin, "test"); err2 != nil {
 			log.Printf("[mieru_client] test (non-fatal): %v (%s)", err2, strings.TrimSpace(out2))
@@ -176,7 +211,19 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 	} else {
 		log.Printf("[mieru_client] test ok: %s", strings.TrimSpace(out))
 	}
-	return nil
+
+	// Verify local socks5 is actually accepting (hard requirement for relay chain).
+	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(socksPort))
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		c, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
+		if err == nil {
+			_ = c.Close()
+			return nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return fmt.Errorf("mieru started but local socks5 %s not accepting connections", addr)
 }
 
 func extractUsers(v interface{}) []map[string]string {
@@ -202,6 +249,21 @@ func extractUsers(v interface{}) []map[string]string {
 				appendOne(m)
 			}
 		}
+	case []map[string]interface{}:
+		for _, m := range t {
+			appendOne(m)
+		}
+	case []map[string]string:
+		for _, m := range t {
+			name := m["username"]
+			if name == "" {
+				name = m["name"]
+			}
+			pass := m["password"]
+			if name != "" && pass != "" {
+				out = append(out, map[string]string{"name": name, "password": pass})
+			}
+		}
 	default:
 		if v == nil {
 			return out
@@ -220,21 +282,21 @@ func extractUsers(v interface{}) []map[string]string {
 	return out
 }
 
-	func toInt(v interface{}) int {
-		switch t := v.(type) {
-		case float64:
-			return int(t)
-		case int:
-			return t
-		case int64:
-			return int(t)
-		case json.Number:
-			n, _ := t.Int64()
-			return int(n)
-		case string:
-			n, _ := strconv.Atoi(t)
-			return n
-		default:
-			return 0
-		}
+func toInt(v interface{}) int {
+	switch t := v.(type) {
+	case float64:
+		return int(t)
+	case int:
+		return t
+	case int64:
+		return int(t)
+	case json.Number:
+		n, _ := t.Int64()
+		return int(n)
+	case string:
+		n, _ := strconv.Atoi(t)
+		return n
+	default:
+		return 0
 	}
+}

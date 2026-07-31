@@ -24,7 +24,7 @@ import (
 	"github.com/cheesydui-cloud/mieru/internal/plugins/socksin"
 )
 
-const AgentVersion = "0.2.6"
+const AgentVersion = "0.2.7"
 
 type Agent struct {
 	cfg      config.AgentConfig
@@ -33,6 +33,8 @@ type Agent struct {
 	version  int64
 	// simple local counters for demo metering on exit
 	counters map[int64]*userCounter
+	// lastApplyMsg is reported in heartbeat (empty = healthy apply)
+	lastApplyMsg string
 }
 
 type userCounter struct {
@@ -121,6 +123,10 @@ func (a *Agent) Run(ctx context.Context) error {
 }
 
 	func (a *Agent) heartbeat(ctx context.Context) error {
+		msg := ""
+		if a.lastApplyMsg != "" {
+			msg = "degraded"
+		}
 		body := model.HeartbeatRequest{
 			NodeID:        a.cfg.NodeID,
 			Token:         a.cfg.Token,
@@ -129,6 +135,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			AgentVersion:  AgentVersion,
 			Hostname:      os.Getenv("AGENT_HOSTNAME"),
 			PublicIP:      os.Getenv("AGENT_PUBLIC_IP"),
+			Message:       msg,
 		}
 		var resp struct {
 			OK            bool `json:"ok"`
@@ -206,14 +213,16 @@ func (a *Agent) pullAndApply(ctx context.Context) error {
 		return err
 	}
 
-// persist last_good payload (even on failed apply — useful for debug)
+	// persist last_good payload (even on failed apply — useful for debug)
 		_ = os.WriteFile(filepath.Join(a.cfg.DataDir, "desired.json"), raw, 0o600)
 
 		if err := a.apply(ctx, &cfg); err != nil {
+			a.lastApplyMsg = err.Error()
 			// Do NOT advance version on failure/partial required-plugin failure —
 			// next pull/heartbeat will retry the same config version.
 			return err
 		}
+		a.lastApplyMsg = ""
 		a.version = cfg.Version
 		_ = os.WriteFile(filepath.Join(a.cfg.DataDir, "version"), []byte(fmt.Sprintf("%d", a.version)), 0o644)
 		log.Printf("applied config version=%d plugins=%d users=%d", cfg.Version, len(cfg.Plugins), len(cfg.Users))
