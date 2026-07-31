@@ -56,23 +56,25 @@ panel_port_from_env() {
 
 kill_by_port() {
   local port="$1"
+  # 新装系统端口上可能没有任何进程；所有探测在 pipefail 下必须容忍空匹配
   if command -v fuser >/dev/null 2>&1; then
     $SUDO fuser -k "${port}/tcp" 2>/dev/null || true
   fi
   if command -v ss >/dev/null 2>&1; then
-    local pids
-    pids=$(ss -lntp 2>/dev/null | awk -v p=":${port}" '$4 ~ p"$" || $4 ~ p" " {print}' | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | sort -u)
-    # broader match: :8080 anywhere in local addr
+    local pids=""
+    pids=$(ss -lntp 2>/dev/null | sed -n "s/.*:${port} .*pid=\\([0-9]*\\).*/\\1/p" | sort -u || true)
     if [[ -z "$pids" ]]; then
-      pids=$(ss -lntp 2>/dev/null | grep -E ":${port}\\b" | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | sort -u)
+      pids=$(ss -lntp 2>/dev/null | grep -E ":${port}\\b" 2>/dev/null | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | sort -u || true)
     fi
     for pid in $pids; do
+      [[ -n "$pid" ]] || continue
       $SUDO kill -9 "$pid" 2>/dev/null || true
     done
   fi
   if command -v lsof >/dev/null 2>&1; then
     $SUDO lsof -tiTCP:"${port}" -sTCP:LISTEN 2>/dev/null | xargs -r $SUDO kill -9 2>/dev/null || true
   fi
+  return 0
 }
 
 kill_panel() {
@@ -99,7 +101,7 @@ listener_exe() {
   local port="$1"
   local pid=""
   if command -v ss >/dev/null 2>&1; then
-    pid=$(ss -lntp 2>/dev/null | grep -E ":${port}\\b" | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | head -1)
+    pid=$(ss -lntp 2>/dev/null | grep -E ":${port}\\b" 2>/dev/null | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | head -1 || true)
   fi
   if [[ -z "$pid" ]] && command -v lsof >/dev/null 2>&1; then
     pid=$($SUDO lsof -tiTCP:"${port}" -sTCP:LISTEN 2>/dev/null | head -1 || true)
@@ -109,6 +111,7 @@ listener_exe() {
     return 0
   fi
   echo ""
+  return 0
 }
 
 echo "==> 下载 ${URL}"
