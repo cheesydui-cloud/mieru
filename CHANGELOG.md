@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.5] - 2026-07-31
+
+### Added
+- **落地** 侧栏菜单：专门管理家宽 / 住宅 exit（及 hybrid），默认标签 `residential`、端口 8964，一键复制 Agent 安装命令。
+
+### Fixed
+- install-panel：新系统无监听时 `ss|grep` 在 pipefail 下不再静默退出。
+
 ## [0.2.4] - 2026-07-31
 
 ### Fixed — global scan

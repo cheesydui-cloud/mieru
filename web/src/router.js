@@ -4,6 +4,7 @@ import Login from './views/Login.vue'
 import AdminLayout from './views/AdminLayout.vue'
 import Dashboard from './views/Dashboard.vue'
 import Nodes from './views/Nodes.vue'
+import Exits from './views/Exits.vue'
 import Users from './views/Users.vue'
 import Routes from './views/Routes.vue'
 import Settings from './views/Settings.vue'
@@ -20,6 +21,7 @@ const router = createRouter({
       children: [
         { path: '', name: 'dashboard', component: Dashboard },
         { path: 'nodes', name: 'nodes', component: Nodes },
+        { path: 'exits', name: 'exits', component: Exits },
         { path: 'users', name: 'users', component: Users },
         { path: 'routes', name: 'routes', component: Routes },
         { path: 'settings', name: 'settings', component: Settings },

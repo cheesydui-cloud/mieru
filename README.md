@@ -49,7 +49,7 @@ curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/
 
 ```bash
 curl -s http://127.0.0.1:8080/api/version
-# 期望含 "version":"v0.2.4" 和 "ui":"embedded"
+# 期望含 "version":"v0.2.5" 和 "ui":"embedded"
 
 curl -sI http://127.0.0.1:8080/ | head -3
 # 期望 HTTP/1.1 200

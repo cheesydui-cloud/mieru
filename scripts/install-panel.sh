@@ -6,7 +6,7 @@
 set -euo pipefail
 
 REPO="${MIERU_REPO:-cheesydui-cloud/mieru}"
-VERSION="${MIERU_VERSION:-v0.2.4}"
+VERSION="${MIERU_VERSION:-v0.2.5}"
 PREFIX="${MIERU_PREFIX:-/usr/local}"
 INSTALL_DIR="${MIERU_INSTALL_DIR:-/opt/mieru-panel}"
 DATA_DIR="${MIERU_DATA_DIR:-/var/lib/mieru-panel}"

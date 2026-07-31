@@ -12,6 +12,7 @@ const title = computed(() => {
   const map = {
     dashboard: '总览',
     nodes: '节点',
+    exits: '落地',
     users: '用户',
     routes: '线路',
     settings: '设置',
@@ -50,6 +51,7 @@ onMounted(async () => {
       <nav class="sidebar-nav">
         <router-link class="nav-item" :class="{ active: route.name === 'dashboard' }" to="/">总览</router-link>
         <router-link class="nav-item" :class="{ active: route.name === 'nodes' }" to="/nodes">节点</router-link>
+        <router-link class="nav-item" :class="{ active: route.name === 'exits' }" to="/exits">落地</router-link>
         <router-link class="nav-item" :class="{ active: route.name === 'users' }" to="/users">用户</router-link>
         <router-link class="nav-item" :class="{ active: route.name === 'routes' }" to="/routes">线路</router-link>
         <router-link class="nav-item" :class="{ active: route.name === 'settings' }" to="/settings">设置</router-link>
