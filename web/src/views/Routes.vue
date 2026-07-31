@@ -316,23 +316,23 @@ onMounted(load)
           </td>
           <td>
             <span class="badge" :class="healthClass(r.health)">{{ healthLabel(r.health) }}</span>
-            </td>
-            <td class="actions-cell">
-              <div class="row-actions">
-                <button class="btn btn-ghost btn-sm" @click="openEdit(r)">编辑</button>
-                <button
-                  class="btn btn-ghost btn-sm"
-                  :disabled="!!probing[r.id]"
-                  @click="probe(r)"
-                >
-                  {{ probing[r.id] ? '探测中…' : '测通断' }}
-                </button>
-                <button class="btn btn-danger btn-sm" @click="remove(r.id)">删除</button>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+          </td>
+          <td class="actions-cell">
+            <div class="row-actions">
+              <button class="btn btn-ghost btn-sm" @click="openEdit(r)">编辑</button>
+              <button
+                class="btn btn-ghost btn-sm"
+                :disabled="!!probing[r.id]"
+                @click="probe(r)"
+              >
+                {{ probing[r.id] ? '探测中…' : '测通断' }}
+              </button>
+              <button class="btn btn-danger btn-sm" @click="remove(r.id)">删除</button>
+            </div>
+          </td>
+        </tr>
+      </tbody>
+    </table>
     <div v-else class="empty" style="padding: 48px 24px; text-align: center">
       <div style="font-size: 16px; margin-bottom: 8px">还没有线路</div>
       <div class="muted" style="margin-bottom: 20px; max-width: 420px; margin-left: auto; margin-right: auto">

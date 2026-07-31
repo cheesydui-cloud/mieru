@@ -38,24 +38,32 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 	pmin := toInt(cfg["port_min"])
 	pmax := toInt(cfg["port_max"])
 
-	users := extractUsers(cfg["users"])
-	if len(users) == 0 {
-		// still start listener so TCP probe works; warn for real traffic
-		log.Printf("[mita_server] warning: no users — mita will listen but clients cannot auth")
-	}
+		users := extractUsers(cfg["users"])
+		if len(users) == 0 {
+			return fmt.Errorf("mita_server: no users — refuse to start (need ≥1 active panel user for auth)")
+		}
 
-	portBindings := []map[string]interface{}{}
-	if pmin > 0 && pmax >= pmin && pmax != pmin {
-		portBindings = append(portBindings, map[string]interface{}{
-			"portRange": fmt.Sprintf("%d-%d", pmin, pmax),
-			"protocol":  "TCP",
-		})
-	} else {
-		portBindings = append(portBindings, map[string]interface{}{
-			"port":     port,
-			"protocol": "TCP",
-		})
-	}
+		// Single primary port by default; multi-port range only when operator set a real span
+		// that still includes the primary listen port.
+		portBindings := []map[string]interface{}{}
+		if pmin > 0 && pmax > pmin {
+			// If primary is outside range, still bind primary so probe/relay match.
+			if port < pmin || port > pmax {
+				portBindings = append(portBindings, map[string]interface{}{
+					"port":     port,
+					"protocol": "TCP",
+				})
+			}
+			portBindings = append(portBindings, map[string]interface{}{
+				"portRange": fmt.Sprintf("%d-%d", pmin, pmax),
+				"protocol":  "TCP",
+			})
+		} else {
+			portBindings = append(portBindings, map[string]interface{}{
+				"port":     port,
+				"protocol": "TCP",
+			})
+		}
 
 	mitaCfg := map[string]interface{}{
 		"portBindings": portBindings,

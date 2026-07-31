@@ -1,9 +1,10 @@
 <script setup>
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { api, setSession } from '../api'
 
 const router = useRouter()
+const route = useRoute()
 const username = ref('admin')
 const password = ref('')
 const loading = ref(false)
@@ -18,7 +19,12 @@ async function submit() {
       body: JSON.stringify({ username: username.value, password: password.value }),
     })
     setSession(data)
-    router.replace(data.role === 'admin' ? '/' : '/portal')
+    const next = typeof route.query.next === 'string' ? route.query.next : ''
+    if (next && next.startsWith('/') && !next.startsWith('//')) {
+      router.replace(next)
+    } else {
+      router.replace(data.role === 'admin' ? '/' : '/portal')
+    }
   } catch (e) {
     error.value = e.message
   } finally {

@@ -5,9 +5,10 @@
 set -euo pipefail
 
 REPO="${MIERU_REPO:-cheesydui-cloud/mieru}"
-VERSION="${MIERU_VERSION:-v0.2.3}"
+VERSION="${MIERU_VERSION:-v0.2.4}"
 PREFIX="${MIERU_PREFIX:-/usr/local}"
-INSTALL_DIR="${MIERU_INSTALL_DIR:-/opt/mieru-panel}"
+# Agent has its own install dir — never overwrite panel's /opt/mieru-panel
+INSTALL_DIR="${MIERU_AGENT_INSTALL_DIR:-/opt/mieru-agent}"
 DATA_DIR="${MIERU_AGENT_DATA:-/var/lib/mieru-agent}"
 
 PANEL_URL="${AGENT_PANEL_URL:-}"
@@ -19,7 +20,7 @@ NFT_DRYRUN="${AGENT_NFT_DRYRUN:-1}"
 usage() {
   cat <<'EOF'
 用法:
-  bash install-agent.sh --panel-url URL --node-id ID --token TOKEN [--role exit|entry|relay]
+  bash install-agent.sh --panel-url URL --node-id ID --token TOKEN [--role exit|entry|relay|hybrid]
 EOF
 }
 
@@ -70,15 +71,33 @@ echo "==> 停止旧 Agent（如有）"
 if command -v systemctl >/dev/null 2>&1; then
   $SUDO systemctl stop mieru-agent 2>/dev/null || true
 fi
-$SUDO pkill -x mieru-agent 2>/dev/null || true
-$SUDO pkill -f '/usr/local/bin/mieru-agent' 2>/dev/null || true
+$SUDO pkill -9 -x mieru-agent 2>/dev/null || true
+$SUDO pkill -9 -f '/usr/local/bin/mieru-agent' 2>/dev/null || true
+$SUDO pkill -9 -f "${INSTALL_DIR}/agent" 2>/dev/null || true
 sleep 1
 
 echo "==> 下载 ${URL}"
-curl -fsSL "$URL" -o "$TMP/$ASSET"
-$SUDO mkdir -p "$INSTALL_DIR" "$DATA_DIR" "${PREFIX}/bin"
-$SUDO tar -xzf "$TMP/$ASSET" -C "$INSTALL_DIR" --strip-components=1
-$SUDO install -m 755 "$INSTALL_DIR/agent" "${PREFIX}/bin/mieru-agent"
+if ! curl -fL --retry 3 --retry-delay 2 "$URL" -o "$TMP/$ASSET"; then
+  echo "错误: 下载失败 ${URL}" >&2
+  exit 1
+fi
+SIZE=$(wc -c <"$TMP/$ASSET" | tr -d ' ')
+if [[ "${SIZE:-0}" -lt 1000000 ]]; then
+  echo "错误: 下载文件过小 (${SIZE} bytes)" >&2
+  exit 1
+fi
+
+$SUDO mkdir -p "$INSTALL_DIR" "$DATA_DIR" "${PREFIX}/bin" "$TMP/extract"
+$SUDO tar -xzf "$TMP/$ASSET" -C "$TMP/extract" --strip-components=1
+if [[ ! -f "$TMP/extract/agent" ]]; then
+  echo "错误: 压缩包内没有 agent 二进制" >&2
+  $SUDO ls -la "$TMP/extract" >&2
+  exit 1
+fi
+# Only install agent — never overwrite panel binary in /opt/mieru-panel
+$SUDO install -m 755 "$TMP/extract/agent" "${INSTALL_DIR}/agent"
+$SUDO install -m 755 "$TMP/extract/agent" "${PREFIX}/bin/mieru-agent"
+sync || true
 
 ENV_FILE="/etc/mieru-agent.env"
 echo "==> 写入 ${ENV_FILE}"
@@ -123,7 +142,7 @@ echo "==> 探测面板连通性 ${PANEL_URL}"
 HB_CODE=$(curl -s -o /tmp/mieru-hb.out -w "%{http_code}" --max-time 8 \
   -X POST "${PANEL_URL}/api/agent/heartbeat" \
   -H 'Content-Type: application/json' \
-  -d "{\"node_id\":\"${NODE_ID}\",\"token\":\"${TOKEN}\",\"role\":\"${ROLE}\",\"agent_version\":\"install\"}" \
+  -d "{\"node_id\":\"${NODE_ID}\",\"token\":\"${TOKEN}\",\"role\":\"${ROLE}\",\"agent_version\":\"${VERSION}\"}" \
   2>/dev/null || echo "000")
 HB_BODY=$(cat /tmp/mieru-hb.out 2>/dev/null || true)
 if [[ "$HB_CODE" == "200" ]]; then
@@ -136,14 +155,31 @@ else
   HB_RESULT="FAIL HTTP ${HB_CODE} body=${HB_BODY}"
 fi
 
+ACTIVE="?"
+if command -v systemctl >/dev/null 2>&1; then
+  if $SUDO systemctl is-active --quiet mieru-agent; then
+    ACTIVE="active"
+  else
+    ACTIVE="not-active"
+  fi
+fi
+
 echo
 echo "============================================"
 echo " Agent 已安装/升级  ${VERSION}"
 echo " role     : ${ROLE}"
 echo " panel    : ${PANEL_URL}"
 echo " node     : ${NODE_ID}"
+echo " binary   : ${PREFIX}/bin/mieru-agent"
+echo " install  : ${INSTALL_DIR}"
 echo " env      : ${ENV_FILE}"
+echo " 服务     : ${ACTIVE}"
 echo " 心跳探测 : ${HB_RESULT}"
 echo " 日志     : journalctl -u mieru-agent -f"
 echo " 状态     : systemctl status mieru-agent"
 echo "============================================"
+
+if [[ "$ACTIVE" == "not-active" ]]; then
+  echo "警告: mieru-agent 服务未 active，请查看 journalctl -u mieru-agent -n 50" >&2
+  exit 1
+fi

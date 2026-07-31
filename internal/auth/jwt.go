@@ -8,7 +8,6 @@ import (
 )
 
 type Claims struct {
-	Subject  string `json:"sub"`
 	Role     string `json:"role"` // admin|user
 	Username string `json:"username"`
 	jwt.RegisteredClaims
@@ -20,15 +19,16 @@ type TokenManager struct {
 }
 
 func NewTokenManager(secret string) *TokenManager {
-	return &TokenManager{secret: []byte(secret), ttl: 24 * time.Hour}
+	// 7 days — ops sessions shouldn't empty node lists after overnight idle
+	return &TokenManager{secret: []byte(secret), ttl: 7 * 24 * time.Hour}
 }
 
 func (tm *TokenManager) Issue(subject, role, username string) (string, error) {
 	claims := Claims{
-		Subject:  subject,
 		Role:     role,
 		Username: username,
 		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   subject,
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(tm.ttl)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},

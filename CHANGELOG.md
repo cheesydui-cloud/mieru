@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.2.4] - 2026-07-31
+
+### Fixed — global scan
+- **Port model**: default port range is a **single** `EffectiveListenPort` (no more exit 8964 vs mita 30000–40000 mismatch). Hybrid public SOCKS = listen; mita = listen+1.
+- **Relay**: mieru `rpc_port` defaults to **18964** (not 8964) so it never collides with public `socks_in`.
+- **Relay→Exit**: client uses exit `MitaPrimaryPort()`; backbone `link_user` always injected onto every exit (sticky-safe).
+- **Partial apply**: required plugins must succeed before config version advances (failed mita/mieru retries next pull).
+- **socks_in**: refuse empty users; negotiate USER/PASS method; retry listen on EADDRINUSE.
+- **mita**: refuse zero users; bind primary port consistently.
+- **install-panel**: always probe `http://127.0.0.1:$PORT`; kill bare `panel` + verify listener `/proc/pid/exe`.
+- **install-agent**: separate `/opt/mieru-agent` (no longer overwrites panel install dir).
+- **JWT**: remove duplicate `sub`; TTL 7d; login respects `?next=`.
+- **CORS**: `*` no longer pairs with credentials.
+- **Docker**: inject `-X main.Version`.
+
+### Ops
+```bash
+# Panel (must show v0.2.4)
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | bash
+
+# Every node agent
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | \
+  bash -s -- --panel-url http://面板:8080 --node-id ... --token ... --role exit|relay|entry
+```
+Then: 无痕登录 → 节点页「重建配置」或改任意节点触发 rebuild → 测通断.
+
 ## [0.2.3] - 2026-07-31
 
 ### Fixed

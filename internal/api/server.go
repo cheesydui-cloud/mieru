@@ -46,19 +46,21 @@ func (s *Server) Router() *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery(), gin.Logger())
 
-	c := cors.Config{
-		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
-		ExposeHeaders:    []string{"Content-Length"},
-		AllowCredentials: true,
-		MaxAge:           12 * time.Hour,
-	}
-	if len(s.cfg.CORSOrigins) == 1 && s.cfg.CORSOrigins[0] == "*" {
-		c.AllowAllOrigins = true
-	} else {
-		c.AllowOrigins = s.cfg.CORSOrigins
-	}
-	r.Use(cors.New(c))
+		c := cors.Config{
+			AllowMethods:  []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+			AllowHeaders:  []string{"Origin", "Content-Type", "Authorization"},
+			ExposeHeaders: []string{"Content-Length"},
+			MaxAge:        12 * time.Hour,
+		}
+		// Browsers forbid AllowCredentials + AllowAllOrigins(*). Same-origin SPA needs neither.
+		if len(s.cfg.CORSOrigins) == 1 && s.cfg.CORSOrigins[0] == "*" {
+			c.AllowAllOrigins = true
+			c.AllowCredentials = false
+		} else {
+			c.AllowOrigins = s.cfg.CORSOrigins
+			c.AllowCredentials = true
+		}
+		r.Use(cors.New(c))
 
 	r.GET("/api/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "ts": time.Now().UTC(), "version": s.Version})
@@ -265,20 +267,28 @@ func (s *Server) login(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 		return
 	}
-	if adm, err := s.store.GetAdminByUsername(req.Username); err == nil {
-		if store.CheckPassword(adm.PasswordHash, req.Password) {
-			tok, _ := s.jwt.Issue(fmt.Sprintf("%d", adm.ID), "admin", adm.Username)
-			c.JSON(http.StatusOK, gin.H{"token": tok, "role": "admin", "username": adm.Username})
-			return
+		if adm, err := s.store.GetAdminByUsername(req.Username); err == nil {
+			if store.CheckPassword(adm.PasswordHash, req.Password) {
+				tok, err := s.jwt.Issue(fmt.Sprintf("%d", adm.ID), "admin", adm.Username)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "token issue failed"})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{"token": tok, "role": "admin", "username": adm.Username})
+				return
+			}
 		}
-	}
-	if u, err := s.store.GetUserByUsername(req.Username); err == nil {
-		if u.ProxyPassword == req.Password || store.CheckPassword(u.PasswordHash, req.Password) {
-			tok, _ := s.jwt.Issue(fmt.Sprintf("%d", u.ID), "user", u.Username)
-			c.JSON(http.StatusOK, gin.H{"token": tok, "role": "user", "username": u.Username})
-			return
+		if u, err := s.store.GetUserByUsername(req.Username); err == nil {
+			if u.ProxyPassword == req.Password || store.CheckPassword(u.PasswordHash, req.Password) {
+				tok, err := s.jwt.Issue(fmt.Sprintf("%d", u.ID), "user", u.Username)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "token issue failed"})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{"token": tok, "role": "user", "username": u.Username})
+				return
+			}
 		}
-	}
 	c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 }
 
@@ -577,7 +587,8 @@ func (s *Server) probeRoute(c *gin.Context) {
 				host = n.PublicIP
 			}
 			hr.Host = host
-			hr.Port = n.EffectiveListenPort()
+			// Probe public service (socks for entry/relay/hybrid, mita for exit).
+			hr.Port = n.PublicServicePort()
 			if h.Port > 0 {
 				hr.Port = h.Port
 			}
@@ -1122,7 +1133,7 @@ func (s *Server) nodeInstallCmd(c *gin.Context) {
 					if name == "" {
 						name = host
 					}
-					port := n.EffectiveListenPort()
+					port := n.PublicServicePort()
 					key := fmt.Sprintf("%s:%d", host, port)
 					if seen[key] {
 						continue
@@ -1152,7 +1163,7 @@ func (s *Server) nodeInstallCmd(c *gin.Context) {
 				if name == "" {
 					name = host
 				}
-				port := n.EffectiveListenPort()
+				port := n.PublicServicePort()
 				key := fmt.Sprintf("%s:%d", host, port)
 				if seen[key] {
 					continue

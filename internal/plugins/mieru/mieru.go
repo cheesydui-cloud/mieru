@@ -36,14 +36,20 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 		return fmt.Errorf("mieru_client: server and port required")
 	}
 
-	socksPort := toInt(cfg["socks5_port"])
-	if socksPort <= 0 {
-		socksPort = 19080
-	}
-	rpcPort := toInt(cfg["rpc_port"])
-	if rpcPort <= 0 {
-		rpcPort = 8964
-	}
+		socksPort := toInt(cfg["socks5_port"])
+		if socksPort <= 0 {
+			socksPort = 19080
+		}
+		rpcPort := toInt(cfg["rpc_port"])
+		if rpcPort <= 0 {
+			rpcPort = 18964 // private control port; never default to public 8964
+		}
+		if rpcPort == socksPort {
+			rpcPort = socksPort + 1
+			if rpcPort > 65535 {
+				rpcPort = socksPort - 1
+			}
+		}
 
 	linkUser, _ := cfg["link_user"].(string)
 	linkPass, _ := cfg["link_password"].(string)
@@ -214,18 +220,21 @@ func extractUsers(v interface{}) []map[string]string {
 	return out
 }
 
-func toInt(v interface{}) int {
-	switch t := v.(type) {
-	case float64:
-		return int(t)
-	case int:
-		return t
-	case int64:
-		return int(t)
-	case string:
-		n, _ := strconv.Atoi(t)
-		return n
-	default:
-		return 0
+	func toInt(v interface{}) int {
+		switch t := v.(type) {
+		case float64:
+			return int(t)
+		case int:
+			return t
+		case int64:
+			return int(t)
+		case json.Number:
+			n, _ := t.Int64()
+			return int(n)
+		case string:
+			n, _ := strconv.Atoi(t)
+			return n
+		default:
+			return 0
+		}
 	}
-}

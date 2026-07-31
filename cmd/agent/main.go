@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -11,7 +13,17 @@ import (
 	"github.com/cheesydui-cloud/mieru/internal/config"
 )
 
+// set by -ldflags "-X main.Version=v0.2.4"
+var Version = "v0.2.4"
+
 func main() {
+	showVersion := flag.Bool("version", false, "print version and exit")
+	flag.Parse()
+	if *showVersion {
+		fmt.Println(Version)
+		return
+	}
+
 	cfg := config.LoadAgent()
 	a := agentcore.New(cfg)
 

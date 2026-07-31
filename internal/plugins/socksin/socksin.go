@@ -43,92 +43,117 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 		return err
 	}
 
-	port := toInt(cfg["listen_port"])
-	if port <= 0 {
-		port = 1080
-	}
-		users := extractUsersMap(cfg["users"])
-
-	upHost, _ := cfg["upstream_host"].(string)
-	upPort := toInt(cfg["upstream_port"])
-	upstream := ""
-	if upHost != "" && upPort > 0 {
-		upstream = net.JoinHostPort(upHost, strconv.Itoa(upPort))
-	}
-
-	listenAddr := net.JoinHostPort("0.0.0.0", strconv.Itoa(port))
-	return p.restart(listenAddr, users, upstream)
-}
-
-func (p *Plugin) restart(listen string, users map[string]string, upstream string) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if p.cancel != nil {
-		p.cancel()
-		p.cancel = nil
-	}
-	if p.listener != nil {
-		_ = p.listener.Close()
-		p.listener = nil
-	}
-
-	p.users = users
-	p.upstream = upstream
-	p.listen = listen
-
-	ln, err := net.Listen("tcp", listen)
-	if err != nil {
-		return fmt.Errorf("socks_in listen %s: %w", listen, err)
-	}
-	p.listener = ln
-	ctx, cancel := context.WithCancel(context.Background())
-	p.cancel = cancel
-
-	log.Printf("[socks_in] listening %s users=%d upstream=%q", listen, len(users), upstream)
-
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-					if ne, ok := err.(net.Error); ok && ne.Temporary() {
-						time.Sleep(50 * time.Millisecond)
-						continue
-					}
-					return
-				}
-			}
-			go p.handle(conn)
+		port := toInt(cfg["listen_port"])
+		if port <= 0 {
+			port = 1080
 		}
-	}()
-	return nil
-}
+		users := extractUsersMap(cfg["users"])
+		if len(users) == 0 {
+			return fmt.Errorf("socks_in: no users configured — refuse to listen (auth would reject everyone)")
+		}
 
-func (p *Plugin) handle(conn net.Conn) {
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
+		upHost, _ := cfg["upstream_host"].(string)
+		upPort := toInt(cfg["upstream_port"])
+		upstream := ""
+		if upHost != "" && upPort > 0 {
+			upstream = net.JoinHostPort(upHost, strconv.Itoa(upPort))
+		}
 
-	buf := make([]byte, 258)
-	if _, err := io.ReadFull(conn, buf[:2]); err != nil {
-		return
+		listenAddr := net.JoinHostPort("0.0.0.0", strconv.Itoa(port))
+		return p.restart(listenAddr, users, upstream)
 	}
-	if buf[0] != 0x05 {
-		return
+
+	func (p *Plugin) restart(listen string, users map[string]string, upstream string) error {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+
+		if p.cancel != nil {
+			p.cancel()
+			p.cancel = nil
+		}
+		if p.listener != nil {
+			_ = p.listener.Close()
+			p.listener = nil
+		}
+		// brief settle so Accept loop exits and port is free
+		time.Sleep(80 * time.Millisecond)
+
+		p.users = users
+		p.upstream = upstream
+		p.listen = listen
+
+		var ln net.Listener
+		var err error
+		for attempt := 0; attempt < 8; attempt++ {
+			ln, err = net.Listen("tcp", listen)
+			if err == nil {
+				break
+			}
+			time.Sleep(time.Duration(attempt+1) * 80 * time.Millisecond)
+		}
+		if err != nil {
+			return fmt.Errorf("socks_in listen %s: %w", listen, err)
+		}
+		p.listener = ln
+		ctx, cancel := context.WithCancel(context.Background())
+		p.cancel = cancel
+
+		log.Printf("[socks_in] listening %s users=%d upstream=%q", listen, len(users), upstream)
+
+		go func() {
+			for {
+				conn, err := ln.Accept()
+				if err != nil {
+					select {
+					case <-ctx.Done():
+						return
+					default:
+						if ne, ok := err.(net.Error); ok && ne.Temporary() {
+							time.Sleep(50 * time.Millisecond)
+							continue
+						}
+						return
+					}
+				}
+				go p.handle(conn)
+			}
+		}()
+		return nil
 	}
-	nMethods := int(buf[1])
-	if nMethods <= 0 {
-		return
-	}
-	if _, err := io.ReadFull(conn, buf[:nMethods]); err != nil {
-		return
-	}
-	if _, err := conn.Write([]byte{0x05, 0x02}); err != nil {
-		return
-	}
+
+	func (p *Plugin) handle(conn net.Conn) {
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
+
+		buf := make([]byte, 258)
+		if _, err := io.ReadFull(conn, buf[:2]); err != nil {
+			return
+		}
+		if buf[0] != 0x05 {
+			return
+		}
+		nMethods := int(buf[1])
+		if nMethods <= 0 {
+			return
+		}
+		if _, err := io.ReadFull(conn, buf[:nMethods]); err != nil {
+			return
+		}
+		// Require USER/PASS (0x02); reject if client did not offer it.
+		offered := false
+		for i := 0; i < nMethods; i++ {
+			if buf[i] == 0x02 {
+				offered = true
+				break
+			}
+		}
+		if !offered {
+			_, _ = conn.Write([]byte{0x05, 0xFF})
+			return
+		}
+		if _, err := conn.Write([]byte{0x05, 0x02}); err != nil {
+			return
+		}
 
 	if _, err := io.ReadFull(conn, buf[:2]); err != nil {
 		return
@@ -353,18 +378,21 @@ func extractUsersMap(v interface{}) map[string]string {
 	return users
 }
 
-func toInt(v interface{}) int {
-	switch t := v.(type) {
-	case float64:
-		return int(t)
-	case int:
-		return t
-	case int64:
-		return int(t)
-	case string:
-		n, _ := strconv.Atoi(t)
-		return n
-	default:
-		return 0
+	func toInt(v interface{}) int {
+		switch t := v.(type) {
+		case float64:
+			return int(t)
+		case int:
+			return t
+		case int64:
+			return int(t)
+		case json.Number:
+			n, _ := t.Int64()
+			return int(n)
+		case string:
+			n, _ := strconv.Atoi(t)
+			return n
+		default:
+			return 0
+		}
 	}
-}

@@ -22,7 +22,7 @@ import (
 	"github.com/cheesydui-cloud/mieru/internal/plugins/socksin"
 )
 
-const AgentVersion = "0.2.3"
+const AgentVersion = "0.2.4"
 
 type Agent struct {
 	cfg      config.AgentConfig
@@ -166,93 +166,128 @@ func (a *Agent) pullAndApply(ctx context.Context) error {
 		return err
 	}
 
-	// persist last_good payload
-	_ = os.WriteFile(filepath.Join(a.cfg.DataDir, "desired.json"), raw, 0o600)
+// persist last_good payload (even on failed apply — useful for debug)
+		_ = os.WriteFile(filepath.Join(a.cfg.DataDir, "desired.json"), raw, 0o600)
 
-	if err := a.apply(ctx, &cfg); err != nil {
-		return err
+		if err := a.apply(ctx, &cfg); err != nil {
+			// Do NOT advance version on failure/partial required-plugin failure —
+			// next pull/heartbeat will retry the same config version.
+			return err
+		}
+		a.version = cfg.Version
+		_ = os.WriteFile(filepath.Join(a.cfg.DataDir, "version"), []byte(fmt.Sprintf("%d", a.version)), 0o644)
+		log.Printf("applied config version=%d plugins=%d users=%d", cfg.Version, len(cfg.Plugins), len(cfg.Users))
+		return nil
 	}
-	a.version = cfg.Version
-	_ = os.WriteFile(filepath.Join(a.cfg.DataDir, "version"), []byte(fmt.Sprintf("%d", a.version)), 0o644)
-	log.Printf("applied config version=%d plugins=%d users=%d", cfg.Version, len(cfg.Plugins), len(cfg.Users))
-	return nil
-}
 
-func (a *Agent) apply(ctx context.Context, cfg *model.AgentDesiredConfig) error {
-	// Apply order: mita/mieru processes first, then socks_in (may use local mieru upstream), then nft.
-	order := map[string]int{
-		"mita_server":  10,
-		"mieru_client": 20,
-		"socks_in":     30,
-		"nft_forward":  40,
-	}
-	plugins := append([]map[string]interface{}{}, cfg.Plugins...)
-	for i := 0; i < len(plugins); i++ {
-		for j := i + 1; j < len(plugins); j++ {
-			ti, _ := plugins[i]["type"].(string)
-			tj, _ := plugins[j]["type"].(string)
-			if order[ti] > order[tj] {
-				plugins[i], plugins[j] = plugins[j], plugins[i]
+	func (a *Agent) apply(ctx context.Context, cfg *model.AgentDesiredConfig) error {
+		// Apply order: mita/mieru processes first, then socks_in (may use local mieru upstream), then nft.
+		order := map[string]int{
+			"mita_server":  10,
+			"mieru_client": 20,
+			"socks_in":     30,
+			"nft_forward":  40,
+		}
+		// Role-required plugins must succeed before we accept the config version.
+		required := requiredPlugins(cfg)
+		plugins := append([]map[string]interface{}{}, cfg.Plugins...)
+		for i := 0; i < len(plugins); i++ {
+			for j := i + 1; j < len(plugins); j++ {
+				ti, _ := plugins[i]["type"].(string)
+				tj, _ := plugins[j]["type"].(string)
+				if order[ti] > order[tj] {
+					plugins[i], plugins[j] = plugins[j], plugins[i]
+				}
 			}
 		}
+
+		// Convert typed users → []map so plugins' type asserts always work after JSON round-trips too.
+		usersMaps := usersToMaps(cfg.Users)
+
+		var firstErr error
+		okCount := 0
+		okByType := map[string]bool{}
+		for _, p := range plugins {
+			typ, _ := p["type"].(string)
+			pluginCfg, _ := p["config"].(map[string]interface{})
+			if pluginCfg == nil {
+				pluginCfg = map[string]interface{}{}
+			}
+			switch typ {
+			case "nft_forward":
+				rules := make([]interface{}, 0, len(cfg.Forwards))
+				for _, f := range cfg.Forwards {
+					rules = append(rules, map[string]interface{}{
+						"listen_port": f.ListenPort,
+						"target_host": f.TargetHost,
+						"target_port": f.TargetPort,
+						"comment":     f.Comment,
+					})
+				}
+				pluginCfg["rules"] = rules
+			case "mita_server", "socks_in", "mieru_client":
+				pluginCfg["users"] = usersMaps
+			}
+			pl, ok := a.registry.Get(typ)
+			if !ok {
+				log.Printf("unknown plugin %s — skip", typ)
+				continue
+			}
+			if err := pl.Apply(ctx, pluginCfg); err != nil {
+				// Continue remaining plugins so public listeners (socks_in) still come up
+				// even if mita/mieru fail (e.g. download race). Required plugins block version bump.
+				log.Printf("plugin %s apply error: %v", typ, err)
+				if firstErr == nil {
+					firstErr = fmt.Errorf("plugin %s: %w", typ, err)
+				}
+				continue
+			}
+			okCount++
+			okByType[typ] = true
+		}
+		// seed counters for known users on exit
+		for _, u := range cfg.Users {
+			if _, ok := a.counters[u.UserID]; !ok {
+				a.counters[u.UserID] = &userCounter{}
+			}
+		}
+		if okCount == 0 && firstErr != nil {
+			return firstErr
+		}
+		// Fail if any required plugin for this role did not succeed → retry same version.
+		for _, typ := range required {
+			if !okByType[typ] {
+				err := firstErr
+				if err == nil {
+					err = fmt.Errorf("required plugin %s missing or failed", typ)
+				}
+				log.Printf("partial apply incomplete (need %v, ok=%v): %v", required, okByType, err)
+				return fmt.Errorf("partial apply: %w", err)
+			}
+		}
+		if firstErr != nil {
+			// optional plugin failed but required ones OK
+			log.Printf("partial apply (optional only): %v (ok=%d)", firstErr, okCount)
+		}
+		return nil
 	}
 
-	// Convert typed users → []map so plugins' type asserts always work after JSON round-trips too.
-	usersMaps := usersToMaps(cfg.Users)
-
-	var firstErr error
-	okCount := 0
-	for _, p := range plugins {
+// requiredPlugins lists plugin types that must succeed for the role to be healthy.
+func requiredPlugins(cfg *model.AgentDesiredConfig) []string {
+	// From desired plugins present in config (not just role string — hybrid has both).
+	need := map[string]bool{}
+	for _, p := range cfg.Plugins {
 		typ, _ := p["type"].(string)
-		pluginCfg, _ := p["config"].(map[string]interface{})
-		if pluginCfg == nil {
-			pluginCfg = map[string]interface{}{}
-		}
 		switch typ {
-		case "nft_forward":
-			rules := make([]interface{}, 0, len(cfg.Forwards))
-			for _, f := range cfg.Forwards {
-				rules = append(rules, map[string]interface{}{
-					"listen_port": f.ListenPort,
-					"target_host": f.TargetHost,
-					"target_port": f.TargetPort,
-					"comment":     f.Comment,
-				})
-			}
-			pluginCfg["rules"] = rules
-		case "mita_server", "socks_in", "mieru_client":
-			pluginCfg["users"] = usersMaps
-		}
-		pl, ok := a.registry.Get(typ)
-		if !ok {
-			log.Printf("unknown plugin %s — skip", typ)
-			continue
-		}
-		if err := pl.Apply(ctx, pluginCfg); err != nil {
-			// Continue remaining plugins so public listeners (socks_in) still come up
-			// even if mita/mieru fail (e.g. download race). Retry next pull if all fail.
-			log.Printf("plugin %s apply error: %v", typ, err)
-			if firstErr == nil {
-				firstErr = fmt.Errorf("plugin %s: %w", typ, err)
-			}
-			continue
-		}
-		okCount++
-	}
-	// seed counters for known users on exit
-	for _, u := range cfg.Users {
-		if _, ok := a.counters[u.UserID]; !ok {
-			a.counters[u.UserID] = &userCounter{}
+		case "mita_server", "mieru_client", "socks_in":
+			need[typ] = true
 		}
 	}
-	if okCount == 0 && firstErr != nil {
-		return firstErr
+	out := make([]string, 0, len(need))
+	for t := range need {
+		out = append(out, t)
 	}
-	if firstErr != nil {
-		// partial success — advance version to avoid restarting healthy listeners every pull
-		log.Printf("partial apply: %v (ok=%d) — will not block version bump", firstErr, okCount)
-	}
-	return nil
+	return out
 }
 
 // usersToMaps converts AgentUser slice to []map[string]interface{} for plugin configs.

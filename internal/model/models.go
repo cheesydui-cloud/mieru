@@ -67,7 +67,42 @@ func (n *Node) NormalizePorts() {
 	}
 }
 
-// EffectiveListenPort: start of range, else role default.
+// DefaultListenPort is the public client-facing port when none is configured.
+func DefaultListenPort(role string) int {
+	switch role {
+	case RoleEntry:
+		return 1080
+	case RoleHybrid:
+		// Public SOCKS for clients; mita uses HybridMitaPort.
+		return 1080
+	case RoleRelay:
+		return 8964
+	case RoleExit:
+		return 8964
+	default:
+		return 1080
+	}
+}
+
+// HybridMitaPort is the private/public mita port when hybrid also exposes SOCKS.
+func HybridMitaPort(socksPort int) int {
+	if socksPort <= 0 {
+		return 8964
+	}
+	// Prefer socks+1; wrap away from 65535 collision.
+	p := socksPort + 1
+	if p > 65535 {
+		p = socksPort - 1
+	}
+	if p < 1 {
+		p = 8964
+	}
+	return p
+}
+
+// EffectiveListenPort: primary public port clients / probes / upstreams use.
+// Always consistent with what configgen binds for the role's public service:
+//   entry/relay/hybrid → socks_in; exit → mita.
 func (n *Node) EffectiveListenPort() int {
 	if n.PortMin > 0 {
 		return n.PortMin
@@ -75,36 +110,23 @@ func (n *Node) EffectiveListenPort() int {
 	if n.ListenPort > 0 {
 		return n.ListenPort
 	}
-	switch n.Role {
-	case RoleEntry, RoleHybrid:
-		return 1080
-	case RoleRelay, RoleExit:
-		return 8964
-	default:
-		return 1080
-	}
+	return DefaultListenPort(n.Role)
 }
 
-// EffectivePortRange returns [min,max] for allocatable ports; defaults by role.
+// EffectivePortRange returns [min,max]. When unset, defaults to a SINGLE port
+// equal to EffectiveListenPort so probe/subscription/mita/socks never disagree.
+// Multi-port ranges are only used when the operator explicitly sets port_min/max.
 func (n *Node) EffectivePortRange() (int, int) {
 	min, max := n.PortMin, n.PortMax
 	if min <= 0 && max <= 0 {
-		switch n.Role {
-		case RoleEntry, RoleHybrid:
-			return 10000, 20000
-		case RoleRelay:
-			return 20000, 30000
-		case RoleExit:
-			return 30000, 40000
-		default:
-			return 10000, 20000
-		}
+		p := n.EffectiveListenPort()
+		return p, p
 	}
 	if min <= 0 {
-		min = 1
+		min = n.EffectiveListenPort()
 	}
 	if max <= 0 {
-		max = 65535
+		max = min
 	}
 	if min > max {
 		min, max = max, min
@@ -116,6 +138,22 @@ func (n *Node) EffectivePortRange() (int, int) {
 		max = 65535
 	}
 	return min, max
+}
+
+// PublicServicePort is the port the next hop / probe should connect to.
+// For hybrid this is always the public SOCKS port (not mita).
+func (n *Node) PublicServicePort() int {
+	return n.EffectiveListenPort()
+}
+
+// MitaPrimaryPort is the port mita listens on for exit/hybrid.
+func (n *Node) MitaPrimaryPort() int {
+	switch n.Role {
+	case RoleHybrid:
+		return HybridMitaPort(n.EffectiveListenPort())
+	default:
+		return n.EffectiveListenPort()
+	}
 }
 
 // PortInRange maps userID into the node's allowed port pool (stable).
