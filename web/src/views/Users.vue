@@ -19,12 +19,12 @@ const form = reactive({
   note: '',
 })
 
-// share / QR modal — encodes socks5:// node link (not subscription URL)
+// share / QR modal — encodes mierus:// node link (official mieru client)
 const subShow = ref(false)
 const subUser = ref(null)
-const shareURL = ref('') // primary socks5:// for QR
-const shareURLs = ref('') // all entries newline-separated
-const subLink = ref('') // Clash YAML subscription (secondary)
+const shareURL = ref('') // primary mierus:// for QR
+const shareURLs = ref('') // all endpoints newline-separated
+const subLink = ref('') // plain-text mierus:// subscription URL
 const subQR = ref('')
 const subLoading = ref(false)
 const entries = ref([])
@@ -141,7 +141,7 @@ async function openSub(u) {
   try {
     let detail = null
     if (u?.id) {
-      // dedicated share endpoint returns socks5:// with password
+      // dedicated share endpoint returns mierus:// with password
       try {
         detail = await api(`/api/admin/users/${u.id}/share`)
       } catch {
@@ -276,15 +276,15 @@ onUnmounted(() => clearInterval(timer))
           </div>
           <div class="field">
             <label>公网入口 IP/域名（可选）</label>
-            <input v-model="form.entry_host" placeholder="留空则用线路第一跳公网地址" />
+            <input v-model="form.entry_host" placeholder="留空则用出口 mita 公网地址" />
           </div>
           <div class="field">
             <label>入口端口（可选）</label>
-            <input v-model.number="form.entry_port" type="number" min="1" max="65535" placeholder="留空用第一跳端口" />
+            <input v-model.number="form.entry_port" type="number" min="1" max="65535" placeholder="留空用出口 mita 端口" />
           </div>
         </div>
         <div class="muted" style="font-size:12px;line-height:1.5;margin:-4px 0 10px">
-          客户端扫码连的是这里的入口。商家给了独立公网 IP/域名时填写；不填则自动用线路第一跳（如 cm7）的公网 IP/域名与端口。
+          客户端用官方 mieru 协议直连出口 mita。商家给了独立公网 IP/域名（或转发到 mita）时填写；不填则自动用线路出口节点的公网地址与 mita 端口。
         </div>
         <div class="field">
           <label>备注</label>
@@ -295,7 +295,7 @@ onUnmounted(() => clearInterval(timer))
             <dt>代理密码</dt>
             <dd>{{ created.proxy_password }}</dd>
             <dt>节点链接</dt>
-            <dd style="word-break:break-all" class="mono">{{ created.share_url || '（无入口节点）' }}</dd>
+            <dd style="word-break:break-all" class="mono">{{ created.share_url || '（无可用出口 mita）' }}</dd>
           </div>
           <div class="row-actions" style="margin-top:10px">
             <button class="btn btn-ghost btn-sm" @click="copy(created.proxy_password)">复制密码</button>
@@ -322,7 +322,7 @@ onUnmounted(() => clearInterval(timer))
     </div>
   </div>
 
-  <!-- QR: socks5:// node link (scan to import), not subscription URL -->
+  <!-- QR: mierus:// node link (scan to import in official mieru client) -->
   <div v-if="subShow" class="modal-mask" @click.self="subShow = false">
     <div class="modal" style="width:min(520px,100%)">
       <div class="modal-hd">
@@ -339,11 +339,11 @@ onUnmounted(() => clearInterval(timer))
             <img :src="subQR" alt="节点二维码" width="280" height="280" style="display:block" />
           </div>
           <div v-else class="muted" style="padding:16px">
-            无法生成二维码（用户未绑定可用入口，或入口缺少公网地址/端口）
+            无法生成二维码（未绑定出口/hybrid，或节点缺少公网地址与 mita 端口）
           </div>
 
           <div class="field" style="text-align:left">
-            <label>节点链接（扫码内容 · socks5://）</label>
+            <label>节点链接（扫码内容 · mierus://）</label>
             <textarea
               readonly
               rows="3"
@@ -354,20 +354,20 @@ onUnmounted(() => clearInterval(timer))
           </div>
 
           <div v-if="entries.length > 1" class="field" style="text-align:left;margin-top:10px">
-            <label>全部入口</label>
+            <label>全部出口</label>
             <div
               v-for="(e, i) in entries"
               :key="i"
               class="mono"
               style="font-size:12px;word-break:break-all;padding:6px 0;border-bottom:1px solid var(--border)"
             >
-              {{ e.name }} · {{ e.host }}:{{ e.port }}
+              {{ e.name }} · {{ e.host }}:{{ e.port }} · {{ e.protocol || 'TCP' }}
               <button class="btn btn-ghost btn-sm" style="margin-left:8px" @click="copy(e.url)">复制</button>
             </div>
           </div>
 
           <div class="field" style="text-align:left;margin-top:12px">
-            <label class="muted">Clash 订阅（可选，YAML 下载地址）</label>
+            <label class="muted">订阅地址（纯文本 mierus:// 列表）</label>
             <textarea
               readonly
               rows="2"
@@ -378,8 +378,8 @@ onUnmounted(() => clearInterval(timer))
           </div>
 
           <div class="muted" style="font-size:12px;line-height:1.55;margin-top:10px;text-align:left">
-            用 Shadowrocket / Quantumult X / Surge / 小火箭等扫描上方二维码，直接导入 SOCKS5 节点。
-            不要扫 Clash 订阅地址。骨干 mieru 对客户端透明。
+            用官方 mieru 客户端 / OneClick 扫描上方二维码，导入 mierus:// 节点（直连出口 mita）。
+            协议必须是 mieru，不是 SOCKS5。
           </div>
         </template>
       </div>

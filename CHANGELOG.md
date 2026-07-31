@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.7] - 2026-08-01
+
+### Changed — 客户端分享改为官方 mierus://（直连出口 mita）
+- 运营商要求客户端必须使用 **mieru 协议**，不再生成 `socks5://` 入口链接。
+- 扫码 / 节点链接 / 订阅均为 `mierus://user:pass@host?handshake-mode=HANDSHAKE_NO_WAIT&mtu=1400&multiplexing=MULTIPLEXING_OFF&port=N&profile=default&protocol=TCP`。
+- 默认指向线路 **exit/hybrid 的 mita**（用户账号已同步到 mita）；`entry_host`/`entry_port` 仍可作为公网 IP/域名覆盖。
+- 订阅 `/sub/:token` 改为纯文本一行一个 `mierus://`（非 Clash SOCKS YAML）。
+- 管理端文案同步为「官方 mieru 客户端 / OneClick」。
+
+### Ops
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | bash
+```
+面板升级即可（分享逻辑在 panel；agent 可不升）。
+
 ## [0.3.6] - 2026-08-01
 
 ### Added — 开户可选手动公网入口

@@ -1476,163 +1476,146 @@ func (s *Server) nodeInstallCmd(c *gin.Context) {
 	})
 }
 
-// entryProxy is a client-facing SOCKS5 entry (first hop of the user's route).
-// entryProxy is a client-facing SOCKS5 entry (first hop / manual public entry).
-type entryProxy struct {
-	Name string `json:"name"`
-	Host string `json:"host"`
-	Port int    `json:"port"`
+// shareEndpoint is a client-facing mieru (mita) endpoint for QR / import.
+type shareEndpoint struct {
+	Name     string `json:"name"`
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	Protocol string `json:"protocol"` // TCP|UDP
 }
 
-// firstHopServicePort returns the public service port of the user's first agent hop.
-func (s *Server) firstHopServicePort(u *model.User) int {
-	if u == nil || u.RouteID == nil {
-		return 0
-	}
-	r, err := s.store.GetRoute(*u.RouteID)
-	if err != nil {
-		return 0
-	}
-	var hops []model.Hop
-	_ = json.Unmarshal([]byte(r.HopsJSON), &hops)
-	for _, h := range hops {
-		if h.External || (h.NodeID == "" && h.Host != "") {
-			if h.Port > 0 {
-				return h.Port
-			}
-			return 1080
-		}
-		if h.NodeID == "" {
-			continue
-		}
-		n, err := s.store.GetNode(h.NodeID)
-		if err != nil {
-			continue
-		}
-		if n.Role == model.RoleExit {
-			continue
-		}
-		return n.PublicServicePort()
-	}
-	return 0
-}
-
-// resolveUserEntries returns client-facing entry endpoints for a user.
-// Priority: user.EntryHost override → first hop of bound route → first entry/relay/hybrid node.
-func (s *Server) resolveUserEntries(u *model.User) []entryProxy {
+// resolveUserMitaEndpoints returns mita endpoints the end-user client should dial
+// with the official mieru client (mierus:// share link).
+//
+// Priority:
+//  1. user.EntryHost override (public IP/domain; port = EntryPort or exit mita port)
+//  2. exit/hybrid hop of the bound route
+//  3. all exit/hybrid nodes as fallback
+func (s *Server) resolveUserMitaEndpoints(u *model.User) []shareEndpoint {
 	seen := map[string]bool{}
-	proxies := []entryProxy{}
+	out := []shareEndpoint{}
 
-	// Manual public entry (IP or domain) set on the user at create/edit time.
-	if u != nil {
-		host := strings.TrimSpace(u.EntryHost)
-		if host != "" {
-			port := u.EntryPort
-			if port <= 0 {
-				port = s.firstHopServicePort(u)
-			}
-			if port <= 0 {
-				port = 1080
-			}
-			name := host
-			if u.Username != "" {
-				name = u.Username + "@" + host
-			}
-			return []entryProxy{{Name: name, Host: host, Port: port}}
+	add := func(name, host string, port int) {
+		host = strings.TrimSpace(host)
+		if host == "" || port <= 0 {
+			return
 		}
+		key := fmt.Sprintf("%s:%d", host, port)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		if name == "" {
+			name = host
+		}
+		out = append(out, shareEndpoint{Name: name, Host: host, Port: port, Protocol: "TCP"})
 	}
 
+	// Bound route → find exit/hybrid for default port (and host if no override).
+	var routeExit *model.Node
 	if u != nil && u.RouteID != nil {
 		if r, err := s.store.GetRoute(*u.RouteID); err == nil && r.Enabled {
 			var hops []model.Hop
 			_ = json.Unmarshal([]byte(r.HopsJSON), &hops)
-			for _, h := range hops {
-				if h.External || (h.NodeID == "" && h.Host != "") {
-					host := strings.TrimSpace(h.Host)
-					if host == "" {
-						continue
-					}
-					port := h.Port
-					if port <= 0 {
-						port = 1080
-					}
-					name := h.Name
-					if name == "" {
-						name = host
-					}
-					key := fmt.Sprintf("%s:%d", host, port)
-					if seen[key] {
-						continue
-					}
-					seen[key] = true
-					proxies = append(proxies, entryProxy{Name: name, Host: host, Port: port})
-					break
-				}
-				if h.NodeID == "" {
+			// Prefer last agent hop that is exit/hybrid; else any exit/hybrid in hops.
+			for i := len(hops) - 1; i >= 0; i-- {
+				h := hops[i]
+				if h.NodeID == "" || h.External {
 					continue
 				}
 				n, err := s.store.GetNode(h.NodeID)
 				if err != nil {
 					continue
 				}
-				// Client entry may be entry / hybrid / relay (relay exposes public socks_in).
-				if n.Role != model.RoleEntry && n.Role != model.RoleHybrid && n.Role != model.RoleRelay {
-					continue
+				if n.Role == model.RoleExit || n.Role == model.RoleHybrid {
+					routeExit = n
+					break
 				}
-				host := n.PublicHost()
-				if host == "" {
-					continue
-				}
-				name := n.Name
-				if name == "" {
-					name = host
-				}
-				port := n.PublicServicePort()
-				key := fmt.Sprintf("%s:%d", host, port)
-				if seen[key] {
-					continue
-				}
-				seen[key] = true
-				proxies = append(proxies, entryProxy{Name: name, Host: host, Port: port})
-				break
 			}
 		}
 	}
 
-	if len(proxies) == 0 {
-		nodes, _ := s.store.ListNodes()
-		for _, n := range nodes {
-			if n.Role != model.RoleEntry && n.Role != model.RoleHybrid && n.Role != model.RoleRelay {
-				continue
+	// Manual public entry host (operator-provided domain/IP in front of mita).
+	if u != nil {
+		host := strings.TrimSpace(u.EntryHost)
+		if host != "" {
+			port := u.EntryPort
+			if port <= 0 && routeExit != nil {
+				port = routeExit.MitaPrimaryPort()
 			}
-			host := n.PublicHost()
-			if host == "" {
-				continue
+			if port <= 0 {
+				port = 8964
 			}
-			name := n.Name
-			if name == "" {
-				name = host
+			name := host
+			if routeExit != nil && routeExit.Name != "" {
+				name = routeExit.Name
 			}
-			port := n.PublicServicePort()
-			key := fmt.Sprintf("%s:%d", host, port)
-			if seen[key] {
-				continue
+			if u.Username != "" {
+				name = u.Username + "@" + name
 			}
-			seen[key] = true
-			proxies = append(proxies, entryProxy{Name: name, Host: host, Port: port})
+			add(name, host, port)
+			return out
 		}
 	}
-	return proxies
+
+	if routeExit != nil {
+		host := routeExit.PublicHost()
+		port := routeExit.MitaPrimaryPort()
+		name := routeExit.Name
+		if name == "" {
+			name = host
+		}
+		add(name, host, port)
+		if len(out) > 0 {
+			return out
+		}
+	}
+
+	// Fallback: all exit/hybrid nodes.
+	nodes, _ := s.store.ListNodes()
+	for _, n := range nodes {
+		if n.Role != model.RoleExit && n.Role != model.RoleHybrid {
+			continue
+		}
+		host := n.PublicHost()
+		port := n.MitaPrimaryPort()
+		name := n.Name
+		if name == "" {
+			name = host
+		}
+		add(name, host, port)
+	}
+	return out
 }
 
-func socks5ShareURL(username, password, host string, port int, name string) string {
+// mierusShareURL builds official simple share link (ike-sh/mieru-OneClick / mieru client):
+//
+//	mierus://user:pass@host?handshake-mode=...&mtu=...&multiplexing=...&port=N&profile=default&protocol=TCP
+func mierusShareURL(username, password, host string, port int, protocol, name string) string {
 	if host == "" || port <= 0 {
 		return ""
 	}
+	if protocol == "" {
+		protocol = "TCP"
+	}
+	protocol = strings.ToUpper(protocol)
+	// IPv6 host needs brackets in URL authority — url.URL handles via JoinHostPort-less Host.
+	hostPart := host
+	if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
+		hostPart = "[" + host + "]"
+	}
+	q := url.Values{}
+	q.Set("handshake-mode", "HANDSHAKE_NO_WAIT")
+	q.Set("mtu", "1400")
+	q.Set("multiplexing", "MULTIPLEXING_OFF")
+	q.Set("port", strconv.Itoa(port))
+	q.Set("profile", "default")
+	q.Set("protocol", protocol)
 	u := url.URL{
-		Scheme: "socks5",
-		User:   url.UserPassword(username, password),
-		Host:   net.JoinHostPort(host, strconv.Itoa(port)),
+		Scheme:   "mierus",
+		User:     url.UserPassword(username, password),
+		Host:     hostPart,
+		RawQuery: q.Encode(),
 	}
 	if name != "" {
 		u.Fragment = name
@@ -1641,11 +1624,11 @@ func socks5ShareURL(username, password, host string, port int, name string) stri
 }
 
 func (s *Server) userSharePayload(u *model.User) gin.H {
-	entries := s.resolveUserEntries(u)
-	links := make([]gin.H, 0, len(entries))
+	endpoints := s.resolveUserMitaEndpoints(u)
+	links := make([]gin.H, 0, len(endpoints))
 	primary := ""
-	for _, e := range entries {
-		link := socks5ShareURL(u.Username, u.ProxyPassword, e.Host, e.Port, e.Name)
+	for _, e := range endpoints {
+		link := mierusShareURL(u.Username, u.ProxyPassword, e.Host, e.Port, e.Protocol, e.Name)
 		if link == "" {
 			continue
 		}
@@ -1653,13 +1636,13 @@ func (s *Server) userSharePayload(u *model.User) gin.H {
 			primary = link
 		}
 		links = append(links, gin.H{
-			"name": e.Name,
-			"host": e.Host,
-			"port": e.Port,
-			"url":  link,
+			"name":     e.Name,
+			"host":     e.Host,
+			"port":     e.Port,
+			"protocol": e.Protocol,
+			"url":      link,
 		})
 	}
-	// Multi-node: one URL per line (common for bulk import apps).
 	joined := ""
 	if len(links) > 0 {
 		parts := make([]string, 0, len(links))
@@ -1674,9 +1657,10 @@ func (s *Server) userSharePayload(u *model.User) gin.H {
 		"username":       u.Username,
 		"proxy_password": u.ProxyPassword,
 		"entries":        links,
-		"share_url":      primary, // first entry — encode this in QR for one-tap import
-		"share_urls":     joined,  // all entries, newline-separated
+		"share_url":      primary, // mierus:// — encode in QR
+		"share_urls":     joined,
 		"sub_token":      u.SubToken,
+		"protocol":       "mieru",
 	}
 }
 
@@ -1708,30 +1692,24 @@ func (s *Server) subscription(c *gin.Context) {
 		return
 	}
 
-	proxies := s.resolveUserEntries(u)
-
+	// One mierus:// link per line (official client / OneClick). Not Clash socks5.
+	endpoints := s.resolveUserMitaEndpoints(u)
 	var b strings.Builder
-	b.WriteString("# mieru-panel subscription\n")
+	b.WriteString("# mieru-panel\n")
 	b.WriteString("# user: " + u.Username + "\n")
-	b.WriteString("proxies:\n")
-	names := []string{}
-	if len(proxies) == 0 {
-		b.WriteString("  - name: \"placeholder-no-entry\"\n    type: socks5\n    server: 127.0.0.1\n    port: 1\n")
-		names = append(names, "placeholder-no-entry")
+	if len(endpoints) == 0 {
+		b.WriteString("# no exit/hybrid mita endpoint — bind route and rebuild\n")
 	} else {
-		for _, p := range proxies {
-			fmt.Fprintf(&b, "  - name: %q\n    type: socks5\n    server: %s\n    port: %d\n    username: %q\n    password: %q\n",
-				p.Name, p.Host, p.Port, u.Username, u.ProxyPassword)
-			names = append(names, p.Name)
+		for _, e := range endpoints {
+			link := mierusShareURL(u.Username, u.ProxyPassword, e.Host, e.Port, e.Protocol, e.Name)
+			if link != "" {
+				b.WriteString(link)
+				b.WriteByte('\n')
+			}
 		}
 	}
-	b.WriteString("proxy-groups:\n  - name: PROXY\n    type: select\n    proxies:\n")
-	for _, name := range names {
-		fmt.Fprintf(&b, "      - %q\n", name)
-	}
-	b.WriteString("rules:\n  - MATCH,PROXY\n")
-	c.Header("Content-Disposition", "attachment; filename=subscription.yaml")
-	c.Data(http.StatusOK, "text/yaml; charset=utf-8", []byte(b.String()))
+	c.Header("Content-Disposition", "attachment; filename=subscription.txt")
+	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(b.String()))
 }
 
 func (s *Server) agentHeartbeat(c *gin.Context) {
