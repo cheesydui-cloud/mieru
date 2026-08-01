@@ -797,10 +797,11 @@ func (s *Server) probeRoute(c *gin.Context) {
 		Status  string `json:"agent_status,omitempty"`
 		Via     string `json:"via,omitempty"` // agent|panel|skip
 	}
-	results := make([]hopResult, 0)
-	allOK := true
-	anyOK := false
-	legCount := 0
+		results := make([]hopResult, 0)
+		allOK := true
+		anyOK := false
+		legCount := 0      // legs that were actually dial-tested
+		skipCount := 0     // external / no-agent informational skips
 
 	// Resolve hop endpoint for dial target (prefer private IP).
 	type resolvedHop struct {
@@ -862,178 +863,194 @@ func (s *Server) probeRoute(c *gin.Context) {
 		resolved = append(resolved, rh)
 	}
 
-	// Build consecutive legs: hop[i] → hop[i+1]
-	for i := 0; i+1 < len(resolved); i++ {
-		from := resolved[i]
-		to := resolved[i+1]
-		legCount++
+		// Build consecutive legs: hop[i] → hop[i+1]
+		for i := 0; i+1 < len(resolved); i++ {
+			from := resolved[i]
+			to := resolved[i+1]
 
-		// Adjust target port: if destination is exit or hybrid after relay, use mita.
-		toPort := to.port
-		if to.node != nil {
-			if to.node.Role == model.RoleExit {
-				toPort = to.node.MitaPrimaryPort()
-			} else if to.node.Role == model.RoleHybrid {
-				// relay/entry → hybrid: if previous is relay/entry socks path to hybrid's socks;
-				// if previous is relay with mieru, dial mita on hybrid.
-				if from.node != nil && (from.node.Role == model.RoleRelay || from.node.Role == model.RoleHybrid) {
-					// Prefer mita when source is a relay (mieru client → mita).
-					if from.node.Role == model.RoleRelay {
-						toPort = to.node.MitaPrimaryPort()
+			// Adjust target port: if destination is exit or hybrid after relay, use mita.
+			toPort := to.port
+			if to.node != nil {
+				if to.node.Role == model.RoleExit {
+					toPort = to.node.MitaPrimaryPort()
+				} else if to.node.Role == model.RoleHybrid {
+					// Prefer mita when source is a front/relay (tcp_forward or mieru → mita).
+					if from.node != nil && (from.node.Role == model.RoleRelay || from.node.Role == model.RoleEntry || from.node.Role == model.RoleHybrid) {
+						if from.node.Role == model.RoleRelay || from.node.Role == model.RoleEntry {
+							toPort = to.node.MitaPrimaryPort()
+						} else {
+							toPort = to.node.PublicServicePort()
+						}
 					} else {
 						toPort = to.node.PublicServicePort()
 					}
 				} else {
 					toPort = to.node.PublicServicePort()
 				}
-			} else {
-				toPort = to.node.PublicServicePort()
-			}
-			if to.hop.Port > 0 {
-				toPort = to.hop.Port
-			}
-		}
-		toHost := to.host
-		if to.node != nil {
-			toHost = to.node.DialHost()
-		}
-
-		hr := hopResult{
-			Label:  from.label + " → " + to.label,
-			Kind:   "leg",
-			From:   from.label,
-			To:     to.label,
-			Host:   toHost,
-			Port:   toPort,
-			FromID: from.hop.NodeID,
-			ToID:   to.hop.NodeID,
-		}
-		if to.node != nil {
-			hr.NodeID = to.node.ID
-			hr.Status = to.node.Status
-		}
-
-		// External entry cannot dial outbound via agent — skip with info.
-		if from.kind == "external" || from.node == nil {
-			hr.Via = "skip"
-			hr.OK = false
-			hr.Error = "外部入口无 Agent，无法从入口侧测到下一跳；请确认商家 DNAT 到中继 " + toHost + ":" + strconv.Itoa(toPort)
-			// Don't count as hard fail for overall health if later legs exist —
-			// mark degraded path: treat as non-blocking info when other legs exist.
-			allOK = false
-			results = append(results, hr)
-			continue
-		}
-
-		if toHost == "" || toPort <= 0 {
-			hr.Via = "skip"
-			hr.OK = false
-			hr.Error = "下一跳缺少地址/端口（请填写公网 IP 或内网 IP）"
-			allOK = false
-			results = append(results, hr)
-			continue
-		}
-
-		// Prefer agent-side dial from source node.
-		if from.online && from.node != nil {
-			hr.Via = "agent"
-			// Wait > 1 heartbeat cycle (agent hb ≈5s) + dial timeout.
-			ok, lat, errMsg := s.requestAgentDial(from.node.ID, toHost, toPort, 30*time.Second)
-			hr.OK = ok
-			hr.Latency = lat
-			if !ok {
-				hr.Error = errMsg
-				if hr.Error == "" {
-					hr.Error = "agent dial failed"
+				if to.hop.Port > 0 {
+					toPort = to.hop.Port
 				}
+			}
+			toHost := to.host
+			if to.node != nil {
+				toHost = to.node.DialHost()
+			}
+
+			hr := hopResult{
+				Label:  from.label + " → " + to.label,
+				Kind:   "leg",
+				From:   from.label,
+				To:     to.label,
+				Host:   toHost,
+				Port:   toPort,
+				FromID: from.hop.NodeID,
+				ToID:   to.hop.NodeID,
+			}
+			if to.node != nil {
+				hr.NodeID = to.node.ID
+				hr.Status = to.node.Status
+			}
+
+			// Merchant public IP / external entry has no agent — cannot dial from there.
+			// This is informational only and must NOT mark the route unhealthy.
+			// Real path check is front agent → exit mita (next legs).
+			if from.kind == "external" || from.node == nil {
+				hr.Via = "skip"
+				hr.Kind = "external"
+				hr.OK = true // not a failure — unprobeable by design
+				hr.Error = "商家前置公网无 Agent，面板无法从 " + from.label + " 侧探测（属正常）。手机连 " +
+					from.host + ":" + strconv.Itoa(from.port) + " 由商家 DNAT 到中继；关键链路看下一跳「前置→落地」。"
+				if from.host != "" {
+					hr.Host = from.host
+					if from.port > 0 {
+						hr.Port = from.port
+					}
+				}
+				skipCount++
+				results = append(results, hr)
+				continue
+			}
+
+			if toHost == "" || toPort <= 0 {
+				legCount++
+				hr.Via = "skip"
+				hr.OK = false
+				hr.Error = "下一跳缺少地址/端口（请填写公网 IP 或内网 IP）"
+				allOK = false
+				results = append(results, hr)
+				continue
+			}
+
+			legCount++
+			// Prefer agent-side dial from source node.
+			if from.online && from.node != nil {
+				hr.Via = "agent"
+				// Wait > 1 heartbeat cycle (agent hb ≈5s) + dial timeout.
+				ok, lat, errMsg := s.requestAgentDial(from.node.ID, toHost, toPort, 30*time.Second)
+				hr.OK = ok
+				hr.Latency = lat
+				if !ok {
+					hr.Error = errMsg
+					if hr.Error == "" {
+						hr.Error = "agent dial failed"
+					}
+					allOK = false
+				} else {
+					anyOK = true
+				}
+				results = append(results, hr)
+				continue
+			}
+
+			// Fallback: panel dials target (only useful when panel can reach private net — rare).
+			hr.Via = "panel"
+			addr := net.JoinHostPort(toHost, strconv.Itoa(toPort))
+			start := time.Now()
+			conn, err := net.DialTimeout("tcp", addr, 4*time.Second)
+			hr.Latency = time.Since(start).Milliseconds()
+			if err != nil {
+				hr.OK = false
+				hr.Error = "源节点 Agent 离线，面板代测失败: " + err.Error()
 				allOK = false
 			} else {
+				_ = conn.Close()
+				hr.OK = true
 				anyOK = true
 			}
 			results = append(results, hr)
-			continue
 		}
 
-		// Fallback: panel dials target (only useful when panel can reach private net — rare).
-		hr.Via = "panel"
-		addr := net.JoinHostPort(toHost, strconv.Itoa(toPort))
-		start := time.Now()
-		conn, err := net.DialTimeout("tcp", addr, 4*time.Second)
-		hr.Latency = time.Since(start).Milliseconds()
-		if err != nil {
-			hr.OK = false
-			hr.Error = "源节点 Agent 离线，面板代测失败: " + err.Error()
-			allOK = false
-		} else {
-			_ = conn.Close()
-			hr.OK = true
-			anyOK = true
-		}
-		results = append(results, hr)
-	}
-
-	// Single-hop routes: no leg to test — report node self-listen from agent if possible.
-	if legCount == 0 && len(resolved) == 1 {
-		rh := resolved[0]
-		hr := hopResult{
-			Label:  rh.label + "（单跳自检）",
-			Kind:   "node",
-			Host:   rh.host,
-			Port:   rh.port,
-			NodeID: rh.hop.NodeID,
-		}
-		if rh.node != nil {
-			hr.Status = rh.node.Status
-			hr.Host = rh.node.DialHost()
-			hr.Port = rh.node.PublicServicePort()
-		}
-		if rh.node != nil && rh.online {
-			// dial 127.0.0.1 on agent
-			hr.Via = "agent"
-			ok, lat, errMsg := s.requestAgentDial(rh.node.ID, "127.0.0.1", hr.Port, 3*time.Second)
-			hr.OK = ok
-			hr.Latency = lat
-			if !ok {
-				hr.Error = errMsg
-				allOK = false
-			} else {
-				anyOK = true
+		// Single-hop routes: no leg to test — report node self-listen from agent if possible.
+		if legCount == 0 && skipCount == 0 && len(resolved) == 1 {
+			rh := resolved[0]
+			hr := hopResult{
+				Label:  rh.label + "（单跳自检）",
+				Kind:   "node",
+				Host:   rh.host,
+				Port:   rh.port,
+				NodeID: rh.hop.NodeID,
 			}
-		} else {
-			hr.Via = "skip"
-			hr.OK = false
-			hr.Error = "无法测通：无连续跳且节点离线"
-			allOK = false
+			if rh.node != nil {
+				hr.Status = rh.node.Status
+				hr.Host = rh.node.DialHost()
+				hr.Port = rh.node.PublicServicePort()
+			}
+			if rh.node != nil && rh.online {
+				hr.Via = "agent"
+				ok, lat, errMsg := s.requestAgentDial(rh.node.ID, "127.0.0.1", hr.Port, 3*time.Second)
+				hr.OK = ok
+				hr.Latency = lat
+				legCount++
+				if !ok {
+					hr.Error = errMsg
+					allOK = false
+				} else {
+					anyOK = true
+				}
+			} else if rh.kind == "external" {
+				hr.Via = "skip"
+				hr.Kind = "external"
+				hr.OK = true
+				hr.Error = "外部入口无 Agent，无法自检"
+				skipCount++
+			} else {
+				hr.Via = "skip"
+				hr.OK = false
+				hr.Error = "无法测通：无连续跳且节点离线"
+				legCount++
+				allOK = false
+			}
+			results = append(results, hr)
 		}
-		results = append(results, hr)
-		legCount = 1
-	}
 
-	if legCount == 0 {
-		allOK = false
-	}
+		health := "unknown"
+		if legCount == 0 {
+			// Only external skips (or empty) — cannot prove path from agents.
+			if skipCount > 0 {
+				health = "unknown"
+			} else {
+				health = "unknown"
+			}
+		} else if allOK {
+			health = "ok"
+		} else if anyOK {
+			health = "degraded"
+		} else {
+			health = "down"
+		}
+		_ = s.store.SetRouteHealth(id, health)
+		r.Health = health
 
-	health := "unknown"
-	if legCount == 0 {
-		health = "unknown"
-	} else if allOK {
-		health = "ok"
-	} else if anyOK {
-		health = "degraded"
-	} else {
-		health = "down"
+		c.JSON(http.StatusOK, gin.H{
+			"route_id":    id,
+			"health":      health,
+			"hops":        results,
+			"checked_at":  time.Now().UTC().Format(time.RFC3339),
+			"tested_legs": legCount,
+			"skipped":     skipCount,
+			"note":        "关键：前置 Agent → 落地 mita。商家公网入口无 Agent，显示「不可测」属正常，不代表手机连不上。",
+		})
 	}
-	_ = s.store.SetRouteHealth(id, health)
-	r.Health = health
-
-	c.JSON(http.StatusOK, gin.H{
-		"route_id":   id,
-		"health":     health,
-		"hops":       results,
-		"checked_at": time.Now().UTC().Format(time.RFC3339),
-		"note":       "按跳测通：从上一跳 Agent 拨测下一跳（优先内网 IP）。外部入口无 Agent 时该跳仅提示。",
-	})
-}
 
 func (s *Server) listUsers(c *gin.Context) {
 	_ = s.store.RefreshUserStatuses()

@@ -53,10 +53,15 @@ function parseHops(json) {
 function hopLabel(hop) {
   if (hop.external || (!hop.node_id && hop.host)) {
     const port = hop.port > 0 ? `:${hop.port}` : ''
-    return `${hop.name || hop.host || '外部'}${port}`
+    const host = hop.host || hop.name || '商家入口'
+    return `商家入口 ${host}${port}`
   }
   const n = (nodes.value || []).find((x) => x.id === hop.node_id)
-  if (!n) return hop.node_id || '?'
+  if (!n) {
+    // orphan node_id — still show short id, not as "不通"
+    const short = (hop.node_id || '?').slice(0, 12)
+    return short
+  }
   const kind =
     n.role === 'exit' || n.role === 'hybrid'
       ? '落地'
@@ -189,6 +194,26 @@ function healthClass(h) {
   if (h === 'degraded') return 'warn'
   if (h === 'down') return 'err'
   return ''
+}
+
+/** Per-hop result badge: skip/external = 不可测 (not a hard fail). */
+function hopResultLabel(h) {
+  if (!h) return '—'
+  if (h.via === 'skip' || h.kind === 'external' || h.kind === 'info') return '不可测'
+  return h.ok ? '通' : '不通'
+}
+
+function hopResultClass(h) {
+  if (!h) return ''
+  if (h.via === 'skip' || h.kind === 'external' || h.kind === 'info') return 'warn'
+  return h.ok ? 'ok' : 'err'
+}
+
+function hopRowLabel(h) {
+  if (!h) return '—'
+  if (h.label) return h.label
+  if (h.from && h.to) return `${h.from} → ${h.to}`
+  return h.host || h.name || '—'
 }
 
 async function probe(r) {
@@ -326,12 +351,15 @@ onMounted(load)
   </div>
 
   <div v-if="probeDetail" class="modal-mask" @click.self="probeDetail = null">
-    <div class="modal" style="max-width:520px">
+    <div class="modal" style="max-width:560px">
       <div class="modal-hd">
         <h3>探测结果 · {{ healthLabel(probeDetail.health) }}</h3>
         <button class="btn btn-ghost btn-sm" @click="probeDetail = null">关闭</button>
       </div>
       <div class="modal-bd">
+        <p class="help-text" style="margin:0 0 8px">
+          {{ probeDetail.note || '关键看「前置→落地」。商家公网入口无 Agent 时显示「不可测」属正常。' }}
+        </p>
         <table class="data" v-if="(probeDetail.hops || []).length">
           <thead>
             <tr>
@@ -343,12 +371,27 @@ onMounted(load)
           </thead>
           <tbody>
             <tr v-for="(h, i) in probeDetail.hops" :key="i">
-              <td>{{ h.name || h.host || h.node_id || i + 1 }}</td>
-              <td>
-                <span class="badge" :class="h.ok ? 'ok' : 'err'">{{ h.ok ? '通' : '不通' }}</span>
+              <td style="font-size:12px">
+                <div>{{ hopRowLabel(h) }}</div>
+                <div class="muted mono" style="font-size:11px" v-if="h.host">
+                  {{ h.host }}{{ h.port ? ':' + h.port : '' }}
+                </div>
               </td>
-              <td class="mono">{{ h.latency_ms != null ? h.latency_ms + 'ms' : '—' }}</td>
-              <td class="muted" style="font-size:12px">{{ h.error || h.detail || '—' }}</td>
+              <td>
+                <span class="badge" :class="hopResultClass(h)">{{ hopResultLabel(h) }}</span>
+              </td>
+              <td class="mono">
+                {{
+                  h.via === 'skip' || h.kind === 'external'
+                    ? '—'
+                    : h.latency_ms != null
+                      ? h.latency_ms + 'ms'
+                      : '—'
+                }}
+              </td>
+              <td class="muted" style="font-size:12px;max-width:240px;line-height:1.4">
+                {{ h.error || h.detail || '—' }}
+              </td>
             </tr>
           </tbody>
         </table>

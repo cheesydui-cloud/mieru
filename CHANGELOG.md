@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.1] - 2026-08-01
+
+### Fixed — 线路探测「商家入口不通」误报
+
+- 商家前置公网 IP 无 Agent，无法从入口侧 dial；此前标「不通」拉低健康度为「部分通」
+- 现标为 **不可测**（skip），不计入失败；健康度只看 **前置 Agent → 落地 mita**
+- 探测弹窗说明与 hop 展示同步
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.1 bash
+```
+
+（仅面板；agent 可不动）
+
+
 ## [0.4.0] - 2026-08-01
 
 ### UI — 线框层次 + 产品精简

@@ -11,7 +11,7 @@
 set -euo pipefail
 
 REPO="${MIERU_REPO:-cheesydui-cloud/mieru}"
-# 默认跟随 GitHub latest；也可 MIERU_VERSION=v0.4.0 钉死版本
+# 默认跟随 GitHub latest；也可 MIERU_VERSION=v0.4.1 钉死版本
 VERSION="${MIERU_VERSION:-}"
 PREFIX="${MIERU_PREFIX:-/usr/local}"
 # Agent has its own install dir — never overwrite panel's /opt/mieru-panel
@@ -35,7 +35,7 @@ usage() {
   bash install-agent.sh --panel-url URL --node-id ID --token TOKEN [--role exit|entry|relay|hybrid]
 
 环境变量:
-  MIERU_VERSION=v0.4.0   钉死版本（默认拉 GitHub latest）
+  MIERU_VERSION=v0.4.1   钉死版本（默认拉 GitHub latest）
 EOF
 }
 
@@ -103,7 +103,7 @@ resolve_version() {
       | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1) || true
   fi
   if [[ -z "$tag" ]]; then
-    tag="v0.4.0"
+    tag="v0.4.1"
     echo "==> 无法查询 latest，回退 ${tag}"
   fi
   VERSION="$tag"
@@ -205,7 +205,7 @@ SIZE=$(wc -c <"$TMP/$ASSET" | tr -d ' ')
 		  $SUDO ls -la "${PREFIX}/bin/mieru-agent" "${INSTALL_DIR}/agent" 2>/dev/null || true
 		  exit 1
 		fi
-		# Accept v0.4.0 or 0.3.10
+		# Accept v0.4.1 or 0.3.10
 		want="${VERSION#v}"
 		got="${BIN_VER#v}"
 		if [[ "$got" != "$want" && "$BIN_VER" != "$VERSION" ]]; then
