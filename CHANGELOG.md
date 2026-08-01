@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.11] - 2026-08-01
+
+### Fixed — 面板节点版本与 `mieru-agent -version` 不一致
+- 心跳上报的 `agent_version` 改为与 CLI 同一来源（`main.Version` / ldflags），不再只靠包内常量。
+- 列表 API 规范化版本字符串（去掉多余 `v` 前缀）。
+
+### Ops
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | MIERU_VERSION=v0.3.11 bash -s -- \
+  --panel-url ... --node-id ... --token ... --role relay
+```
+升 agent 后等一次心跳（约 5s），硬刷新面板。
+
+
 ## [0.3.10] - 2026-08-01
 
 ### Fixed — tcp_forward 宽端口段 bind 冲突

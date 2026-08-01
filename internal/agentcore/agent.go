@@ -27,7 +27,20 @@ import (
 	"github.com/cheesydui-cloud/mieru/internal/plugins/tcpforward"
 )
 
-const AgentVersion = "0.3.10"
+// AgentVersion is the default when main does not inject a build version.
+// Prefer SetVersion() from cmd/agent so -version and heartbeat always match.
+var AgentVersion = "0.3.11"
+
+// SetVersion overrides the version string reported in heartbeats (and logs).
+// Call from main with the same value as -ldflags -X main.Version.
+func SetVersion(v string) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return
+	}
+	// Heartbeat / UI historically use bare semver; strip optional leading "v".
+	AgentVersion = strings.TrimPrefix(v, "v")
+}
 
 type Agent struct {
 	cfg      config.AgentConfig
@@ -82,11 +95,12 @@ func (a *Agent) Run(ctx context.Context) error {
 		a.version = v
 	}
 
-	panel := strings.TrimRight(strings.TrimSpace(a.cfg.PanelURL), "/")
-	if panel == "" {
-		return fmt.Errorf("AGENT_PANEL_URL is required")
-	}
-	a.cfg.PanelURL = panel
+		panel := strings.TrimRight(strings.TrimSpace(a.cfg.PanelURL), "/")
+		if panel == "" {
+			return fmt.Errorf("AGENT_PANEL_URL is required")
+		}
+		a.cfg.PanelURL = panel
+		log.Printf("agent start version=%s panel=%s node=%s role=%s", AgentVersion, panel, a.cfg.NodeID, a.cfg.Role)
 	log.Printf("agent starting node=%s role=%s panel=%s", a.cfg.NodeID, a.cfg.Role, a.cfg.PanelURL)
 
 	// Immediate heartbeat so panel shows online without waiting for first ticker.
@@ -165,18 +179,18 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 		}
 	}
 	a.stateMu.Unlock()
-	body := model.HeartbeatRequest{
-		NodeID:        a.cfg.NodeID,
-		Token:         a.cfg.Token,
-		Role:          a.cfg.Role,
-		ConfigVersion: ver,
-		AgentVersion:  AgentVersion,
-		Hostname:      os.Getenv("AGENT_HOSTNAME"),
-		PublicIP:      os.Getenv("AGENT_PUBLIC_IP"),
-		Message:       msg,
-		ApplyError:    applyErr,
-	}
-	var resp struct {
+		body := model.HeartbeatRequest{
+			NodeID:        a.cfg.NodeID,
+			Token:         a.cfg.Token,
+			Role:          a.cfg.Role,
+			ConfigVersion: ver,
+			AgentVersion:  AgentVersion, // same source as CLI after SetVersion
+			Hostname:      os.Getenv("AGENT_HOSTNAME"),
+			PublicIP:      os.Getenv("AGENT_PUBLIC_IP"),
+			Message:       msg,
+			ApplyError:    applyErr,
+		}
+		var resp struct {
 		OK            bool  `json:"ok"`
 		ConfigVersion int64 `json:"config_version"`
 		NeedPull      bool  `json:"need_pull"`

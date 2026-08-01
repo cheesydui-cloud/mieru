@@ -13,8 +13,8 @@ import (
 	"github.com/cheesydui-cloud/mieru/internal/config"
 )
 
-// set by -ldflags "-X main.Version=v0.3.10"
-var Version = "v0.3.10"
+// set by -ldflags "-X main.Version=v0.3.11"
+var Version = "v0.3.11"
 
 func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")
@@ -23,6 +23,9 @@ func main() {
 		fmt.Println(Version)
 		return
 	}
+
+	// Keep heartbeat agent_version identical to `mieru-agent -version`.
+	agentcore.SetVersion(Version)
 
 	cfg := config.LoadAgent()
 	a := agentcore.New(cfg)

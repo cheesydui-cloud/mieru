@@ -354,9 +354,10 @@ func (s *Server) listNodes(c *gin.Context) {
 				if v, ok := meta["apply_error"].(string); ok {
 					no.ApplyError = v
 				}
-				if v, ok := meta["agent_version"].(string); ok {
-					no.AgentVersion = v
-				}
+					if v, ok := meta["agent_version"].(string); ok {
+						// Normalize: strip leading "v" so UI "v{{ver}}" never becomes "vv0.3.10"
+						no.AgentVersion = strings.TrimPrefix(strings.TrimSpace(v), "v")
+					}
 			}
 		}
 		if reveal {
