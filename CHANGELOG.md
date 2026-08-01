@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.10] - 2026-08-01
+
+### Fixed — tcp_forward 宽端口段 bind 冲突
+- 日志 `listen 10401: address already in use` + 打开 10401–10465 数十个监听：前置只应监听**扫码那一个口**。
+- entry/relay 的 `tcp_forward` 固定单端口（`listen_port`），不再展开 `port_min..port_max`。
+- 重载配置时先完整 stop 再 listen，并 `SO_REUSEADDR`，避免 rebuild 时端口占死。
+
+### Ops
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | bash
+```
+**cm7 agent 必升**；升完重建配置。节点端口建议改成 `10401~10401`。
+
+
 ## [0.3.9] - 2026-08-01
 
 ### Added — 国内前置 + 美国家宽落地（TK 目标链路）

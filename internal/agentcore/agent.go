@@ -27,7 +27,7 @@ import (
 	"github.com/cheesydui-cloud/mieru/internal/plugins/tcpforward"
 )
 
-const AgentVersion = "0.3.9"
+const AgentVersion = "0.3.10"
 
 type Agent struct {
 	cfg      config.AgentConfig

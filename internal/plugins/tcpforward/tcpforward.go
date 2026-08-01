@@ -8,18 +8,17 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 )
 
 // Plugin is a transparent TCP stream forwarder.
 //
-// Use case (panel multi-hop with official mieru client):
+// Product path (国内前置 + 美国家宽落地):
 //
 //	phone ──mierus──► front:listen  ──raw TCP──►  exit mita:port  ──► residential exit
 //
 // Bytes are not interpreted; mieru handshake/auth happens end-to-end on the exit mita.
-// This is how a domestic front + US residential exit works when the client must speak mieru
-// (socks5 entry is not acceptable).
 type Plugin struct {
 	DataDir string
 
@@ -48,14 +47,9 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 		return fmt.Errorf("tcp_forward: no listen port")
 	}
 
-	p.mu.Lock()
-	// stop previous
-	if p.cancel != nil {
-		p.cancel()
-		p.cancel = nil
-	}
-	p.mu.Unlock()
-	p.wg.Wait()
+	// Stop previous listeners fully before rebinding (avoids "address already in use"
+	// when panel rebuilds while agent still holds the old sockets).
+	p.stop()
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	p.mu.Lock()
@@ -67,7 +61,7 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 	var firstErr error
 	started := 0
 	for _, port := range ports {
-		ln, err := net.Listen("tcp", net.JoinHostPort("0.0.0.0", strconv.Itoa(port)))
+		ln, err := listenTCP(port)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("tcp_forward listen %d: %w", port, err)
@@ -94,7 +88,6 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 						return
 					default:
 						time.Sleep(50 * time.Millisecond)
-						// listener closed or fatal
 						if op, ok := err.(*net.OpError); ok && op.Err != nil {
 							return
 						}
@@ -111,12 +104,57 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 	}
 	if started == 0 {
 		cancel()
+		p.mu.Lock()
+		p.running = false
+		p.cancel = nil
+		p.mu.Unlock()
 		return firstErr
 	}
 	if firstErr != nil {
 		log.Printf("[tcp_forward] partial start: %v (ok=%d)", firstErr, started)
 	}
 	return nil
+}
+
+func (p *Plugin) stop() {
+	p.mu.Lock()
+	cancel := p.cancel
+	p.cancel = nil
+	p.running = false
+	p.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	// Wait for accept loops + in-flight copies to exit and release ports.
+	done := make(chan struct{})
+	go func() {
+		p.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		log.Printf("[tcp_forward] stop wait timed out; continuing rebind")
+	}
+	// Brief grace for kernel to free TIME_WAIT / closed sockets.
+	time.Sleep(150 * time.Millisecond)
+}
+
+func listenTCP(port int) (net.Listener, error) {
+	lc := net.ListenConfig{
+		Control: func(network, address string, c syscall.RawConn) error {
+			var opErr error
+			err := c.Control(func(fd uintptr) {
+				// Allow quick rebind after rebuild / agent restart.
+				opErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+			})
+			if err != nil {
+				return err
+			}
+			return opErr
+		},
+	}
+	return lc.Listen(context.Background(), "tcp", net.JoinHostPort("0.0.0.0", strconv.Itoa(port)))
 }
 
 func (p *Plugin) handle(ctx context.Context, client net.Conn, target string) {
@@ -129,7 +167,6 @@ func (p *Plugin) handle(ctx context.Context, client net.Conn, target string) {
 		return
 	}
 	defer upstream.Close()
-	// clear handshake deadline — long-lived proxy streams
 	_ = client.SetDeadline(time.Time{})
 	_ = upstream.SetDeadline(time.Time{})
 
@@ -138,7 +175,6 @@ func (p *Plugin) handle(ctx context.Context, client net.Conn, target string) {
 	copyFn := func(dst, src net.Conn) {
 		defer wg.Done()
 		_, _ = io.Copy(dst, src)
-		// unblock peer
 		type closeWriter interface{ CloseWrite() error }
 		if cw, ok := dst.(closeWriter); ok {
 			_ = cw.CloseWrite()
@@ -160,20 +196,25 @@ func (p *Plugin) handle(ctx context.Context, client net.Conn, target string) {
 	}
 }
 
+// collectPorts: for front tcp_forward we only need the primary public port.
+// A wide port_min/port_max (e.g. 10401-10499) is treated as operator pool metadata
+// and must NOT open dozens of listeners (causes bind storms + rebind races).
 func collectPorts(listen, pmin, pmax int) []int {
+	// Prefer explicit single listen_port.
+	if listen > 0 {
+		return []int{listen}
+	}
+	// Only expand a tiny explicit range (≤8 ports) if no listen_port.
 	if pmin > 0 && pmax >= pmin {
-		// Cap range size to avoid opening hundreds of sockets by accident.
-		if pmax-pmin > 64 {
-			pmax = pmin + 64
+		if pmax-pmin > 7 {
+			// Wide pool → single primary (min).
+			return []int{pmin}
 		}
 		out := make([]int, 0, pmax-pmin+1)
 		for p := pmin; p <= pmax; p++ {
 			out = append(out, p)
 		}
 		return out
-	}
-	if listen > 0 {
-		return []int{listen}
 	}
 	return nil
 }

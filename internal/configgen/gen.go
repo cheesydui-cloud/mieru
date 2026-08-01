@@ -151,12 +151,14 @@ func (b *Builder) RebuildAll() error {
 				host := exitTarget.DialHost()
 				mitaPort := exitTarget.MitaPrimaryPort()
 				if host != "" && mitaPort > 0 {
+					// Single public port only — wide port pools (10401-10499) are
+					// operator metadata, not 99 parallel listeners.
 					cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
 						"type": "tcp_forward",
 						"config": map[string]interface{}{
 							"listen_port": pubPort,
-							"port_min":    emin,
-							"port_max":    emax,
+							"port_min":    pubPort,
+							"port_max":    pubPort,
 							"target_host": host,
 							"target_port": mitaPort,
 							"exit_id":     exitTarget.ID,
@@ -206,12 +208,13 @@ func (b *Builder) RebuildAll() error {
 				host := ex.DialHost()
 				mitaPort := ex.MitaPrimaryPort()
 				if host != "" && mitaPort > 0 {
+					// Single public port (front entry). Do not open pmin..pmax.
 					cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
 						"type": "tcp_forward",
 						"config": map[string]interface{}{
 							"listen_port": pubPort,
-							"port_min":    pmin,
-							"port_max":    pmax,
+							"port_min":    pubPort,
+							"port_max":    pubPort,
 							"target_host": host,
 							"target_port": mitaPort,
 							"exit_id":     ex.ID,
