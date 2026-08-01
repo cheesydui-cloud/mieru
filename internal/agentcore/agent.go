@@ -32,7 +32,7 @@ var errUnauthorized = fmt.Errorf("unauthorized: node deleted or token invalid")
 
 // AgentVersion is the default when main does not inject a build version.
 // Prefer SetVersion() from cmd/agent so -version and heartbeat always match.
-var AgentVersion = "0.4.15"
+var AgentVersion = "0.4.16"
 
 // SetVersion overrides the version string reported in heartbeats (and logs).
 // Call from main with the same value as -ldflags -X main.Version.
@@ -50,8 +50,9 @@ type Agent struct {
 	client   *http.Client
 	registry *plugins.Registry
 	// per-user metering from `mita get users` (exit/hybrid)
-	counters map[int64]*userCounter
-	// username (mita) → panel user_id from last desired config
+	// meterMu guards counters + userByName (pull seed vs 1s traffic ticker).
+	meterMu    sync.Mutex
+	counters   map[int64]*userCounter
 	userByName map[string]int64
 	// stateMu guards version + lastApplyMsg (heartbeat vs background apply).
 	stateMu      sync.Mutex
@@ -63,6 +64,8 @@ type Agent struct {
 	// upgradeBusy: 1 while self-upgrade download/install running
 	upgradeBusy      int32
 	lastUpgradeJobID string // avoid re-running same job every heartbeat
+	// traffic log rate-limit (unix sec of last diagnostic line)
+	lastTrafficLog int64
 }
 
 // userCounter tracks absolute totals from mita and derived bps.
@@ -351,6 +354,8 @@ func (a *Agent) pullAndApply(ctx context.Context) error {
 func (a *Agent) seedMeteringUsers(users []model.AgentUser) {
 	// Always replace so revoked users stop matching; empty → clear map.
 	next := map[string]int64{}
+	a.meterMu.Lock()
+	defer a.meterMu.Unlock()
 	for _, u := range users {
 		if u.UserID <= 0 {
 			continue
@@ -536,12 +541,17 @@ func (a *Agent) reportTraffic(ctx context.Context) error {
 	now := time.Now().Unix()
 	totals, err := a.readMitaUserTotals()
 	if err != nil {
+		a.trafficLogf("traffic: mita sample failed: %v", err)
 		// mita not ready / no users yet — report zeros for known users so UI clears stale rates
 		return a.postTrafficSamples(ctx, a.zeroSamples(now))
 	}
 
-	samples := make([]model.TrafficReportSample, 0, len(totals))
+	a.meterMu.Lock()
+	samples := make([]model.TrafficReportSample, 0, len(totals)+len(a.counters))
 	skipped := 0
+	var matched int
+	var sumUpDelta, sumDownDelta, sumUpBps, sumDownBps int64
+	mapSize := len(a.userByName)
 	for name, tot := range totals {
 		uid, ok := a.userByName[name]
 		if !ok || uid <= 0 {
@@ -559,7 +569,6 @@ func (a *Agent) reportTraffic(ctx context.Context) error {
 		}
 
 		var upDelta, downDelta int64
-		var upBps, downBps int64
 		if !c.primed {
 			// first sample: establish baseline, no spike
 			c.primed = true
@@ -578,21 +587,26 @@ func (a *Agent) reportTraffic(ctx context.Context) error {
 				upDelta = tot.up - c.lastUp
 			} else {
 				upDelta = 0
+				c.lastUp = tot.up
 			}
 			if tot.down >= c.lastDown {
 				downDelta = tot.down - c.lastDown
 			} else {
 				downDelta = 0
+				c.lastDown = tot.down
 			}
 			// bytes/sec * 8 = bits/sec
-			upBps = (upDelta * 8) / elapsed
-			downBps = (downDelta * 8) / elapsed
+			c.upBps = (upDelta * 8) / elapsed
+			c.downBps = (downDelta * 8) / elapsed
 			c.lastUp = tot.up
 			c.lastDown = tot.down
 			c.lastTS = now
-			c.upBps = upBps
-			c.downBps = downBps
 		}
+		matched++
+		sumUpDelta += upDelta
+		sumDownDelta += downDelta
+		sumUpBps += c.upBps
+		sumDownBps += c.downBps
 		samples = append(samples, model.TrafficReportSample{
 			UserID:    uid,
 			UpDelta:   upDelta,
@@ -615,15 +629,40 @@ func (a *Agent) reportTraffic(ctx context.Context) error {
 			UserID: uid, UpBps: 0, DownBps: 0, TS: now,
 		})
 	}
-	if skipped > 0 && len(a.userByName) == 0 {
-		log.Printf("traffic: mita has %d user line(s) but agent user map empty — wait for config pull", len(totals))
+	a.meterMu.Unlock()
+
+	if skipped > 0 && mapSize == 0 {
+		a.trafficLogf("traffic: mita has %d user line(s) but agent user map empty — wait for config pull", len(totals))
 	} else if skipped > 0 {
-		log.Printf("traffic: skipped %d mita user(s) not in panel map (names=%v map=%d)", skipped, keysOf(totals), len(a.userByName))
+		a.trafficLogf("traffic: skipped %d mita user(s) not in panel map (names=%v map=%d)", skipped, keysOf(totals), mapSize)
+	} else if matched > 0 && (sumUpDelta > 0 || sumDownDelta > 0) {
+		// only log when there is real progress (rate-limited inside trafficLogf)
+		a.trafficLogf("traffic: ok matched=%d mita_rows=%d map=%d Δup=%d Δdown=%d up_bps=%d down_bps=%d",
+			matched, len(totals), mapSize, sumUpDelta, sumDownDelta, sumUpBps, sumDownBps)
+	} else if matched == 0 && len(totals) == 0 {
+		a.trafficLogf("traffic: mita get users returned 0 rows (map=%d) — users idle or metrics empty", mapSize)
 	}
 	if len(samples) == 0 {
 		return nil
 	}
-	return a.postTrafficSamples(ctx, samples)
+	if err := a.postTrafficSamples(ctx, samples); err != nil {
+		a.trafficLogf("traffic: post failed: %v", err)
+		return err
+	}
+	return nil
+}
+
+// trafficLogf rate-limits diagnostic lines to ~once per 30s so journal stays readable.
+func (a *Agent) trafficLogf(format string, args ...interface{}) {
+	now := time.Now().Unix()
+	a.meterMu.Lock()
+	if now-a.lastTrafficLog < 30 {
+		a.meterMu.Unlock()
+		return
+	}
+	a.lastTrafficLog = now
+	a.meterMu.Unlock()
+	log.Printf(format, args...)
 }
 
 func keysOf(m map[string]mitaUserTotal) []string {
@@ -655,6 +694,8 @@ func (a *Agent) postTrafficSamples(ctx context.Context, samples []model.TrafficR
 }
 
 func (a *Agent) zeroSamples(now int64) []model.TrafficReportSample {
+	a.meterMu.Lock()
+	defer a.meterMu.Unlock()
 	out := make([]model.TrafficReportSample, 0, len(a.counters))
 	for uid := range a.counters {
 		out = append(out, model.TrafficReportSample{UserID: uid, TS: now})
@@ -667,16 +708,13 @@ func (a *Agent) zeroSamples(now int64) []model.TrafficReportSample {
 func (a *Agent) readMitaUserTotals() (map[string]mitaUserTotal, error) {
 	dataDir := filepath.Join(a.cfg.DataDir, "mita")
 	binDir := filepath.Join(a.cfg.DataDir, "bin")
-	bin := procutil.LookPath("mita")
-	if bin == "" {
-		// local install from previous EnsureBinary
-		cand := filepath.Join(binDir, "mita")
-		if st, err := os.Stat(cand); err == nil && !st.IsDir() {
-			bin = cand
-		}
+	// Prefer plugin-managed binary (same path mita_server Apply uses), then PATH.
+	bin := filepath.Join(binDir, "mita")
+	if st, err := os.Stat(bin); err != nil || st.IsDir() {
+		bin = procutil.LookPath("mita")
 	}
 	if bin == "" {
-		return nil, fmt.Errorf("mita binary not found")
+		return nil, fmt.Errorf("mita binary not found (looked in %s and PATH)", binDir)
 	}
 	rt, err := procutil.EnsureMitaDaemon(bin, dataDir)
 	if err != nil {
@@ -684,7 +722,7 @@ func (a *Agent) readMitaUserTotals() (map[string]mitaUserTotal, error) {
 	}
 	out, err := rt.MitaCmd("get", "users")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("mita get users: %w (bin=%s uds=%s)", err, bin, rt.UDSPath)
 	}
 	m := parseMitaUsersTable(out)
 	if len(m) == 0 && strings.TrimSpace(out) != "" {
@@ -693,7 +731,7 @@ func (a *Agent) readMitaUserTotals() (map[string]mitaUserTotal, error) {
 		if len(sample) > 240 {
 			sample = sample[:240] + "…"
 		}
-		log.Printf("traffic: mita get users parsed 0 rows; raw sample: %q", sample)
+		a.trafficLogf("traffic: mita get users parsed 0 rows; raw sample: %q", sample)
 	}
 	return m, nil
 }
@@ -718,8 +756,8 @@ func parseMitaUsersTable(out string) map[string]mitaUserTotal {
 			continue
 		}
 		fields := strings.Fields(line)
-		// need at least: name lastActive down up
-		if len(fields) < 4 {
+		// need at least: name + sizes; never-active may be "user never 0B 0B ..." or "user - 0B 0B"
+		if len(fields) < 3 {
 			continue
 		}
 		name := fields[0]
@@ -728,11 +766,21 @@ func parseMitaUsersTable(out string) map[string]mitaUserTotal {
 			continue
 		}
 		// columns: User LastActive 1DayDownload 1DayUpload ...
-		// LastActive may be RFC3339 (no spaces) → fields[1]
-		downStr, upStr := fields[2], fields[3]
-		if len(fields) >= 5 && !looksLikeSize(fields[2]) {
-			// LastActive might have been split? uncommon — try last two size-like before 30d
-			downStr, upStr = fields[1], fields[2]
+		// Find first two size-like tokens after name (LastActive is not a size).
+		downStr, upStr := "", ""
+		sizes := make([]string, 0, 4)
+		for _, f := range fields[1:] {
+			if looksLikeSize(f) {
+				sizes = append(sizes, f)
+			}
+		}
+		if len(sizes) >= 2 {
+			downStr, upStr = sizes[0], sizes[1]
+		} else if len(fields) >= 4 {
+			// fallback: classic layout fields[2], fields[3]
+			downStr, upStr = fields[2], fields[3]
+		} else {
+			continue
 		}
 		down := parseHumanSize(downStr)
 		up := parseHumanSize(upStr)
@@ -798,6 +846,8 @@ func parseHumanSize(s string) int64 {
 
 // AddBytes allows external metering hooks (optional).
 func (a *Agent) AddBytes(userID int64, up, down int64) {
+	a.meterMu.Lock()
+	defer a.meterMu.Unlock()
 	c, ok := a.counters[userID]
 	if !ok {
 		c = &userCounter{}

@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.16] - 2026-07-30
+
+### 流量 / 实时网速（再修）
+
+- 计量 map 加锁：pull 与 1s 采样并发不再竞态
+- system 安装的 mita 也带上 `MITA_UDS_PATH`，CLI 与 daemon 同一 socket
+- 优先用 agent 自带 `bin/mita`，与 mita_server 插件一致
+- 解析 `mita get users` 更稳（按 size token 找上下行列）
+- 限速诊断日志：`traffic: ok …` / `post failed` / `mita sample failed`
+
+### 升级（落地 Agent 必须升）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | MIERU_VERSION=v0.4.16 bash
+```
+
+
 ## [0.4.15] - 2026-07-30
 
 ### 流量 / 实时网速修复

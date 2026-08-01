@@ -2811,17 +2811,30 @@ func (s *Server) agentTraffic(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
+	var applied, skipped int
+	var sumUp, sumDown int64
 	for _, sample := range req.Samples {
+		if sample.UserID <= 0 {
+			skipped++
+			continue
+		}
 		_ = s.store.AddTraffic(sample.UserID, n.ID, sample.UpDelta, sample.DownDelta)
+		ts := sample.TS
+		if ts <= 0 {
+			ts = time.Now().Unix()
+		}
 		s.store.SetRate(model.TrafficSample{
 			UserID:    sample.UserID,
 			UpBps:     sample.UpBps,
 			DownBps:   sample.DownBps,
 			UpBytes:   sample.UpDelta,
 			DownBytes: sample.DownDelta,
-			TS:        sample.TS,
+			TS:        ts,
 		})
+		applied++
+		sumUp += sample.UpDelta
+		sumDown += sample.DownDelta
 	}
 	_ = s.store.RefreshUserStatuses()
-	c.JSON(http.StatusOK, gin.H{"ok": true})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "applied": applied, "skipped": skipped, "up": sumUp, "down": sumDown})
 }

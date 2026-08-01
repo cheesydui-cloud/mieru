@@ -353,7 +353,13 @@ func EnsureMitaDaemon(bin, dataDir string) (*MitaRuntime, error) {
 			if waitSocketAny(systemMitaSockets(), 20*time.Second) {
 				sock := anySystemSocketReady()
 				log.Printf("[procutil] mita system daemon ready sock=%s", sock)
-				return &MitaRuntime{Bin: bin, UDSPath: sock, Managed: false}, nil
+				// Always set MITA_UDS_PATH so CLI talks to the same socket the
+				// daemon uses (non-default paths / multi-instance safe).
+				env := []string{
+					"MITA_UDS_PATH=" + sock,
+					"MITA_INSECURE_UDS=1",
+				}
+				return &MitaRuntime{Bin: bin, Env: env, UDSPath: sock, Managed: false}, nil
 			}
 			log.Printf("[procutil] system mita.service present but socket not ready — trying managed run")
 		}
