@@ -137,7 +137,8 @@ async function loadRates() {
     const now = Math.floor(Date.now() / 1000)
     for (const id of Object.keys(next)) {
       const r = next[id]
-      if (r && r.ts && now - r.ts > 8) {
+      // 15s: agent posts every 1s but panel clock / brief network lag should not zero the UI
+      if (r && r.ts && now - r.ts > 15) {
         next[id] = { up: 0, down: 0, ts: r.ts }
       }
     }
@@ -145,7 +146,7 @@ async function loadRates() {
       const ts = s.ts || 0
       let up = s.up_bps || 0
       let down = s.down_bps || 0
-      if (ts && now - ts > 8) {
+      if (ts && now - ts > 15) {
         up = 0
         down = 0
       }

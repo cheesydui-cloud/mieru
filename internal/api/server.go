@@ -1511,8 +1511,8 @@ func (s *Server) listUsers(c *gin.Context) {
 		}
 		if sample, ok := s.store.GetRate(u.ID); ok {
 			r.RateTS = sample.TS
-			// stale (>8s) → show 0 so UI never freezes on last speed
-			if sample.TS > 0 && now-sample.TS > 8 {
+			// stale (>15s) → show 0 so UI never freezes on last speed
+			if sample.TS > 0 && now-sample.TS > 15 {
 				r.UpBps = 0
 				r.DownBps = 0
 			} else {
@@ -1862,12 +1862,12 @@ func (s *Server) toggleUser(c *gin.Context) {
 }
 
 func (s *Server) listRates(c *gin.Context) {
-	// drop stale samples (>8s) so UI doesn't show frozen speeds
+	// drop stale samples (>15s) so UI doesn't show frozen speeds
 	rates := s.store.AllRates()
 	now := time.Now().Unix()
 	out := make([]model.TrafficSample, 0, len(rates))
 	for _, r := range rates {
-		if r.TS > 0 && now-r.TS > 8 {
+		if r.TS > 0 && now-r.TS > 15 {
 			r.UpBps = 0
 			r.DownBps = 0
 		}

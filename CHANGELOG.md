@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.4.17] - 2026-07-30
+
+### 流量 / 实时网速（根因修复）
+
+认真扫完整条链路后定位并修复：
+
+1. **Agent 是否采样看错了开关**：以前只看安装时的 `AGENT_ROLE`。若落地机 env 写成 entry/relay，或改过节点角色，**永远不跑 reportTraffic**，UI 永远 0。现在按 **desired 配置里是否有 `mita_server` / role=exit|hybrid** 决定，并在每次 pull 同步 role。
+2. **计量数据源太脆**：只解析 `mita get users` 的 1 日人类可读表。现优先读 **`mita get metrics` JSON 绝对计数**（`users.*.DownloadBytes/UploadBytes`），再回退到 get users 表。
+3. 保留 map 加锁、UDS、诊断日志。
+
+### 升级（落地 Agent 必须升）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | MIERU_VERSION=v0.4.17 bash
+```
+
+升完后落地机：
+
+```bash
+journalctl -u mieru-agent -n 50 --no-pager | grep -E 'traffic|metering'
+# 应看到: traffic metering enabled=true
+# 有流量时: traffic: ok matched=...
+```
+
+
 ## [0.4.16] - 2026-07-30
 
 ### 流量 / 实时网速（再修）

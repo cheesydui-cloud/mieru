@@ -32,7 +32,7 @@ var errUnauthorized = fmt.Errorf("unauthorized: node deleted or token invalid")
 
 // AgentVersion is the default when main does not inject a build version.
 // Prefer SetVersion() from cmd/agent so -version and heartbeat always match.
-var AgentVersion = "0.4.16"
+var AgentVersion = "0.4.17"
 
 // SetVersion overrides the version string reported in heartbeats (and logs).
 // Call from main with the same value as -ldflags -X main.Version.
@@ -66,6 +66,9 @@ type Agent struct {
 	lastUpgradeJobID string // avoid re-running same job every heartbeat
 	// traffic log rate-limit (unix sec of last diagnostic line)
 	lastTrafficLog int64
+	// meterEnabled: true when this node runs mita_server (from desired plugins),
+	// not from AGENT_ROLE env — wrong install role used to disable all metering.
+	meterEnabled bool
 }
 
 // userCounter tracks absolute totals from mita and derived bps.
@@ -116,9 +119,19 @@ func (a *Agent) Run(ctx context.Context) error {
 	// immediately after restart (before / while first pull skips full apply).
 	if b, err := os.ReadFile(filepath.Join(a.cfg.DataDir, "desired.json")); err == nil {
 		var last model.AgentDesiredConfig
-		if json.Unmarshal(b, &last) == nil && len(last.Users) > 0 {
-			a.seedMeteringUsers(last.Users)
-			log.Printf("restored metering map users=%d from desired.json", len(a.userByName))
+		if json.Unmarshal(b, &last) == nil {
+			if len(last.Users) > 0 {
+				a.seedMeteringUsers(last.Users)
+			}
+			a.updateMeteringFromDesired(&last)
+			if r := strings.TrimSpace(last.Role); r != "" {
+				a.cfg.Role = r
+			}
+			a.meterMu.Lock()
+			n := len(a.userByName)
+			en := a.meterEnabled
+			a.meterMu.Unlock()
+			log.Printf("restored metering map users=%d enabled=%v role=%s from desired.json", n, en, a.cfg.Role)
 		}
 	}
 
@@ -165,7 +178,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		case <-pull.C:
 			a.schedulePull(ctx)
 		case <-traffic.C:
-			if a.cfg.Role == model.RoleExit || a.cfg.Role == model.RoleHybrid {
+			if a.shouldMeterTraffic() {
 				if err := a.reportTraffic(ctx); err != nil {
 					log.Printf("traffic: %v", err)
 				}
@@ -324,6 +337,11 @@ func (a *Agent) pullAndApply(ctx context.Context) error {
 	// restored from disk but userByName is empty — without this, traffic
 	// samples from `mita get users` never match panel user IDs (all zeros).
 	a.seedMeteringUsers(cfg.Users)
+	a.updateMeteringFromDesired(&cfg)
+	// Keep local role in sync with panel desired config (env may be wrong/stale).
+	if r := strings.TrimSpace(cfg.Role); r != "" {
+		a.cfg.Role = r
+	}
 	a.stateMu.Lock()
 	cur := a.version
 	needRetry := a.lastApplyMsg != ""
@@ -479,6 +497,7 @@ func (a *Agent) apply(ctx context.Context, cfg *model.AgentDesiredConfig) error 
 	}
 	// seed counters + username map for mita metering
 	a.seedMeteringUsers(cfg.Users)
+	a.updateMeteringFromDesired(cfg)
 	if okCount == 0 && firstErr != nil {
 		return firstErr
 	}
@@ -703,30 +722,88 @@ func (a *Agent) zeroSamples(now int64) []model.TrafficReportSample {
 	return out
 }
 
-// readMitaUserTotals runs `mita get users` and returns 1DayUpload/1DayDownload per username.
-// Does not download binaries — only uses already-installed mita (PATH or dataDir/bin).
-func (a *Agent) readMitaUserTotals() (map[string]mitaUserTotal, error) {
+// shouldMeterTraffic reports whether this agent should sample mita traffic.
+// Uses desired plugins (mita_server present) first; falls back to role string.
+func (a *Agent) shouldMeterTraffic() bool {
+	a.meterMu.Lock()
+	enabled := a.meterEnabled
+	a.meterMu.Unlock()
+	if enabled {
+		return true
+	}
+	role := strings.TrimSpace(a.cfg.Role)
+	return role == model.RoleExit || role == model.RoleHybrid
+}
+
+// updateMeteringFromDesired enables traffic sampling when desired config has mita_server
+// or is an exit/hybrid role. Front-only agents stay disabled.
+func (a *Agent) updateMeteringFromDesired(cfg *model.AgentDesiredConfig) {
+	if cfg == nil {
+		return
+	}
+	hasMita := false
+	for _, p := range cfg.Plugins {
+		typ, _ := p["type"].(string)
+		if typ == "mita_server" {
+			hasMita = true
+			break
+		}
+	}
+	role := strings.TrimSpace(cfg.Role)
+	enable := hasMita || role == model.RoleExit || role == model.RoleHybrid
+	a.meterMu.Lock()
+	prev := a.meterEnabled
+	a.meterEnabled = enable
+	a.meterMu.Unlock()
+	if enable != prev {
+		log.Printf("traffic metering enabled=%v (role=%q mita_plugin=%v users=%d)", enable, role, hasMita, len(cfg.Users))
+	}
+}
+
+// mitaRuntime returns a live mita CLI runtime (same UDS as mita_server plugin).
+func (a *Agent) mitaRuntime() (*procutil.MitaRuntime, string, error) {
 	dataDir := filepath.Join(a.cfg.DataDir, "mita")
 	binDir := filepath.Join(a.cfg.DataDir, "bin")
-	// Prefer plugin-managed binary (same path mita_server Apply uses), then PATH.
 	bin := filepath.Join(binDir, "mita")
 	if st, err := os.Stat(bin); err != nil || st.IsDir() {
 		bin = procutil.LookPath("mita")
 	}
 	if bin == "" {
-		return nil, fmt.Errorf("mita binary not found (looked in %s and PATH)", binDir)
+		return nil, "", fmt.Errorf("mita binary not found (looked in %s and PATH)", binDir)
 	}
 	rt, err := procutil.EnsureMitaDaemon(bin, dataDir)
 	if err != nil {
+		return nil, bin, err
+	}
+	return rt, bin, nil
+}
+
+// readMitaUserTotals returns cumulative upload/download bytes per mita username.
+// Prefer `mita get metrics` JSON absolute counters (DownloadBytes/UploadBytes);
+// fall back to `mita get users` 1-day table if metrics JSON has no user section.
+func (a *Agent) readMitaUserTotals() (map[string]mitaUserTotal, error) {
+	rt, bin, err := a.mitaRuntime()
+	if err != nil {
 		return nil, err
 	}
+
+	// 1) Absolute counters from metrics JSON — best for cumulative traffic + bps.
+	if out, err := rt.MitaCmd("get", "metrics"); err == nil {
+		if m := parseMitaMetricsUsersJSON(out); len(m) > 0 {
+			return m, nil
+		}
+		// metrics ok but no users section yet (idle) — still try get users for names
+	} else {
+		a.trafficLogf("traffic: mita get metrics: %v (bin=%s uds=%s)", err, bin, rt.UDSPath)
+	}
+
+	// 2) Fallback: human table (1-day windows). Works even when metrics JSON empty.
 	out, err := rt.MitaCmd("get", "users")
 	if err != nil {
 		return nil, fmt.Errorf("mita get users: %w (bin=%s uds=%s)", err, bin, rt.UDSPath)
 	}
 	m := parseMitaUsersTable(out)
 	if len(m) == 0 && strings.TrimSpace(out) != "" {
-		// Log a short sample so operators can see format drift.
 		sample := strings.TrimSpace(out)
 		if len(sample) > 240 {
 			sample = sample[:240] + "…"
@@ -734,6 +811,72 @@ func (a *Agent) readMitaUserTotals() (map[string]mitaUserTotal, error) {
 		a.trafficLogf("traffic: mita get users parsed 0 rows; raw sample: %q", sample)
 	}
 	return m, nil
+}
+
+// parseMitaMetricsUsersJSON parses `mita get metrics` output:
+//
+//	{ "users": { "alice": { "DownloadBytes": 123, "UploadBytes": 45 }, ... }, ... }
+//
+// Values are absolute lifetime counters (not 1-day windows).
+func parseMitaMetricsUsersJSON(out string) map[string]mitaUserTotal {
+	res := map[string]mitaUserTotal{}
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return res
+	}
+	// CLI may prepend noise; locate JSON object.
+	i := strings.Index(out, "{")
+	j := strings.LastIndex(out, "}")
+	if i < 0 || j <= i {
+		return res
+	}
+	raw := out[i : j+1]
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &root); err != nil {
+		return res
+	}
+	usersRaw, ok := root["users"]
+	if !ok || len(usersRaw) == 0 {
+		return res
+	}
+	var users map[string]map[string]interface{}
+	if err := json.Unmarshal(usersRaw, &users); err != nil {
+		return res
+	}
+	for name, fields := range users {
+		name = strings.TrimSpace(name)
+		if name == "" || fields == nil {
+			continue
+		}
+		down := jsonInt64(fields, "DownloadBytes", "download_bytes", "downloadBytes")
+		up := jsonInt64(fields, "UploadBytes", "upload_bytes", "uploadBytes")
+		res[name] = mitaUserTotal{up: up, down: down}
+	}
+	return res
+}
+
+func jsonInt64(m map[string]interface{}, keys ...string) int64 {
+	for _, k := range keys {
+		v, ok := m[k]
+		if !ok || v == nil {
+			continue
+		}
+		switch t := v.(type) {
+		case float64:
+			return int64(t)
+		case int64:
+			return t
+		case int:
+			return int64(t)
+		case json.Number:
+			n, _ := t.Int64()
+			return n
+		case string:
+			n, _ := strconv.ParseInt(strings.TrimSpace(t), 10, 64)
+			return n
+		}
+	}
+	return 0
 }
 
 // parseMitaUsersTable parses:
