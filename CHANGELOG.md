@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.5] - 2026-08-01
+
+### UX
+
+- 扫码 / 节点链接 / YAML 显示名改为 **用户名-M月D日**（如 `aaa-8月31日`），导入客户端后备注一致
+- 用户列表去掉多余 **YAML** 按钮（扫码弹窗内仍可下载）
+
+### 升级（仅面板）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.5 bash
+```
+
+
 ## [0.4.4] - 2026-08-01
 
 ### 用户运营

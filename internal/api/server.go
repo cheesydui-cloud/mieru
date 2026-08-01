@@ -1705,6 +1705,24 @@ type shareEndpoint struct {
 	Protocol string `json:"protocol"` // TCP|UDP
 }
 
+// clientShareName is what clients show as node remark / list title after scan.
+// Matches common panel style: username-M月D日 (e.g. kelly-8月6日). Permanent → username only.
+func clientShareName(u *model.User) string {
+	if u == nil {
+		return ""
+	}
+	name := strings.TrimSpace(u.Username)
+	if name == "" {
+		return ""
+	}
+	if u.ExpireAt != nil {
+		t := u.ExpireAt.UTC()
+		// date-only expire is stored end-of-day; show calendar day in UTC (panel dates are date-only)
+		return fmt.Sprintf("%s-%d月%d日", name, int(t.Month()), t.Day())
+	}
+	return name
+}
+
 // resolveUserMitaEndpoints returns endpoints for official mierus:// share links.
 //
 // Product path (国内前置 + 美国家宽落地 / TK):
@@ -1777,72 +1795,77 @@ func (s *Server) resolveUserMitaEndpoints(u *model.User) []shareEndpoint {
 	}
 
 	// Manual advertise (operator front IP, e.g. 移动入口 211.x).
-	if u != nil {
-		host := strings.TrimSpace(u.EntryHost)
-		if host != "" {
-			port := u.EntryPort
-			if port <= 0 {
-				if frontPort > 0 {
-					port = frontPort
-				} else if exitNode != nil {
-					port = exitNode.MitaPrimaryPort()
+		if u != nil {
+			host := strings.TrimSpace(u.EntryHost)
+			if host != "" {
+				port := u.EntryPort
+				if port <= 0 {
+					if frontPort > 0 {
+						port = frontPort
+					} else if exitNode != nil {
+						port = exitNode.MitaPrimaryPort()
+					}
 				}
+				if port <= 0 {
+					port = 8964
+				}
+				// temporary internal name; rewritten to clientShareName below
+				add(host, host, port)
+				return applyClientShareNames(u, out)
 			}
-			if port <= 0 {
-				port = 8964
-			}
-			name := host
-			if frontName != "" {
-				name = frontName
-			} else if exitNode != nil && exitNode.Name != "" {
-				name = exitNode.Name
-			}
-			if u.Username != "" {
-				name = u.Username + "@" + name
+		}
+
+		// Multi-hop: advertise front (cm7), not the US public IP.
+		if frontHost != "" && frontPort > 0 {
+			add(frontName, frontHost, frontPort)
+			return applyClientShareNames(u, out)
+		}
+
+		// Single-node / direct exit: client dials mita on the exit itself.
+		if exitNode != nil {
+			host := exitNode.ClientHost()
+			port := exitNode.MitaPrimaryPort()
+			name := exitNode.Name
+			if name == "" {
+				name = host
 			}
 			add(name, host, port)
+			return applyClientShareNames(u, out)
+		}
+
+		// Fallback: all exit/hybrid.
+		nodes, _ := s.store.ListNodes()
+		for _, n := range nodes {
+			if n.Role != model.RoleExit && n.Role != model.RoleHybrid {
+				continue
+			}
+			host := n.ClientHost()
+			port := n.MitaPrimaryPort()
+			name := n.Name
+			if name == "" {
+				name = host
+			}
+			add(name, host, port)
+		}
+		return applyClientShareNames(u, out)
+	}
+
+	// applyClientShareNames sets endpoint display names for client remark / node list.
+	// Format: username-M月D日 (e.g. kelly-8月6日); permanent → username only.
+	func applyClientShareNames(u *model.User, out []shareEndpoint) []shareEndpoint {
+		label := clientShareName(u)
+		if label == "" {
 			return out
 		}
-	}
-
-	// Multi-hop: advertise front (cm7), not the US public IP.
-	if frontHost != "" && frontPort > 0 {
-		name := frontName
-		if exitNode != nil && exitNode.Name != "" {
-			name = frontName + "→" + exitNode.Name
+		for i := range out {
+			if len(out) == 1 {
+				out[i].Name = label
+			} else {
+				out[i].Name = fmt.Sprintf("%s-%d", label, i+1)
+			}
 		}
-		add(name, frontHost, frontPort)
 		return out
 	}
-
-	// Single-node / direct exit: client dials mita on the exit itself.
-	if exitNode != nil {
-		host := exitNode.ClientHost()
-		port := exitNode.MitaPrimaryPort()
-		name := exitNode.Name
-		if name == "" {
-			name = host
-		}
-		add(name, host, port)
-		return out
-	}
-
-	// Fallback: all exit/hybrid.
-	nodes, _ := s.store.ListNodes()
-	for _, n := range nodes {
-		if n.Role != model.RoleExit && n.Role != model.RoleHybrid {
-			continue
-		}
-		host := n.ClientHost()
-		port := n.MitaPrimaryPort()
-		name := n.Name
-		if name == "" {
-			name = host
-		}
-		add(name, host, port)
-	}
-	return out
-}
 
 // mierusShareURL builds official simple share link (ike-sh/mieru-OneClick / mieru client):
 //

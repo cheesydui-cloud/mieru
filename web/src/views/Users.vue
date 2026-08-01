@@ -535,7 +535,6 @@ onUnmounted(() => {
           <td class="col-ops">
             <div class="row-actions">
               <button class="btn btn-link btn-sm" @click="openSub(u)">扫码</button>
-              <button class="btn btn-link btn-sm" @click="downloadMihomo(u)">YAML</button>
               <button class="btn btn-link btn-sm" @click="openEdit(u)">编辑</button>
               <button class="btn btn-link btn-sm" @click="openRenew(u)">续期</button>
               <button class="btn btn-link btn-sm" @click="toggle(u)">
