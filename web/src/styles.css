@@ -336,8 +336,19 @@ table.data tr:hover td {
 
 table.data td.num {
   font-family: var(--mono);
-  text-align: right;
+  text-align: left;
   font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* keep action links on one line when possible */
+table.data td .row-actions {
+  flex-wrap: nowrap;
+}
+@media (max-width: 900px) {
+  table.data td .row-actions {
+    flex-wrap: wrap;
+  }
 }
 
 table.data td a,

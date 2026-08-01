@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.4.2] - 2026-08-01
+
+### Added — Mihomo YAML + 用户编辑
+
+- 用户页可 **下载 / 复制 Mihomo（Clash Meta）YAML**（`type: mieru`，连前置，出口家宽）
+- 管理端 `GET /api/admin/users/:id/mihomo.yaml`；公开订阅 `GET /sub/:token/mihomo.yaml`
+- 用户 **编辑**：状态 / 到期 / 流量 / 线路 / 入口 IP·端口 / 备注
+- 扫码弹窗：去掉「订阅地址」、二维码居中、YAML 预览与下载
+
+### Fixed
+
+- 用户列表表格列宽对齐（状态 / 到期 / 流量 / 线路 / 操作）
+- 解绑线路：编辑时 `route_id=0` 清空绑定
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.2 bash
+```
+
+（仅面板；agent 可不动）
+
+
 ## [0.4.1] - 2026-08-01
 
 ### Fixed — 线路探测「商家入口不通」误报
