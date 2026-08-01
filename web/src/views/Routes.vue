@@ -63,25 +63,32 @@ const frontPoolLabel = computed(() => {
   return min === max ? String(min) : `${min}–${max}`
 })
 
-/** 同前置上其它隧道已占用的端口（编辑时排除自己） */
-const usedFrontPorts = computed(() => {
+/** 同前置上其它隧道已占用的端口（编辑时排除自己）→ {port, name, id}[] */
+const usedFrontPortClaims = computed(() => {
   const fid = form.front_id
   if (!fid) return []
-  const set = new Set()
+  const byPort = new Map()
   for (const r of routes.value || []) {
     if (mode.value === 'edit' && r.id === editingId.value) continue
-    // list API 已给 front_port；也从 hops 读 pin
-    let frontOnRoute = false
+    let onFront = false
+    let pin = 0
     for (const h of parseHops(r.hops_json)) {
       if (h.node_id === fid) {
-        frontOnRoute = true
-        if (h.port > 0) set.add(h.port)
+        onFront = true
+        if (h.port > 0) pin = h.port
       }
     }
-    if (frontOnRoute && r.front_port > 0) set.add(r.front_port)
+    if (!onFront) continue
+    const port = pin > 0 ? pin : r.front_port > 0 ? r.front_port : 0
+    if (!port) continue
+    if (!byPort.has(port)) {
+      byPort.set(port, { port, name: r.name || `#${r.id}`, id: r.id })
+    }
   }
-  return [...set].sort((a, b) => a - b)
+  return [...byPort.values()].sort((a, b) => a.port - b.port)
 })
+
+const usedFrontPorts = computed(() => usedFrontPortClaims.value.map((c) => c.port))
 
 async function load() {
   try {
@@ -220,8 +227,9 @@ function validateFrontPortLocal() {
   if (p < min || p > max) {
     return `入口端口 ${p} 不在前置端口池 ${min}–${max} 内`
   }
-  if (usedFrontPorts.value.includes(p)) {
-    return `入口端口 ${p} 已被其它隧道占用`
+  const claim = usedFrontPortClaims.value.find((c) => c.port === p)
+  if (claim) {
+    return `入口端口 ${p} 已被隧道「${claim.name}」(#${claim.id}) 占用，请换端口、删掉该隧道，或留空自动分配`
   }
   return ''
 }
@@ -457,8 +465,13 @@ onMounted(load)
             <p class="help-text" style="margin:6px 0 0">
               <template v-if="form.front_id && frontPoolLabel">
                 须在前置端口池 <strong class="mono">{{ frontPoolLabel }}</strong> 内。
-                <template v-if="usedFrontPorts.length">
-                  已占用：<span class="mono">{{ usedFrontPorts.join(', ') }}</span>
+                <template v-if="usedFrontPortClaims.length">
+                  已占用：
+                  <span v-for="(c, i) in usedFrontPortClaims" :key="c.port">
+                    <span v-if="i">、</span>
+                    <span class="mono">{{ c.port }}</span>
+                    （{{ c.name }}）
+                  </span>
                 </template>
               </template>
               <template v-else>选择前置后可指定端口；留空由系统自动分配。</template>

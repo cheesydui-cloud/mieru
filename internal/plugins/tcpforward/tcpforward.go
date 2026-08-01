@@ -136,6 +136,12 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 	return nil
 }
 
+// Stop implements plugins.Stopper — called when desired config no longer includes tcp_forward.
+func (p *Plugin) Stop() {
+	p.stop()
+	log.Printf("[tcp_forward] stopped (removed from desired config)")
+}
+
 func (p *Plugin) stop() {
 	p.mu.Lock()
 	cancel := p.cancel

@@ -29,6 +29,24 @@ type Plugin struct {
 
 func (p *Plugin) Name() string { return "socks_in" }
 
+// Stop implements plugins.Stopper — close listener when removed from desired config.
+func (p *Plugin) Stop() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.cancel != nil {
+		p.cancel()
+		p.cancel = nil
+	}
+	if p.listener != nil {
+		_ = p.listener.Close()
+		p.listener = nil
+	}
+	p.listen = ""
+	p.upstream = ""
+	p.users = nil
+	log.Printf("[socks_in] stopped (removed from desired config)")
+}
+
 func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 	_ = ctx
 	if err := os.MkdirAll(p.DataDir, 0o755); err != nil {

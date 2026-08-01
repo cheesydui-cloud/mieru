@@ -96,7 +96,7 @@ func (b *Builder) RebuildAll() error {
 
 		switch n.Role {
 		case model.RoleExit:
-			cfg.Users = exitUsers(users, n.ID, linkUser, linkPass)
+			cfg.Users = exitUsers(users, n.ID, linkUser, linkPass, routes, routeByID)
 			pmin, pmax := n.EffectivePortRange()
 			listen := n.MitaPrimaryPort()
 			cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
@@ -112,7 +112,7 @@ func (b *Builder) RebuildAll() error {
 			// OneClick single-node shape on the hybrid box:
 			//   mita (exit) ← mieru client (loopback) ← public socks_in
 			// Relays elsewhere still dial mita on MitaPrimaryPort with backbone.
-			cfg.Users = exitUsers(users, n.ID, linkUser, linkPass)
+			cfg.Users = exitUsers(users, n.ID, linkUser, linkPass, routes, routeByID)
 			socksPort := n.PublicServicePort()
 			mitaPort := n.MitaPrimaryPort()
 			if mitaPort == socksPort {
@@ -161,70 +161,21 @@ func (b *Builder) RebuildAll() error {
 			// Entry is the domestic front: transparent TCP to exit mita so clients
 			// can use official mierus:// while egress stays on residential exit.
 			// Multi-exit: one listen port per enabled route (not the whole pool).
-			next := b.resolveNextHop(n.ID, routes, users, routeByID)
-			emin, emax := n.EffectivePortRange()
-			pubPort := n.PublicServicePort()
+			// No tunnel → empty plugins; agent stops any previous tcp_forward/socks_in.
 			forwards := b.frontForwardsForNode(n, routes)
-
 			if len(forwards) > 0 {
 				cfg.Plugins = append(cfg.Plugins, tcpForwardPlugin(forwards))
-			}
-			// Legacy: no exit resolved — chain SOCKS to next hop if any.
-			if len(cfg.Plugins) == 0 {
-				for _, u := range users {
-					cfg.Users = append(cfg.Users, model.AgentUser{
-						UserID: u.ID, Username: u.Username, Password: u.ProxyPassword, Enabled: true,
-					})
-				}
-				socksCfg := map[string]interface{}{
-					"auth":        "users",
-					"listen_port": pubPort,
-					"port_min":    emin,
-					"port_max":    emax,
-				}
-				if next != nil {
-					host := next.DialHost()
-					upPort := next.PublicServicePort()
-					if host != "" && upPort > 0 {
-						socksCfg["upstream_host"] = host
-						socksCfg["upstream_port"] = upPort
-						socksCfg["next_role"] = next.Role
-						socksCfg["next_id"] = next.ID
-					}
-				}
-				cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
-					"type":   "socks_in",
-					"config": socksCfg,
-				})
 			}
 
 		case model.RoleRelay:
 			// Domestic front / mid hop: transparent TCP pipe to exit mita.
 			// Client speaks mieru end-to-end; this node does not terminate mieru.
 			// Multi-exit: one listen port per enabled route sharing this front.
-			pubPort := n.PublicServicePort()
-			pmin, pmax := n.EffectivePortRange()
+			// No tunnel → empty plugins (do NOT fall back to socks_in — that kept
+			// ports open after operators deleted all tunnels).
 			forwards := b.frontForwardsForNode(n, routes)
-
 			if len(forwards) > 0 {
 				cfg.Plugins = append(cfg.Plugins, tcpForwardPlugin(forwards))
-			}
-			// Fallback if no exit on route: keep old socks shell so node is not silent.
-			if len(cfg.Plugins) == 0 {
-				for _, u := range users {
-					cfg.Users = append(cfg.Users, model.AgentUser{
-						UserID: u.ID, Username: u.Username, Password: u.ProxyPassword, Enabled: true, MitaUser: u.Username,
-					})
-				}
-				cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
-					"type": "socks_in",
-					"config": map[string]interface{}{
-						"auth":        "users",
-						"listen_port": pubPort,
-						"port_min":    pmin,
-						"port_max":    pmax,
-					},
-				})
 			}
 		}
 
@@ -569,12 +520,46 @@ func (b *Builder) resolveExitTarget(nodeID string, routes []model.Route) *model.
 	return nil
 }
 
-// exitUsers builds mita user list: sticky filter + always include backbone link user.
-func exitUsers(users []model.User, exitID, linkUser, linkPass string) []model.AgentUser {
+// exitUsers builds mita user list for one exit node.
+//
+// Only users whose bound tunnel (route) includes this exit get accounts here.
+// Users with no route_id are omitted (must bind a tunnel first).
+// StickyExitID still filters when set. Backbone link user is always included
+// so mieru_client on hybrid can authenticate.
+func exitUsers(users []model.User, exitID, linkUser, linkPass string, routes []model.Route, routeByID map[int64]model.Route) []model.AgentUser {
 	out := make([]model.AgentUser, 0, len(users)+1)
 	seen := map[string]bool{}
+	// exitID → set of route IDs that hop through this exit
+	routesOnExit := map[int64]bool{}
+	for _, r := range routes {
+		if !r.Enabled {
+			continue
+		}
+		var hops []model.Hop
+		if err := json.Unmarshal([]byte(r.HopsJSON), &hops); err != nil {
+			continue
+		}
+		for _, h := range hops {
+			if h.NodeID == exitID {
+				routesOnExit[r.ID] = true
+				break
+			}
+		}
+	}
 	for _, u := range users {
 		if u.StickyExitID != "" && u.StickyExitID != exitID {
+			continue
+		}
+		// Must be bound to a tunnel that uses this exit — otherwise deleting
+		// tunnels would leave ghost accounts on every exit.
+		if u.RouteID == nil || *u.RouteID <= 0 {
+			continue
+		}
+		if !routesOnExit[*u.RouteID] {
+			// route may have been deleted; skip
+			if _, ok := routeByID[*u.RouteID]; ok && !routesOnExit[*u.RouteID] {
+				continue
+			}
 			continue
 		}
 		out = append(out, model.AgentUser{
@@ -586,7 +571,7 @@ func exitUsers(users []model.User, exitID, linkUser, linkPass string) []model.Ag
 		})
 		seen[u.Username] = true
 	}
-	// Backbone always present so mieru_client on relays/hybrid can authenticate
+	// Backbone always present so mieru_client on hybrid can authenticate
 	// even when no end-user is sticky to this exit.
 	if linkUser != "" && linkPass != "" && !seen[linkUser] {
 		out = append(out, model.AgentUser{
@@ -597,7 +582,6 @@ func exitUsers(users []model.User, exitID, linkUser, linkPass string) []model.Ag
 			MitaUser: linkUser,
 		})
 	}
-	// Refuse empty — mita plugin will fail closed; surface via empty list.
 	return out
 }
 

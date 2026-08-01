@@ -30,7 +30,7 @@ import (
 
 // AgentVersion is the default when main does not inject a build version.
 // Prefer SetVersion() from cmd/agent so -version and heartbeat always match.
-var AgentVersion = "0.4.8"
+var AgentVersion = "0.4.11"
 
 // SetVersion overrides the version string reported in heartbeats (and logs).
 // Call from main with the same value as -ldflags -X main.Version.
@@ -55,13 +55,13 @@ type Agent struct {
 	stateMu      sync.Mutex
 	version      int64
 	lastApplyMsg string
-// applyMu serializes pullAndApply so heartbeat never blocks on plugin apply.
-		applyMu   chan struct{}
-		applyBusy int32 // atomic: 1 while apply running
-		// upgradeBusy: 1 while self-upgrade download/install running
-		upgradeBusy      int32
-		lastUpgradeJobID string // avoid re-running same job every heartbeat
-	}
+	// applyMu serializes pullAndApply so heartbeat never blocks on plugin apply.
+	applyMu   chan struct{}
+	applyBusy int32 // atomic: 1 while apply running
+	// upgradeBusy: 1 while self-upgrade download/install running
+	upgradeBusy      int32
+	lastUpgradeJobID string // avoid re-running same job every heartbeat
+}
 
 // userCounter tracks absolute totals from mita and derived bps.
 type userCounter struct {
@@ -77,21 +77,21 @@ func New(cfg config.AgentConfig) *Agent {
 	reg := plugins.NewRegistry()
 	data := cfg.DataDir
 	binDir := filepath.Join(data, "bin")
-		reg.Register(&nftables.Plugin{DataDir: filepath.Join(data, "nft"), DryRun: os.Getenv("AGENT_NFT_DRYRUN") != "0"})
-		reg.Register(&mieru.Plugin{DataDir: filepath.Join(data, "mieru"), BinDir: binDir})
-		reg.Register(&mita.Plugin{DataDir: filepath.Join(data, "mita"), BinDir: binDir})
-		reg.Register(&socksin.Plugin{DataDir: filepath.Join(data, "socks")})
-		reg.Register(&tcpforward.Plugin{DataDir: filepath.Join(data, "tcpforward")})
+	reg.Register(&nftables.Plugin{DataDir: filepath.Join(data, "nft"), DryRun: os.Getenv("AGENT_NFT_DRYRUN") != "0"})
+	reg.Register(&mieru.Plugin{DataDir: filepath.Join(data, "mieru"), BinDir: binDir})
+	reg.Register(&mita.Plugin{DataDir: filepath.Join(data, "mita"), BinDir: binDir})
+	reg.Register(&socksin.Plugin{DataDir: filepath.Join(data, "socks")})
+	reg.Register(&tcpforward.Plugin{DataDir: filepath.Join(data, "tcpforward")})
 
-		return &Agent{
-			cfg:        cfg,
-			client:     &http.Client{Timeout: 15 * time.Second},
-			registry:   reg,
-			counters:   map[int64]*userCounter{},
-			userByName: map[string]int64{},
-			applyMu:    make(chan struct{}, 1),
-		}
+	return &Agent{
+		cfg:        cfg,
+		client:     &http.Client{Timeout: 15 * time.Second},
+		registry:   reg,
+		counters:   map[int64]*userCounter{},
+		userByName: map[string]int64{},
+		applyMu:    make(chan struct{}, 1),
 	}
+}
 
 func (a *Agent) Run(ctx context.Context) error {
 	if a.cfg.NodeID == "" || a.cfg.Token == "" {
@@ -108,12 +108,12 @@ func (a *Agent) Run(ctx context.Context) error {
 		a.version = v
 	}
 
-		panel := strings.TrimRight(strings.TrimSpace(a.cfg.PanelURL), "/")
-		if panel == "" {
-			return fmt.Errorf("AGENT_PANEL_URL is required")
-		}
-		a.cfg.PanelURL = panel
-		log.Printf("agent start version=%s panel=%s node=%s role=%s", AgentVersion, panel, a.cfg.NodeID, a.cfg.Role)
+	panel := strings.TrimRight(strings.TrimSpace(a.cfg.PanelURL), "/")
+	if panel == "" {
+		return fmt.Errorf("AGENT_PANEL_URL is required")
+	}
+	a.cfg.PanelURL = panel
+	log.Printf("agent start version=%s panel=%s node=%s role=%s", AgentVersion, panel, a.cfg.NodeID, a.cfg.Role)
 	log.Printf("agent starting node=%s role=%s panel=%s", a.cfg.NodeID, a.cfg.Role, a.cfg.PanelURL)
 
 	// Immediate heartbeat so panel shows online without waiting for first ticker.
@@ -132,33 +132,33 @@ func (a *Agent) Run(ctx context.Context) error {
 	if hbEvery > 5*time.Second {
 		hbEvery = 5 * time.Second
 	}
-		hb := time.NewTicker(hbEvery)
-		pull := time.NewTicker(a.cfg.PullEvery)
-		// 1s traffic sample → panel realtime rates with minimal lag
-		traffic := time.NewTicker(1 * time.Second)
-		defer hb.Stop()
-		defer pull.Stop()
-		defer traffic.Stop()
+	hb := time.NewTicker(hbEvery)
+	pull := time.NewTicker(a.cfg.PullEvery)
+	// 1s traffic sample → panel realtime rates with minimal lag
+	traffic := time.NewTicker(1 * time.Second)
+	defer hb.Stop()
+	defer pull.Stop()
+	defer traffic.Stop()
 
-		for {
-			select {
-			case <-ctx.Done():
-				return nil
-			case <-hb.C:
-				if err := a.heartbeat(ctx); err != nil {
-					log.Printf("heartbeat: %v", err)
-				}
-			case <-pull.C:
-				a.schedulePull(ctx)
-			case <-traffic.C:
-				if a.cfg.Role == model.RoleExit || a.cfg.Role == model.RoleHybrid {
-					if err := a.reportTraffic(ctx); err != nil {
-						log.Printf("traffic: %v", err)
-					}
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-hb.C:
+			if err := a.heartbeat(ctx); err != nil {
+				log.Printf("heartbeat: %v", err)
+			}
+		case <-pull.C:
+			a.schedulePull(ctx)
+		case <-traffic.C:
+			if a.cfg.Role == model.RoleExit || a.cfg.Role == model.RoleHybrid {
+				if err := a.reportTraffic(ctx); err != nil {
+					log.Printf("traffic: %v", err)
 				}
 			}
 		}
 	}
+}
 
 // schedulePull runs pullAndApply in the background so heartbeats keep flowing
 // (hop-to-hop probe jobs are delivered on heartbeat).
@@ -193,65 +193,65 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 		}
 	}
 	a.stateMu.Unlock()
-		body := model.HeartbeatRequest{
-			NodeID:        a.cfg.NodeID,
-			Token:         a.cfg.Token,
-			Role:          a.cfg.Role,
-			ConfigVersion: ver,
-			AgentVersion:  AgentVersion, // same source as CLI after SetVersion
-			Hostname:      os.Getenv("AGENT_HOSTNAME"),
-			PublicIP:      os.Getenv("AGENT_PUBLIC_IP"),
-			Message:       msg,
-			ApplyError:    applyErr,
-		}
-var resp struct {
-			OK            bool  `json:"ok"`
-			ConfigVersion int64 `json:"config_version"`
-			NeedPull      bool  `json:"need_pull"`
-			DialJobs      []struct {
-				ID        string `json:"id"`
-				Host      string `json:"host"`
-				Port      int    `json:"port"`
-				TimeoutMS int    `json:"timeout_ms"`
-			} `json:"dial_jobs"`
-			UpgradeJob *upgradeJob `json:"upgrade_job"`
-		}
-		if err := a.postJSON(ctx, "/api/agent/heartbeat", body, &resp); err != nil {
-			return err
-		}
-		// Hop-to-hop probe jobs FIRST — never wait on apply for these.
-		for _, job := range resp.DialJobs {
-			if job.ID == "" || job.Host == "" || job.Port <= 0 {
-				continue
-			}
-			timeout := time.Duration(job.TimeoutMS) * time.Millisecond
-			if timeout <= 0 {
-				timeout = 4 * time.Second
-			}
-			ok, lat, errMsg := tcpDial(job.Host, job.Port, timeout)
-			if err := a.postJSON(ctx, "/api/agent/dial-result", map[string]interface{}{
-				"node_id":    a.cfg.NodeID,
-				"token":      a.cfg.Token,
-				"job_id":     job.ID,
-				"ok":         ok,
-				"latency_ms": lat,
-				"error":      errMsg,
-			}, nil); err != nil {
-				log.Printf("dial-result job=%s: %v", job.ID, err)
-			} else {
-				log.Printf("dial-result job=%s %s:%d ok=%v lat=%dms %s",
-					job.ID, job.Host, job.Port, ok, lat, errMsg)
-			}
-		}
-		// Panel-pushed self-upgrade (download tarball + restart). Non-blocking.
-		if resp.UpgradeJob != nil && resp.UpgradeJob.ID != "" {
-			a.scheduleUpgrade(ctx, *resp.UpgradeJob)
-		}
-		if resp.NeedPull {
-			a.schedulePull(ctx)
-		}
-		return nil
+	body := model.HeartbeatRequest{
+		NodeID:        a.cfg.NodeID,
+		Token:         a.cfg.Token,
+		Role:          a.cfg.Role,
+		ConfigVersion: ver,
+		AgentVersion:  AgentVersion, // same source as CLI after SetVersion
+		Hostname:      os.Getenv("AGENT_HOSTNAME"),
+		PublicIP:      os.Getenv("AGENT_PUBLIC_IP"),
+		Message:       msg,
+		ApplyError:    applyErr,
 	}
+	var resp struct {
+		OK            bool  `json:"ok"`
+		ConfigVersion int64 `json:"config_version"`
+		NeedPull      bool  `json:"need_pull"`
+		DialJobs      []struct {
+			ID        string `json:"id"`
+			Host      string `json:"host"`
+			Port      int    `json:"port"`
+			TimeoutMS int    `json:"timeout_ms"`
+		} `json:"dial_jobs"`
+		UpgradeJob *upgradeJob `json:"upgrade_job"`
+	}
+	if err := a.postJSON(ctx, "/api/agent/heartbeat", body, &resp); err != nil {
+		return err
+	}
+	// Hop-to-hop probe jobs FIRST — never wait on apply for these.
+	for _, job := range resp.DialJobs {
+		if job.ID == "" || job.Host == "" || job.Port <= 0 {
+			continue
+		}
+		timeout := time.Duration(job.TimeoutMS) * time.Millisecond
+		if timeout <= 0 {
+			timeout = 4 * time.Second
+		}
+		ok, lat, errMsg := tcpDial(job.Host, job.Port, timeout)
+		if err := a.postJSON(ctx, "/api/agent/dial-result", map[string]interface{}{
+			"node_id":    a.cfg.NodeID,
+			"token":      a.cfg.Token,
+			"job_id":     job.ID,
+			"ok":         ok,
+			"latency_ms": lat,
+			"error":      errMsg,
+		}, nil); err != nil {
+			log.Printf("dial-result job=%s: %v", job.ID, err)
+		} else {
+			log.Printf("dial-result job=%s %s:%d ok=%v lat=%dms %s",
+				job.ID, job.Host, job.Port, ok, lat, errMsg)
+		}
+	}
+	// Panel-pushed self-upgrade (download tarball + restart). Non-blocking.
+	if resp.UpgradeJob != nil && resp.UpgradeJob.ID != "" {
+		a.scheduleUpgrade(ctx, *resp.UpgradeJob)
+	}
+	if resp.NeedPull {
+		a.schedulePull(ctx)
+	}
+	return nil
+}
 
 // tcpDial measures TCP connect latency from this host to host:port.
 func tcpDial(host string, port int, timeout time.Duration) (ok bool, latencyMs int64, errMsg string) {
@@ -322,24 +322,48 @@ func (a *Agent) pullAndApply(ctx context.Context) error {
 }
 
 func (a *Agent) apply(ctx context.Context, cfg *model.AgentDesiredConfig) error {
-		// Apply order: mita/mieru first, then public listeners (socks / tcp_forward), then nft.
-		order := map[string]int{
-			"mita_server":  10,
-			"mieru_client": 20,
-			"socks_in":     30,
-			"tcp_forward":  30,
-			"nft_forward":  40,
-		}
+	// Apply order: mita/mieru first, then public listeners (socks / tcp_forward), then nft.
+	order := map[string]int{
+		"mita_server":  10,
+		"mieru_client": 20,
+		"socks_in":     30,
+		"tcp_forward":  30,
+		"nft_forward":  40,
+	}
 	// Role-required plugins must succeed before we accept the config version.
 	required := requiredPlugins(cfg)
-	plugins := append([]map[string]interface{}{}, cfg.Plugins...)
-	for i := 0; i < len(plugins); i++ {
-		for j := i + 1; j < len(plugins); j++ {
-			ti, _ := plugins[i]["type"].(string)
-			tj, _ := plugins[j]["type"].(string)
+	plist := append([]map[string]interface{}{}, cfg.Plugins...)
+	for i := 0; i < len(plist); i++ {
+		for j := i + 1; j < len(plist); j++ {
+			ti, _ := plist[i]["type"].(string)
+			tj, _ := plist[j]["type"].(string)
 			if order[ti] > order[tj] {
-				plugins[i], plugins[j] = plugins[j], plugins[i]
+				plist[i], plist[j] = plist[j], plist[i]
 			}
+		}
+	}
+
+	// Stop plugins that are no longer in desired config (e.g. last tunnel deleted
+	// → tcp_forward/socks_in must release ports; otherwise "node still has network").
+	desiredTypes := map[string]bool{}
+	for _, p := range plist {
+		if typ, _ := p["type"].(string); typ != "" {
+			desiredTypes[typ] = true
+		}
+	}
+	for _, pl := range a.registry.All() {
+		name := pl.Name()
+		if desiredTypes[name] {
+			continue
+		}
+		// Never auto-stop mita on exit — empty user list still needs daemon; Apply handles users.
+		// But stop public pipe plugins when removed.
+		if name != "tcp_forward" && name != "socks_in" && name != "nft_forward" {
+			continue
+		}
+		if stopper, ok := pl.(plugins.Stopper); ok {
+			log.Printf("stopping plugin %s (not in desired)", name)
+			stopper.Stop()
 		}
 	}
 
@@ -349,7 +373,12 @@ func (a *Agent) apply(ctx context.Context, cfg *model.AgentDesiredConfig) error 
 	var firstErr error
 	okCount := 0
 	okByType := map[string]bool{}
-	for _, p := range plugins {
+	// Empty desired plugins is valid (front with zero tunnels) — already stopped above.
+	if len(plist) == 0 {
+		log.Printf("apply: no plugins in desired config (listeners stopped if any)")
+		return nil
+	}
+	for _, p := range plist {
 		typ, _ := p["type"].(string)
 		pluginCfg, _ := p["config"].(map[string]interface{})
 		if pluginCfg == nil {
@@ -387,22 +416,22 @@ func (a *Agent) apply(ctx context.Context, cfg *model.AgentDesiredConfig) error 
 		okCount++
 		okByType[typ] = true
 	}
-		// seed counters + username map for mita metering
-		for _, u := range cfg.Users {
-			if u.UserID <= 0 {
-				continue
-			}
-			if _, ok := a.counters[u.UserID]; !ok {
-				a.counters[u.UserID] = &userCounter{}
-			}
-			name := strings.TrimSpace(u.MitaUser)
-			if name == "" {
-				name = strings.TrimSpace(u.Username)
-			}
-			if name != "" {
-				a.userByName[name] = u.UserID
-			}
+	// seed counters + username map for mita metering
+	for _, u := range cfg.Users {
+		if u.UserID <= 0 {
+			continue
 		}
+		if _, ok := a.counters[u.UserID]; !ok {
+			a.counters[u.UserID] = &userCounter{}
+		}
+		name := strings.TrimSpace(u.MitaUser)
+		if name == "" {
+			name = strings.TrimSpace(u.Username)
+		}
+		if name != "" {
+			a.userByName[name] = u.UserID
+		}
+	}
 	if okCount == 0 && firstErr != nil {
 		return firstErr
 	}
@@ -431,9 +460,9 @@ func requiredPlugins(cfg *model.AgentDesiredConfig) []string {
 	for _, p := range cfg.Plugins {
 		typ, _ := p["type"].(string)
 		switch typ {
-			case "mita_server", "mieru_client", "socks_in", "tcp_forward":
-				need[typ] = true
-			}
+		case "mita_server", "mieru_client", "socks_in", "tcp_forward":
+			need[typ] = true
+		}
 	}
 	out := make([]string, 0, len(need))
 	for t := range need {

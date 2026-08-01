@@ -946,19 +946,24 @@ func (s *Server) enrichRoute(r *model.Route) routeView {
 // validateRouteFrontPorts checks hop.Port on front hops is within the node's
 // port pool and not already claimed by another enabled route on the same front.
 // excludeRouteID is the route being updated (0 for create).
+//
+// Occupied ports are taken from the same allocator as configgen (FrontListenPort),
+// so auto-assigned tunnels (no hop.port pin) still block re-use. Error text names
+// the tunnel that holds the port.
 func (s *Server) validateRouteFrontPorts(hopsJSON string, excludeRouteID int64) error {
 	var hops []model.Hop
 	if err := json.Unmarshal([]byte(hopsJSON), &hops); err != nil {
 		return fmt.Errorf("hops_json 无效")
 	}
-	// Collect other routes' pinned / allocated front ports for conflict check.
 	others, _ := s.store.ListRoutes()
 	type claim struct {
 		routeID int64
 		name    string
 	}
-	// frontID → port → claim
+	// frontID → port → claim (one pass over all other enabled routes)
 	used := map[string]map[int]claim{}
+	// Per front, compute all allocated ports once via frontForwards semantics.
+	frontSeen := map[string]bool{}
 	for i := range others {
 		or := &others[i]
 		if or.ID == excludeRouteID || !or.Enabled {
@@ -977,6 +982,10 @@ func (s *Server) validateRouteFrontPorts(hopsJSON string, excludeRouteID int64) 
 			if n.Role != model.RoleRelay && n.Role != model.RoleEntry {
 				continue
 			}
+			if frontSeen[n.ID] {
+				// still need this route's port below
+			}
+			frontSeen[n.ID] = true
 			port := h.Port
 			if port <= 0 {
 				port = configgen.FrontListenPort(s.store, n.ID, or)
@@ -987,7 +996,10 @@ func (s *Server) validateRouteFrontPorts(hopsJSON string, excludeRouteID int64) 
 			if used[n.ID] == nil {
 				used[n.ID] = map[int]claim{}
 			}
-			used[n.ID][port] = claim{routeID: or.ID, name: or.Name}
+			// Prefer first claim (lower route id typically); keep name for error.
+			if _, exists := used[n.ID][port]; !exists {
+				used[n.ID][port] = claim{routeID: or.ID, name: or.Name}
+			}
 		}
 	}
 
@@ -999,7 +1011,6 @@ func (s *Server) validateRouteFrontPorts(hopsJSON string, excludeRouteID int64) 
 		if err != nil {
 			return fmt.Errorf("前置节点不存在: %s", h.NodeID)
 		}
-		// Only validate port pin on front roles
 		if n.Role != model.RoleRelay && n.Role != model.RoleEntry && n.Role != model.RoleHybrid {
 			continue
 		}
@@ -1009,7 +1020,7 @@ func (s *Server) validateRouteFrontPorts(hopsJSON string, excludeRouteID int64) 
 		}
 		if m := used[n.ID]; m != nil {
 			if c, ok := m[h.Port]; ok {
-				return fmt.Errorf("入口端口 %d 已被隧道「%s」(#%d) 占用", h.Port, c.name, c.routeID)
+				return fmt.Errorf("入口端口 %d 已被隧道「%s」(#%d) 占用，请换端口、删掉该隧道，或留空自动分配", h.Port, c.name, c.routeID)
 			}
 		}
 	}

@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.4.11] - 2026-07-30
+
+### 删隧道后前置真正停监听
+
+- 前置 entry/relay **零隧道时不再回退 socks_in**（以前删光隧道端口仍在听，节点看起来“还有网络”）
+- Agent `apply`：desired 里没有的 `tcp_forward` / `socks_in` / `nft_forward` 会 **Stop 释放端口**
+- 落地 mita 用户只下发 **绑定了经过该落地的隧道** 的用户，避免幽灵账号
+
+### 端口占用提示
+
+- 冲突错误写明占用隧道名：`入口端口 10401 已被隧道「CM7-LAYER」(#id) 占用`
+- 隧道表单已占用列表显示 `10401（CM7-LAYER）`
+
+> 截图里若仍提示 10401 被占用，请先确认列表里是否还有 **CM7-LAYER**（或其它钉死 10401 的隧道）；删掉它或换端口即可。
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.11 bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | MIERU_VERSION=v0.4.11 bash
+```
+
+
 ## [0.4.10] - 2026-08-01
 
 ### 前置端口池
