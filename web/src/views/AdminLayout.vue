@@ -11,9 +11,9 @@ const version = ref('')
 const title = computed(() => {
   const map = {
     dashboard: '总览',
+    users: '用户',
     routes: '隧道',
     nodes: '节点',
-    users: '用户',
     settings: '设置',
   }
   return map[route.name] || '控制台'
@@ -56,9 +56,9 @@ onMounted(() => {
       </div>
       <nav class="sidebar-nav">
         <router-link class="nav-item" :class="{ active: route.name === 'dashboard' }" to="/">总览</router-link>
+        <router-link class="nav-item" :class="{ active: route.name === 'users' }" to="/users">用户</router-link>
         <router-link class="nav-item" :class="{ active: route.name === 'routes' }" to="/routes">隧道</router-link>
         <router-link class="nav-item" :class="{ active: route.name === 'nodes' }" to="/nodes">节点</router-link>
-        <router-link class="nav-item" :class="{ active: route.name === 'users' }" to="/users">用户</router-link>
         <router-link class="nav-item" :class="{ active: route.name === 'settings' }" to="/settings">设置</router-link>
       </nav>
       <div class="sidebar-foot">

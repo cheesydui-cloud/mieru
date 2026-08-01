@@ -943,6 +943,79 @@ func (s *Server) enrichRoute(r *model.Route) routeView {
 	return v
 }
 
+// validateRouteFrontPorts checks hop.Port on front hops is within the node's
+// port pool and not already claimed by another enabled route on the same front.
+// excludeRouteID is the route being updated (0 for create).
+func (s *Server) validateRouteFrontPorts(hopsJSON string, excludeRouteID int64) error {
+	var hops []model.Hop
+	if err := json.Unmarshal([]byte(hopsJSON), &hops); err != nil {
+		return fmt.Errorf("hops_json 无效")
+	}
+	// Collect other routes' pinned / allocated front ports for conflict check.
+	others, _ := s.store.ListRoutes()
+	type claim struct {
+		routeID int64
+		name    string
+	}
+	// frontID → port → claim
+	used := map[string]map[int]claim{}
+	for i := range others {
+		or := &others[i]
+		if or.ID == excludeRouteID || !or.Enabled {
+			continue
+		}
+		var oh []model.Hop
+		_ = json.Unmarshal([]byte(or.HopsJSON), &oh)
+		for _, h := range oh {
+			if h.NodeID == "" || h.External {
+				continue
+			}
+			n, err := s.store.GetNode(h.NodeID)
+			if err != nil {
+				continue
+			}
+			if n.Role != model.RoleRelay && n.Role != model.RoleEntry {
+				continue
+			}
+			port := h.Port
+			if port <= 0 {
+				port = configgen.FrontListenPort(s.store, n.ID, or)
+			}
+			if port <= 0 {
+				continue
+			}
+			if used[n.ID] == nil {
+				used[n.ID] = map[int]claim{}
+			}
+			used[n.ID][port] = claim{routeID: or.ID, name: or.Name}
+		}
+	}
+
+	for _, h := range hops {
+		if h.NodeID == "" || h.External || h.Port <= 0 {
+			continue
+		}
+		n, err := s.store.GetNode(h.NodeID)
+		if err != nil {
+			return fmt.Errorf("前置节点不存在: %s", h.NodeID)
+		}
+		// Only validate port pin on front roles
+		if n.Role != model.RoleRelay && n.Role != model.RoleEntry && n.Role != model.RoleHybrid {
+			continue
+		}
+		pmin, pmax := n.EffectivePortRange()
+		if h.Port < pmin || h.Port > pmax {
+			return fmt.Errorf("入口端口 %d 不在前置 %s 的端口池 %d–%d 内", h.Port, n.Name, pmin, pmax)
+		}
+		if m := used[n.ID]; m != nil {
+			if c, ok := m[h.Port]; ok {
+				return fmt.Errorf("入口端口 %d 已被隧道「%s」(#%d) 占用", h.Port, c.name, c.routeID)
+			}
+		}
+	}
+	return nil
+}
+
 func (s *Server) createRoute(c *gin.Context) {
 	var req model.Route
 	if err := c.BindJSON(&req); err != nil {
@@ -957,13 +1030,17 @@ func (s *Server) createRoute(c *gin.Context) {
 	if req.HopsJSON == "" {
 		req.HopsJSON = "[]"
 	}
+	if err := s.validateRouteFrontPorts(req.HopsJSON, 0); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	if err := s.store.CreateRoute(&req); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	_ = s.gen.RebuildAll()
 	s.store.Audit("admin", "create_route", fmt.Sprintf("%d", req.ID), req.Name)
-	c.JSON(http.StatusCreated, req)
+	c.JSON(http.StatusCreated, s.enrichRoute(&req))
 }
 
 func (s *Server) updateRoute(c *gin.Context) {
@@ -976,6 +1053,10 @@ func (s *Server) updateRoute(c *gin.Context) {
 	var req model.Route
 	if err := c.BindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
+		return
+	}
+	if err := s.validateRouteFrontPorts(req.HopsJSON, id); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	r.Name = req.Name
@@ -991,7 +1072,7 @@ func (s *Server) updateRoute(c *gin.Context) {
 		return
 	}
 	_ = s.gen.RebuildAll()
-	c.JSON(http.StatusOK, r)
+	c.JSON(http.StatusOK, s.enrichRoute(r))
 }
 
 func (s *Server) deleteRoute(c *gin.Context) {

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { api } from '../api'
 
 const routes = ref([])
@@ -18,6 +18,7 @@ const form = reactive({
   strategy: 'sticky',
   front_id: '',
   exit_id: '',
+  front_port: null, // null/0 = 自动分配；>0 = 固定端口
 })
 
 const fronts = computed(() =>
@@ -28,6 +29,56 @@ const exits = computed(() =>
 )
 const hasNodes = computed(() => (nodes.value || []).length > 0)
 const canSave = computed(() => !!(form.name.trim() && (form.front_id || form.exit_id)))
+
+const selectedFront = computed(() =>
+  (nodes.value || []).find((n) => n.id === form.front_id) || null,
+)
+
+/** 前置端口池 [min, max] */
+function frontPool(n) {
+  if (!n) return { min: 0, max: 0 }
+  let min = n.port_min > 0 ? n.port_min : n.listen_port > 0 ? n.listen_port : 0
+  let max = n.port_max > 0 ? n.port_max : min
+  if (!min) {
+    min = 10401
+    max = 10499
+  }
+  if (max < min) {
+    const t = min
+    min = max
+    max = t
+  }
+  // 历史单端口 10401 时给出常用池提示
+  if (min === max && min === 10401) max = 10499
+  return { min, max }
+}
+
+const frontPoolLabel = computed(() => {
+  const n = selectedFront.value
+  if (!n) return ''
+  const { min, max } = frontPool(n)
+  return min === max ? String(min) : `${min}–${max}`
+})
+
+/** 同前置上其它隧道已占用的端口（编辑时排除自己） */
+const usedFrontPorts = computed(() => {
+  const fid = form.front_id
+  if (!fid) return []
+  const set = new Set()
+  for (const r of routes.value || []) {
+    if (mode.value === 'edit' && r.id === editingId.value) continue
+    // list API 已给 front_port；也从 hops 读 pin
+    let frontOnRoute = false
+    for (const h of parseHops(r.hops_json)) {
+      if (h.node_id === fid) {
+        frontOnRoute = true
+        if (h.port > 0) set.add(h.port)
+      }
+    }
+    if (frontOnRoute && r.front_port > 0) set.add(r.front_port)
+  }
+  return [...set].sort((a, b) => a - b)
+})
 
 async function load() {
   try {
@@ -70,7 +121,6 @@ function hopLabel(hop) {
   return `${n.name}（${kind}）`
 }
 
-/** 前置入口端口：手机扫码连这个（API 已按隧道分配） */
 function frontPortLabel(r) {
   if (r.front_port > 0) return String(r.front_port)
   return '—'
@@ -86,6 +136,7 @@ function blankForm() {
   form.strategy = 'sticky'
   form.front_id = fronts.value[0]?.id || ''
   form.exit_id = exits.value[0]?.id || ''
+  form.front_port = null
 }
 
 function openCreate() {
@@ -104,6 +155,7 @@ function openEdit(r) {
   form.strategy = r.strategy || 'sticky'
   form.front_id = ''
   form.exit_id = ''
+  form.front_port = r.front_port > 0 ? r.front_port : null
   for (const h of parseHops(r.hops_json)) {
     if (!h.node_id) continue
     const n = (nodes.value || []).find((x) => x.id === h.node_id)
@@ -112,21 +164,38 @@ function openEdit(r) {
       form.exit_id = h.node_id
     } else {
       form.front_id = h.node_id
+      if (h.port > 0) form.front_port = h.port
     }
   }
   error.value = ''
   show.value = true
 }
 
+// 切换前置时清空不在新池内的端口
+watch(
+  () => form.front_id,
+  () => {
+    const n = selectedFront.value
+    if (!n || !form.front_port) return
+    const { min, max } = frontPool(n)
+    if (form.front_port < min || form.front_port > max) {
+      form.front_port = null
+    }
+  },
+)
+
 function buildHops() {
   const hops = []
   let order = 0
   if (form.front_id) {
-    hops.push({
+    const hop = {
       node_id: form.front_id,
       order: order++,
       capability_type: 'tcp_forward',
-    })
+    }
+    const p = Number(form.front_port) || 0
+    if (p > 0) hop.port = p
+    hops.push(hop)
   }
   if (form.exit_id) {
     hops.push({
@@ -136,6 +205,22 @@ function buildHops() {
     })
   }
   return hops
+}
+
+function validateFrontPortLocal() {
+  const p = Number(form.front_port) || 0
+  if (!p) return '' // 自动分配
+  if (!form.front_id) return '请先选择前置再填入口端口'
+  const n = selectedFront.value
+  if (!n) return '前置节点不存在'
+  const { min, max } = frontPool(n)
+  if (p < min || p > max) {
+    return `入口端口 ${p} 不在前置端口池 ${min}–${max} 内`
+  }
+  if (usedFrontPorts.value.includes(p)) {
+    return `入口端口 ${p} 已被其它隧道占用`
+  }
+  return ''
 }
 
 async function save() {
@@ -149,6 +234,11 @@ async function save() {
   }
   if (!form.exit_id) {
     error.value = 'TK 路径需要选择落地（exit）'
+    return
+  }
+  const portErr = validateFrontPortLocal()
+  if (portErr) {
+    error.value = portErr
     return
   }
   const hops = buildHops()
@@ -206,7 +296,6 @@ function healthClass(h) {
   return ''
 }
 
-/** Per-hop result badge: skip/external = 不可测 (not a hard fail). */
 function hopResultLabel(h) {
   if (!h) return '—'
   if (h.via === 'skip' || h.kind === 'external' || h.kind === 'info') return '不可测'
@@ -256,7 +345,7 @@ onMounted(load)
 
   <div class="panel-toolbar">
     <p class="help-text" style="margin:0">
-      前置 → 落地 · 每条隧道在前置占一个<strong>入口端口</strong>（扫码连这个）
+      前置 → 落地 · 可自定义<strong>入口端口</strong>（须在前置端口池内），留空则自动分配
     </p>
     <button class="btn btn-primary btn-sm" @click="openCreate">新建隧道</button>
   </div>
@@ -351,16 +440,38 @@ onMounted(load)
             </select>
           </div>
         </div>
-        <div class="field">
-          <label>策略</label>
-          <select v-model="form.strategy">
-            <option value="sticky">sticky</option>
-            <option value="failover">failover</option>
-            <option value="wrr">wrr</option>
-          </select>
+        <div class="form-grid">
+          <div class="field">
+            <label>入口端口（前置）</label>
+            <input
+              v-model.number="form.front_port"
+              type="number"
+              min="1"
+              max="65535"
+              :placeholder="frontPoolLabel ? `留空自动 · 池 ${frontPoolLabel}` : '留空自动分配'"
+              :disabled="!form.front_id"
+            />
+            <p class="help-text" style="margin:6px 0 0">
+              <template v-if="form.front_id && frontPoolLabel">
+                须在前置端口池 <strong class="mono">{{ frontPoolLabel }}</strong> 内。
+                <template v-if="usedFrontPorts.length">
+                  已占用：<span class="mono">{{ usedFrontPorts.join(', ') }}</span>
+                </template>
+              </template>
+              <template v-else>选择前置后可指定端口；留空由系统自动分配。</template>
+            </p>
+          </div>
+          <div class="field">
+            <label>策略</label>
+            <select v-model="form.strategy">
+              <option value="sticky">sticky</option>
+              <option value="failover">failover</option>
+              <option value="wrr">wrr</option>
+            </select>
+          </div>
         </div>
         <p class="help-text">
-          保存后请在节点页点「重建配置」。前置会为每条隧道分配入口端口并 tcp_forward → 落地 mita。
+          保存后请在节点页点「重建配置」。前置会按指定/分配的入口端口 tcp_forward → 落地 mita。
         </p>
       </div>
       <div class="modal-ft">
