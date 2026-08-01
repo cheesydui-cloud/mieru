@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.13] - 2026-07-30
+
+### 用户列表
+
+- **删除**提到操作主列（扫码 / 编辑 / 续期 / 停用 / **删除**），不再藏在「更多」里被挤没
+- 操作列加宽，确认文案带用户名
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.13 bash
+```
+
+
 ## [0.4.12] - 2026-07-30
 
 ### 新建节点表单

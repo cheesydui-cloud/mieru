@@ -275,12 +275,18 @@ async function resetPw(id) {
   toast.value = `新密码：${res.proxy_password}`
 }
 
-async function remove(id) {
+async function remove(u) {
   moreId.value = null
-  if (!confirm('确认删除用户？')) return
-  await api(`/api/admin/users/${id}`, { method: 'DELETE' })
-  toast.value = '已删除'
-  await loadUsers()
+  const id = typeof u === 'object' && u ? u.id : u
+  const name = typeof u === 'object' && u ? u.username || `#${id}` : `#${id}`
+  if (!confirm(`确认删除用户「${name}」？\n\n将从落地 mita 下发配置中移除，不可恢复。`)) return
+  try {
+    await api(`/api/admin/users/${id}`, { method: 'DELETE' })
+    toast.value = `已删除 ${name}`
+    await loadUsers()
+  } catch (e) {
+    error.value = e.message
+  }
 }
 
 async function toggle(u) {
@@ -533,19 +539,19 @@ onUnmounted(() => {
           <td class="col-route">{{ routeName(u) }}</td>
           <td class="col-entry mono">{{ entryOf(u) }}</td>
           <td class="col-ops">
-            <div class="row-actions">
+            <div class="row-actions user-ops">
               <button class="btn btn-link btn-sm" @click="openSub(u)">扫码</button>
               <button class="btn btn-link btn-sm" @click="openEdit(u)">编辑</button>
               <button class="btn btn-link btn-sm" @click="openRenew(u)">续期</button>
               <button class="btn btn-link btn-sm" @click="toggle(u)">
                 {{ u.status === 'disabled' ? '启用' : '停用' }}
               </button>
+              <button class="btn btn-link-danger btn-sm" @click="remove(u)">删除</button>
               <div class="more-wrap">
                 <button class="btn btn-link btn-sm" @click="moreId = moreId === u.id ? null : u.id">更多</button>
                 <div v-if="moreId === u.id" class="more-menu" @click.stop>
-                  <button @click="openAddTraffic(u)">加流量</button>
+                  <button @click="openAddTraffic(u); moreId = null">加流量</button>
                   <button @click="resetPw(u.id)">重置密码</button>
-                  <button class="danger" @click="remove(u.id)">删除</button>
                 </div>
               </div>
             </div>
@@ -801,7 +807,13 @@ onUnmounted(() => {
 .col-speed { width: 14%; }
 .col-route { width: 12%; }
 .col-entry { width: 14%; }
-.col-ops { width: 16%; }
+.col-ops { width: 22%; min-width: 220px; }
+.user-ops {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 2px 4px;
+  max-width: 100%;
+}
 .note-line {
   font-size: 12px;
   margin-top: 1px;
