@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.4.4] - 2026-08-01
+
+### 用户运营
+
+- 列表：线路名、入口、备注、到期临近标黄、流量进度条
+- 搜索 / 状态筛选；开户套餐快捷（体验 / 月卡 / 不限）
+- 一键 **续期** / **加流量** / **停用·启用**（重置密码、删除收进「更多」）
+
+### 实时网速
+
+- Exit agent 每秒读 `mita get users`，按 1 日累计差算上下行 bps
+- 用户页每秒拉 `/api/admin/metrics/rates`；超过 8s 无上报显示 0（不卡死旧值）
+
+### 升级
+
+面板 + **落地 exit agent**（前置可不动）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.4 bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | MIERU_VERSION=v0.4.4 bash
+```
+
+
 ## [0.4.3] - 2026-08-01
 
 ### UX

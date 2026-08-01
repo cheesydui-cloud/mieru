@@ -139,6 +139,9 @@ func (s *Server) Router() *gin.Engine {
 		admin.DELETE("/users/:id", s.deleteUser)
 		admin.POST("/users/:id/reset-password", s.resetUserPassword)
 		admin.POST("/users/:id/reset-sub", s.resetUserSub)
+		admin.POST("/users/:id/renew", s.renewUser)
+		admin.POST("/users/:id/add-traffic", s.addUserTraffic)
+		admin.POST("/users/:id/toggle", s.toggleUser)
 
 		admin.GET("/metrics/rates", s.listRates)
 		admin.GET("/audit", s.listAudit)
@@ -1064,19 +1067,47 @@ func (s *Server) listUsers(c *gin.Context) {
 		return
 	}
 	base := s.publicBase(c)
+	routes, _ := s.store.ListRoutes()
+	routeName := map[int64]string{}
+	for _, r := range routes {
+		routeName[r.ID] = r.Name
+	}
+	now := time.Now().Unix()
 	type row struct {
 		model.User
 		UpBps        int64  `json:"up_bps"`
 		DownBps      int64  `json:"down_bps"`
+		RateTS       int64  `json:"rate_ts,omitempty"`
 		Subscription string `json:"subscription"`
+		RouteName    string `json:"route_name,omitempty"`
+		EntryDisplay string `json:"entry_display,omitempty"`
 	}
 	out := make([]row, 0, len(list))
 	for _, u := range list {
 		r := row{User: u, Subscription: base + "/sub/" + u.SubToken}
-		// list still returns sub_token via model.User (needed for admin QR)
+		if u.RouteID != nil {
+			r.RouteName = routeName[*u.RouteID]
+		}
+		// client-facing entry for operator list
+		if eps := s.resolveUserMitaEndpoints(&u); len(eps) > 0 {
+			r.EntryDisplay = fmt.Sprintf("%s:%d", eps[0].Host, eps[0].Port)
+		} else if strings.TrimSpace(u.EntryHost) != "" {
+			if u.EntryPort > 0 {
+				r.EntryDisplay = fmt.Sprintf("%s:%d", u.EntryHost, u.EntryPort)
+			} else {
+				r.EntryDisplay = u.EntryHost
+			}
+		}
 		if sample, ok := s.store.GetRate(u.ID); ok {
-			r.UpBps = sample.UpBps
-			r.DownBps = sample.DownBps
+			r.RateTS = sample.TS
+			// stale (>8s) → show 0 so UI never freezes on last speed
+			if sample.TS > 0 && now-sample.TS > 8 {
+				r.UpBps = 0
+				r.DownBps = 0
+			} else {
+				r.UpBps = sample.UpBps
+				r.DownBps = sample.DownBps
+			}
 		}
 		out = append(out, r)
 	}
@@ -1280,8 +1311,158 @@ func (s *Server) resetUserSub(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"sub_token": tok, "subscription": s.publicBase(c) + "/sub/" + tok})
 }
 
+// renewUser extends expire_at by days, or sets absolute date; re-activates expired/over_quota.
+func (s *Server) renewUser(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	u, err := s.store.GetUser(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	var req struct {
+		Days     int    `json:"days"`
+		ExpireAt string `json:"expire_at"`
+	}
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
+		return
+	}
+	now := time.Now().UTC()
+	if req.ExpireAt != "" {
+		if t, err := time.Parse("2006-01-02", req.ExpireAt); err == nil {
+			// end of that day UTC
+			t = time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 0, time.UTC)
+			u.ExpireAt = &t
+		} else if t, err := time.Parse(time.RFC3339, req.ExpireAt); err == nil {
+			u.ExpireAt = &t
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid expire_at"})
+			return
+		}
+	} else {
+		days := req.Days
+		if days <= 0 {
+			days = 30
+		}
+		base := now
+		if u.ExpireAt != nil && u.ExpireAt.After(now) {
+			base = u.ExpireAt.UTC()
+		}
+		t := base.AddDate(0, 0, days)
+		u.ExpireAt = &t
+	}
+	// re-activate expired; over_quota only if still under limit; disabled stays
+	if u.Status == model.StatusExpired {
+		u.Status = model.StatusActive
+	} else if u.Status == model.StatusOverQuota {
+		if u.TrafficLimitBytes == 0 || u.TrafficUsedBytes < u.TrafficLimitBytes {
+			u.Status = model.StatusActive
+		}
+	}
+	if err := s.store.UpdateUser(u); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	_ = s.store.RefreshUserStatuses()
+	_ = s.gen.RebuildAll()
+	u2, _ := s.store.GetUser(id)
+	s.store.Audit("admin", "renew_user", fmt.Sprintf("%d", id), fmt.Sprintf("days=%d expire=%v", req.Days, req.ExpireAt))
+	c.JSON(http.StatusOK, u2)
+}
+
+// addUserTraffic increases traffic_limit_bytes (or sets unlimited when unlimited=true).
+func (s *Server) addUserTraffic(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	u, err := s.store.GetUser(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	var req struct {
+		AddBytes  int64 `json:"add_bytes"`
+		AddGB     int64 `json:"add_gb"`
+		Unlimited bool  `json:"unlimited"`
+	}
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
+		return
+	}
+	if req.Unlimited {
+		u.TrafficLimitBytes = 0
+	} else {
+		add := req.AddBytes
+		if add <= 0 && req.AddGB > 0 {
+			add = req.AddGB * 1024 * 1024 * 1024
+		}
+		if add <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "add_gb or add_bytes required"})
+			return
+		}
+		// if previously unlimited (0), start from used so limit is used+add
+		if u.TrafficLimitBytes == 0 {
+			u.TrafficLimitBytes = u.TrafficUsedBytes + add
+		} else {
+			u.TrafficLimitBytes += add
+		}
+	}
+	if u.Status == model.StatusOverQuota {
+		if u.TrafficLimitBytes == 0 || u.TrafficUsedBytes < u.TrafficLimitBytes {
+			u.Status = model.StatusActive
+		}
+	}
+	if err := s.store.UpdateUser(u); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	_ = s.store.RefreshUserStatuses()
+	_ = s.gen.RebuildAll()
+	u2, _ := s.store.GetUser(id)
+	s.store.Audit("admin", "add_traffic", fmt.Sprintf("%d", id), fmt.Sprintf("add_gb=%d unlimited=%v", req.AddGB, req.Unlimited))
+	c.JSON(http.StatusOK, u2)
+}
+
+// toggleUser flips active <-> disabled.
+func (s *Server) toggleUser(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	u, err := s.store.GetUser(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	var req struct {
+		Status string `json:"status"` // optional force: active|disabled
+	}
+	_ = c.BindJSON(&req)
+	if req.Status == model.StatusActive || req.Status == model.StatusDisabled {
+		u.Status = req.Status
+	} else if u.Status == model.StatusDisabled {
+		u.Status = model.StatusActive
+	} else {
+		u.Status = model.StatusDisabled
+	}
+	if err := s.store.UpdateUser(u); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	_ = s.gen.RebuildAll()
+	u2, _ := s.store.GetUser(id)
+	s.store.Audit("admin", "toggle_user", fmt.Sprintf("%d", id), u2.Status)
+	c.JSON(http.StatusOK, u2)
+}
+
 func (s *Server) listRates(c *gin.Context) {
-	c.JSON(http.StatusOK, s.store.AllRates())
+	// drop stale samples (>8s) so UI doesn't show frozen speeds
+	rates := s.store.AllRates()
+	now := time.Now().Unix()
+	out := make([]model.TrafficSample, 0, len(rates))
+	for _, r := range rates {
+		if r.TS > 0 && now-r.TS > 8 {
+			r.UpBps = 0
+			r.DownBps = 0
+		}
+		out = append(out, r)
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 func (s *Server) listAudit(c *gin.Context) {

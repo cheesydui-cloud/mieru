@@ -1,17 +1,22 @@
 <script setup>
-import { onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import QRCode from 'qrcode'
-import { api, copyText, formatBytes, getToken, statusBadge } from '../api'
+import { api, copyText, formatBytes, formatBps, getToken, statusBadge } from '../api'
 
 const users = ref([])
 const routes = ref([])
+const rates = ref({}) // id -> {up, down, ts}
 const error = ref('')
 const toast = ref('')
+const filter = ref('')
+const statusFilter = ref('all')
 const show = ref(false)
 const mode = ref('create') // create | edit | created
 const editingId = ref(null)
 const created = ref(null)
 const saving = ref(false)
+const moreId = ref(null)
+
 const form = reactive({
   username: '',
   expire_at: '',
@@ -23,7 +28,12 @@ const form = reactive({
   status: 'active',
 })
 
-// share / QR modal
+const packages = [
+  { name: '体验', days: 1, gb: 5 },
+  { name: '月卡', days: 30, gb: 100 },
+  { name: '不限', days: 30, gb: 0 },
+]
+
 const subShow = ref(false)
 const subUser = ref(null)
 const shareURL = ref('')
@@ -32,11 +42,21 @@ const subQR = ref('')
 const subLoading = ref(false)
 const entries = ref([])
 const mihomoYAML = ref('')
-const mihomoURL = ref('')
 
-let timer
+const renewShow = ref(false)
+const renewUser = ref(null)
+const renewDays = ref(30)
+const renewDate = ref('')
+const trafficShow = ref(false)
+const trafficUser = ref(null)
+const trafficGB = ref(50)
 
-function routeName(id) {
+let listTimer
+let rateTimer
+
+function routeName(u) {
+  if (u.route_name) return u.route_name
+  const id = u.route_id
   if (id == null || id === '') return '—'
   const r = (routes.value || []).find((x) => x.id === id || String(x.id) === String(id))
   return r ? r.name : `#${id}`
@@ -47,16 +67,93 @@ function statusLabel(s) {
   return m[s] || s || '—'
 }
 
-async function load() {
+function isExpiringSoon(u) {
+  if (!u.expire_at) return false
+  const t = new Date(u.expire_at).getTime()
+  if (Number.isNaN(t)) return false
+  const days = (t - Date.now()) / 86400000
+  return days >= 0 && days <= 3
+}
+
+function barStyle(u) {
+  return { width: trafficPct(u) + '%' }
+}
+
+function trafficPct(u) {
+  if (!u.traffic_limit_bytes) return 0
+  return Math.min(100, Math.round(((u.traffic_used_bytes || 0) / u.traffic_limit_bytes) * 100))
+}
+
+function entryOf(u) {
+  return u.entry_display || (u.entry_host ? `${u.entry_host}${u.entry_port ? ':' + u.entry_port : ''}` : '—')
+}
+
+function rateOf(u) {
+  const live = rates.value[u.id]
+  if (live) return live
+  return { up: u.up_bps || 0, down: u.down_bps || 0 }
+}
+
+const filtered = computed(() => {
+  let list = users.value || []
+  if (statusFilter.value !== 'all') {
+    list = list.filter((u) => u.status === statusFilter.value)
+  }
+  const q = filter.value.trim().toLowerCase()
+  if (q) {
+    list = list.filter(
+      (u) =>
+        (u.username || '').toLowerCase().includes(q) ||
+        (u.note || '').toLowerCase().includes(q) ||
+        String(u.id).includes(q) ||
+        routeName(u).toLowerCase().includes(q) ||
+        entryOf(u).toLowerCase().includes(q),
+    )
+  }
+  return list
+})
+
+async function loadUsers() {
   try {
     const [us, rs] = await Promise.all([api('/api/admin/users'), api('/api/admin/routes')])
     users.value = Array.isArray(us) ? us : []
     routes.value = Array.isArray(rs) ? rs : []
+    const next = { ...rates.value }
+    for (const u of users.value) {
+      next[u.id] = { up: u.up_bps || 0, down: u.down_bps || 0, ts: u.rate_ts || 0 }
+    }
+    rates.value = next
     error.value = ''
   } catch (e) {
     error.value = e.message
-    users.value = []
-    routes.value = []
+  }
+}
+
+async function loadRates() {
+  try {
+    const list = await api('/api/admin/metrics/rates')
+    if (!Array.isArray(list)) return
+    const next = { ...rates.value }
+    const now = Math.floor(Date.now() / 1000)
+    for (const id of Object.keys(next)) {
+      const r = next[id]
+      if (r && r.ts && now - r.ts > 8) {
+        next[id] = { up: 0, down: 0, ts: r.ts }
+      }
+    }
+    for (const s of list) {
+      const ts = s.ts || 0
+      let up = s.up_bps || 0
+      let down = s.down_bps || 0
+      if (ts && now - ts > 8) {
+        up = 0
+        down = 0
+      }
+      next[s.user_id] = { up, down, ts }
+    }
+    rates.value = next
+  } catch {
+    /* ignore */
   }
 }
 
@@ -71,6 +168,17 @@ function blankForm() {
     note: '',
     status: 'active',
   })
+}
+
+function applyPackage(p) {
+  form.traffic_limit_gb = p.gb
+  if (p.days > 0) {
+    const d = new Date()
+    d.setDate(d.getDate() + p.days)
+    form.expire_at = d.toISOString().slice(0, 10)
+  } else {
+    form.expire_at = ''
+  }
 }
 
 function openCreate() {
@@ -93,13 +201,14 @@ function openEdit(u) {
     entry_host: u.entry_host || '',
     entry_port: u.entry_port || null,
     note: u.note || '',
-    status: u.status || 'active',
+    status: u.status === 'disabled' ? 'disabled' : 'active',
   })
   created.value = null
   editingId.value = u.id
   mode.value = 'edit'
   show.value = true
   error.value = ''
+  moreId.value = null
 }
 
 async function create() {
@@ -124,7 +233,7 @@ async function create() {
     })
     mode.value = 'created'
     toast.value = '用户已创建'
-    await load()
+    await loadUsers()
   } catch (e) {
     error.value = e.message
   } finally {
@@ -141,7 +250,6 @@ async function saveEdit() {
       expire_at: form.expire_at || undefined,
       clear_expire: !form.expire_at,
       traffic_limit_bytes: Math.round(Number(form.traffic_limit_gb || 0) * 1024 * 1024 * 1024),
-      // 0 = unbind route (backend treats <=0 as clear)
       route_id: form.route_id ? Number(form.route_id) : 0,
       entry_host: (form.entry_host || '').trim(),
       entry_port: form.entry_port ? Number(form.entry_port) : 0,
@@ -153,7 +261,7 @@ async function saveEdit() {
     })
     toast.value = '已保存'
     show.value = false
-    await load()
+    await loadUsers()
   } catch (e) {
     error.value = e.message
   } finally {
@@ -162,15 +270,84 @@ async function saveEdit() {
 }
 
 async function resetPw(id) {
+  moreId.value = null
   const res = await api(`/api/admin/users/${id}/reset-password`, { method: 'POST' })
   toast.value = `新密码：${res.proxy_password}`
 }
 
 async function remove(id) {
+  moreId.value = null
   if (!confirm('确认删除用户？')) return
   await api(`/api/admin/users/${id}`, { method: 'DELETE' })
   toast.value = '已删除'
-  await load()
+  await loadUsers()
+}
+
+async function toggle(u) {
+  moreId.value = null
+  const res = await api(`/api/admin/users/${u.id}/toggle`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+  toast.value = res.status === 'disabled' ? '已停用' : '已启用'
+  await loadUsers()
+}
+
+function openRenew(u) {
+  moreId.value = null
+  renewUser.value = u
+  renewDays.value = 30
+  renewDate.value = ''
+  renewShow.value = true
+}
+
+async function doRenew() {
+  if (!renewUser.value) return
+  saving.value = true
+  try {
+    const body = renewDate.value
+      ? { expire_at: renewDate.value }
+      : { days: Number(renewDays.value) || 30 }
+    await api(`/api/admin/users/${renewUser.value.id}/renew`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+    toast.value = '已续期'
+    renewShow.value = false
+    await loadUsers()
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    saving.value = false
+  }
+}
+
+function openAddTraffic(u) {
+  moreId.value = null
+  trafficUser.value = u
+  trafficGB.value = 50
+  trafficShow.value = true
+}
+
+async function doAddTraffic(unlimited = false) {
+  if (!trafficUser.value) return
+  saving.value = true
+  try {
+    const body = unlimited
+      ? { unlimited: true }
+      : { add_gb: Number(trafficGB.value) || 0 }
+    await api(`/api/admin/users/${trafficUser.value.id}/add-traffic`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+    toast.value = unlimited ? '已改为不限流量' : `已加 ${trafficGB.value} GB`
+    trafficShow.value = false
+    await loadUsers()
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    saving.value = false
+  }
 }
 
 async function copy(text) {
@@ -193,13 +370,13 @@ async function makeQR(text) {
 }
 
 async function openSub(u) {
+  moreId.value = null
   subUser.value = u
   shareURL.value = ''
   shareURLs.value = ''
   subQR.value = ''
   entries.value = []
   mihomoYAML.value = ''
-  mihomoURL.value = ''
   subShow.value = true
   subLoading.value = true
   try {
@@ -216,7 +393,6 @@ async function openSub(u) {
       shareURLs.value = detail.share_urls || detail.share_url || ''
       entries.value = Array.isArray(detail.entries) ? detail.entries : []
       mihomoYAML.value = detail.mihomo_yaml || ''
-      mihomoURL.value = detail.mihomo_url || ''
       if (detail.user) subUser.value = { ...u, ...detail.user }
     }
     if (!shareURL.value && created.value && created.value.user?.id === u?.id) {
@@ -260,7 +436,6 @@ async function downloadMihomo(u) {
     URL.revokeObjectURL(a.href)
     toast.value = `已下载 ${name}`
   } catch (e) {
-    // fallback: use in-memory yaml
     if (mihomoYAML.value) {
       const blob = new Blob([mihomoYAML.value], { type: 'application/x-yaml' })
       const a = document.createElement('a')
@@ -277,41 +452,58 @@ async function downloadMihomo(u) {
 }
 
 onMounted(() => {
-  load()
-  timer = setInterval(load, 8000)
+  loadUsers()
+  loadRates()
+  listTimer = setInterval(loadUsers, 10000)
+  rateTimer = setInterval(loadRates, 1000)
 })
-onUnmounted(() => clearInterval(timer))
+onUnmounted(() => {
+  clearInterval(listTimer)
+  clearInterval(rateTimer)
+})
 </script>
 
 <template>
-  <div v-if="error && !show && !subShow" class="error">{{ error }}</div>
+  <div v-if="error && !show && !subShow && !renewShow && !trafficShow" class="error">{{ error }}</div>
   <div v-if="toast" class="toast" @click="toast = ''">{{ toast }}</div>
 
   <div class="page-tabs">
     <div class="page-tab active">用户</div>
   </div>
 
-  <div class="panel-toolbar">
-    <p class="help-text" style="margin:0">开户 → 绑线路 → 扫码 / 下载 Mihomo YAML</p>
+  <div class="panel-toolbar users-toolbar">
+    <div class="toolbar-left">
+      <input class="input-filter" v-model="filter" />
+      <select v-model="statusFilter" class="status-filter">
+        <option value="all">全部状态</option>
+        <option value="active">正常</option>
+        <option value="disabled">停用</option>
+        <option value="expired">到期</option>
+        <option value="over_quota">超流量</option>
+      </select>
+    </div>
     <button class="btn btn-primary btn-sm" @click="openCreate">开户</button>
   </div>
 
   <div class="table-wrap">
-    <table class="data table-users" v-if="users.length">
+    <table class="data table-users" v-if="filtered.length">
       <thead>
         <tr>
           <th class="col-user">用户</th>
           <th class="col-status">状态</th>
           <th class="col-date">到期</th>
           <th class="col-traffic">流量</th>
+          <th class="col-speed">实时</th>
           <th class="col-route">线路</th>
+          <th class="col-entry">入口</th>
           <th class="col-ops">操作</th>
         </tr>
       </thead>
       <tbody>
-        <tr v-for="u in users" :key="u.id">
+        <tr v-for="u in filtered" :key="u.id">
           <td class="col-user">
             <div class="name-link">{{ u.username }}</div>
+            <div v-if="u.note" class="muted note-line">{{ u.note }}</div>
             <div class="muted mono" style="font-size:11px">#{{ u.id }}</div>
           </td>
           <td class="col-status">
@@ -319,29 +511,52 @@ onUnmounted(() => clearInterval(timer))
               <span class="dot"></span>{{ statusLabel(u.status) }}
             </span>
           </td>
-          <td class="col-date mono">{{ u.expire_at ? String(u.expire_at).slice(0, 10) : '永久' }}</td>
-          <td class="col-traffic mono">
-            {{ formatBytes(u.traffic_used_bytes) }}
-            <span class="muted">/</span>
-            {{ u.traffic_limit_bytes ? formatBytes(u.traffic_limit_bytes) : '∞' }}
+          <td class="col-date mono" :class="{ 'warn-text': isExpiringSoon(u) }">
+            {{ u.expire_at ? String(u.expire_at).slice(0, 10) : "永久" }}
           </td>
-          <td class="col-route">{{ routeName(u.route_id) }}</td>
+          <td class="col-traffic">
+            <div class="mono traffic-line">
+              {{ formatBytes(u.traffic_used_bytes) }}
+              <span class="muted">/</span>
+              {{ u.traffic_limit_bytes ? formatBytes(u.traffic_limit_bytes) : "∞" }}
+            </div>
+            <div v-if="u.traffic_limit_bytes" class="bar">
+              <div class="bar-fill" :style="barStyle(u)"></div>
+            </div>
+          </td>
+          <td class="col-speed mono">
+            <div class="speed-line">
+              <span class="speed-down">↓ {{ formatBps(rateOf(u).down) }}</span>
+              <span class="speed-up">↑ {{ formatBps(rateOf(u).up) }}</span>
+            </div>
+          </td>
+          <td class="col-route">{{ routeName(u) }}</td>
+          <td class="col-entry mono">{{ entryOf(u) }}</td>
           <td class="col-ops">
             <div class="row-actions">
               <button class="btn btn-link btn-sm" @click="openSub(u)">扫码</button>
               <button class="btn btn-link btn-sm" @click="downloadMihomo(u)">YAML</button>
               <button class="btn btn-link btn-sm" @click="openEdit(u)">编辑</button>
-              <button class="btn btn-link btn-sm" @click="resetPw(u.id)">重置密码</button>
-              <button class="btn btn-link-danger btn-sm" @click="remove(u.id)">删除</button>
+              <button class="btn btn-link btn-sm" @click="openRenew(u)">续期</button>
+              <button class="btn btn-link btn-sm" @click="toggle(u)">
+                {{ u.status === 'disabled' ? '启用' : '停用' }}
+              </button>
+              <div class="more-wrap">
+                <button class="btn btn-link btn-sm" @click="moreId = moreId === u.id ? null : u.id">更多</button>
+                <div v-if="moreId === u.id" class="more-menu" @click.stop>
+                  <button @click="openAddTraffic(u)">加流量</button>
+                  <button @click="resetPw(u.id)">重置密码</button>
+                  <button class="danger" @click="remove(u.id)">删除</button>
+                </div>
+              </div>
             </div>
           </td>
         </tr>
       </tbody>
     </table>
-    <div v-else class="empty">暂无用户</div>
+    <div v-else class="empty">{{ users.length ? '无匹配用户' : '暂无用户' }}</div>
   </div>
 
-  <!-- create / edit -->
   <div v-if="show" class="modal-mask" @click.self="show = false">
     <div class="modal" style="width:min(560px,100%)">
       <div class="modal-hd">
@@ -355,13 +570,21 @@ onUnmounted(() => clearInterval(timer))
       <div class="modal-bd">
         <div v-if="error && show" class="error" style="margin:0">{{ error }}</div>
         <template v-if="mode !== 'created'">
+          <div v-if="mode === 'create'" class="pkg-row">
+            <button
+              v-for="p in packages"
+              :key="p.name"
+              type="button"
+              class="btn btn-ghost btn-sm"
+              @click="applyPackage(p)"
+            >
+              {{ p.name }} · {{ p.days }}天 · {{ p.gb ? p.gb + 'G' : '不限' }}
+            </button>
+          </div>
           <div class="form-grid">
             <div class="field">
               <label>用户名</label>
-              <input
-                v-model="form.username"
-                :disabled="mode === 'edit'"
-              />
+              <input v-model="form.username" :disabled="mode === 'edit'" />
             </div>
             <div class="field" v-if="mode === 'edit'">
               <label>状态</label>
@@ -386,11 +609,11 @@ onUnmounted(() => clearInterval(timer))
               </select>
             </div>
             <div class="field">
-              <label>公网入口 IP（可选）</label>
+              <label>公网入口 IP</label>
               <input v-model="form.entry_host" />
             </div>
             <div class="field">
-              <label>入口端口（可选）</label>
+              <label>入口端口</label>
               <input v-model.number="form.entry_port" type="number" min="1" max="65535" />
             </div>
           </div>
@@ -398,9 +621,6 @@ onUnmounted(() => clearInterval(timer))
             <label>备注</label>
             <input v-model="form.note" />
           </div>
-          <p class="help-text" style="margin:0">
-            扫码 / YAML 连<strong>前置</strong>；认证与出口在<strong>落地家宽 mita</strong>。
-          </p>
         </template>
         <template v-else>
           <div class="kv">
@@ -443,7 +663,59 @@ onUnmounted(() => clearInterval(timer))
     </div>
   </div>
 
-  <!-- QR + YAML -->
+  <div v-if="renewShow" class="modal-mask" @click.self="renewShow = false">
+    <div class="modal" style="width:min(400px,100%)">
+      <div class="modal-hd">
+        <h3>续期 · {{ renewUser?.username }}</h3>
+        <button class="btn btn-ghost btn-sm" @click="renewShow = false">关闭</button>
+      </div>
+      <div class="modal-bd">
+        <div class="pkg-row">
+          <button class="btn btn-ghost btn-sm" @click="renewDays = 7">+7 天</button>
+          <button class="btn btn-ghost btn-sm" @click="renewDays = 30">+30 天</button>
+          <button class="btn btn-ghost btn-sm" @click="renewDays = 90">+90 天</button>
+        </div>
+        <div class="field">
+          <label>延长天数</label>
+          <input v-model.number="renewDays" type="number" min="1" />
+        </div>
+        <div class="field">
+          <label>或指定到期日（优先）</label>
+          <input v-model="renewDate" type="date" />
+        </div>
+      </div>
+      <div class="modal-ft">
+        <button class="btn btn-ghost" @click="renewShow = false">取消</button>
+        <button class="btn btn-primary" :disabled="saving" @click="doRenew">确认续期</button>
+      </div>
+    </div>
+  </div>
+
+  <div v-if="trafficShow" class="modal-mask" @click.self="trafficShow = false">
+    <div class="modal" style="width:min(400px,100%)">
+      <div class="modal-hd">
+        <h3>加流量 · {{ trafficUser?.username }}</h3>
+        <button class="btn btn-ghost btn-sm" @click="trafficShow = false">关闭</button>
+      </div>
+      <div class="modal-bd">
+        <div class="pkg-row">
+          <button class="btn btn-ghost btn-sm" @click="trafficGB = 10">+10G</button>
+          <button class="btn btn-ghost btn-sm" @click="trafficGB = 50">+50G</button>
+          <button class="btn btn-ghost btn-sm" @click="trafficGB = 100">+100G</button>
+        </div>
+        <div class="field">
+          <label>增加 (GB)</label>
+          <input v-model.number="trafficGB" type="number" min="1" />
+        </div>
+      </div>
+      <div class="modal-ft">
+        <button class="btn btn-ghost" @click="trafficShow = false">取消</button>
+        <button class="btn btn-ghost" :disabled="saving" @click="doAddTraffic(true)">改为不限</button>
+        <button class="btn btn-primary" :disabled="saving" @click="doAddTraffic(false)">确认加流量</button>
+      </div>
+    </div>
+  </div>
+
   <div v-if="subShow" class="modal-mask" @click.self="subShow = false">
     <div class="modal" style="width:min(520px,100%)">
       <div class="modal-hd">
@@ -461,40 +733,20 @@ onUnmounted(() => clearInterval(timer))
               无法生成二维码（未绑定线路 / 无前置地址）
             </div>
           </div>
-
           <div class="field">
             <label>节点链接（扫码内容 · mierus://）</label>
-            <textarea
-              readonly
-              rows="3"
-              class="mono share-ta"
-              :value="shareURL"
-            />
+            <textarea readonly rows="3" class="mono share-ta" :value="shareURL" />
           </div>
-
           <div v-if="entries.length > 1" class="field">
             <label>全部入口</label>
-            <div
-              v-for="(e, i) in entries"
-              :key="i"
-              class="mono entry-row"
-            >
+            <div v-for="(e, i) in entries" :key="i" class="mono entry-row">
               <span>{{ e.name }} · {{ e.host }}:{{ e.port }}</span>
               <button class="btn btn-link btn-sm" @click="copy(e.url)">复制</button>
             </div>
           </div>
-
           <div class="field">
             <label>Mihomo / Clash Meta YAML</label>
-            <textarea
-              readonly
-              rows="10"
-              class="mono share-ta"
-              :value="mihomoYAML"
-            />
-            <p class="help-text" style="margin-top:6px">
-              下载后用 Mihomo / Clash Meta「从文件导入」。节点类型 <code class="mono">mieru</code>，连前置 IP，出口为家宽。
-            </p>
+            <textarea readonly rows="10" class="mono share-ta" :value="mihomoYAML" />
           </div>
         </template>
       </div>
@@ -511,24 +763,106 @@ onUnmounted(() => clearInterval(timer))
 </template>
 
 <style scoped>
-.table-users {
-  table-layout: fixed;
+.users-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.toolbar-left {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex: 1;
+  min-width: 200px;
+}
+.input-filter {
+  flex: 1;
+  max-width: 280px;
+  height: 34px;
+  border: 1px solid var(--border-line);
+  border-radius: 6px;
+  padding: 0 10px;
+  background: #fff;
+}
+.status-filter {
+  height: 34px;
+  border: 1px solid var(--border-line);
+  border-radius: 6px;
+  padding: 0 8px;
+  background: #fff;
+}
+.table-users { table-layout: fixed; width: 100%; }
+.table-users th, .table-users td { vertical-align: middle; }
+.col-user { width: 12%; }
+.col-status { width: 8%; }
+.col-date { width: 10%; }
+.col-traffic { width: 14%; }
+.col-speed { width: 14%; }
+.col-route { width: 12%; }
+.col-entry { width: 14%; }
+.col-ops { width: 16%; }
+.note-line {
+  font-size: 12px;
+  margin-top: 1px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.warn-text { color: var(--warning); font-weight: 600; }
+.traffic-line { font-size: 12px; }
+.bar {
+  margin-top: 4px;
+  height: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.bar-fill { height: 100%; background: var(--accent); min-width: 0; }
+.speed-line {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  line-height: 1.3;
+}
+.speed-down { color: var(--success); }
+.speed-up { color: var(--link); }
+.more-wrap { position: relative; display: inline-block; }
+.more-menu {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 20;
+  background: #fff;
+  border: 1px solid var(--border-line);
+  border-radius: 6px;
+  min-width: 110px;
+  box-shadow: var(--shadow-md);
+  padding: 4px 0;
+}
+.more-menu button {
+  display: block;
   width: 100%;
-}
-.table-users th,
-.table-users td {
-  vertical-align: middle;
-}
-.col-user { width: 16%; }
-.col-status { width: 12%; }
-.col-date { width: 14%; }
-.col-traffic { width: 18%; text-align: left; }
-.col-route { width: 14%; }
-.col-ops { width: 26%; }
-
-.share-modal {
   text-align: left;
+  border: 0;
+  background: transparent;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
 }
+.more-menu button:hover { background: var(--bg-hover); }
+.more-menu button.danger { color: var(--danger); }
+.pkg-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.share-modal { text-align: left; }
 .qr-center {
   display: flex;
   justify-content: center;
@@ -542,9 +876,7 @@ onUnmounted(() => clearInterval(timer))
   border: 1px solid var(--border-line);
   border-radius: 6px;
 }
-.qr-box img {
-  display: block;
-}
+.qr-box img { display: block; }
 .share-ta {
   width: 100%;
   resize: vertical;

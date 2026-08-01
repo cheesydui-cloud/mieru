@@ -23,13 +23,14 @@ import (
 	"github.com/cheesydui-cloud/mieru/internal/plugins/mieru"
 	"github.com/cheesydui-cloud/mieru/internal/plugins/mita"
 	"github.com/cheesydui-cloud/mieru/internal/plugins/nftables"
+	"github.com/cheesydui-cloud/mieru/internal/plugins/procutil"
 	"github.com/cheesydui-cloud/mieru/internal/plugins/socksin"
 	"github.com/cheesydui-cloud/mieru/internal/plugins/tcpforward"
 )
 
 // AgentVersion is the default when main does not inject a build version.
 // Prefer SetVersion() from cmd/agent so -version and heartbeat always match.
-var AgentVersion = "0.4.3"
+var AgentVersion = "0.4.4"
 
 // SetVersion overrides the version string reported in heartbeats (and logs).
 // Call from main with the same value as -ldflags -X main.Version.
@@ -46,8 +47,10 @@ type Agent struct {
 	cfg      config.AgentConfig
 	client   *http.Client
 	registry *plugins.Registry
-	// simple local counters for demo metering on exit
+	// per-user metering from `mita get users` (exit/hybrid)
 	counters map[int64]*userCounter
+	// username (mita) → panel user_id from last desired config
+	userByName map[string]int64
 	// stateMu guards version + lastApplyMsg (heartbeat vs background apply).
 	stateMu      sync.Mutex
 	version      int64
@@ -57,8 +60,14 @@ type Agent struct {
 	applyBusy int32 // atomic: 1 while apply running
 }
 
+// userCounter tracks absolute totals from mita and derived bps.
 type userCounter struct {
-	up, down int64
+	lastUp   int64 // last seen cumulative upload bytes (1-day window)
+	lastDown int64 // last seen cumulative download bytes
+	upBps    int64
+	downBps  int64
+	lastTS   int64
+	primed   bool // false until first sample (no delta yet)
 }
 
 func New(cfg config.AgentConfig) *Agent {
@@ -71,14 +80,15 @@ func New(cfg config.AgentConfig) *Agent {
 		reg.Register(&socksin.Plugin{DataDir: filepath.Join(data, "socks")})
 		reg.Register(&tcpforward.Plugin{DataDir: filepath.Join(data, "tcpforward")})
 
-	return &Agent{
-		cfg:      cfg,
-		client:   &http.Client{Timeout: 15 * time.Second},
-		registry: reg,
-		counters: map[int64]*userCounter{},
-		applyMu:  make(chan struct{}, 1),
+		return &Agent{
+			cfg:        cfg,
+			client:     &http.Client{Timeout: 15 * time.Second},
+			registry:   reg,
+			counters:   map[int64]*userCounter{},
+			userByName: map[string]int64{},
+			applyMu:    make(chan struct{}, 1),
+		}
 	}
-}
 
 func (a *Agent) Run(ctx context.Context) error {
 	if a.cfg.NodeID == "" || a.cfg.Token == "" {
@@ -119,32 +129,33 @@ func (a *Agent) Run(ctx context.Context) error {
 	if hbEvery > 5*time.Second {
 		hbEvery = 5 * time.Second
 	}
-	hb := time.NewTicker(hbEvery)
-	pull := time.NewTicker(a.cfg.PullEvery)
-	traffic := time.NewTicker(2 * time.Second)
-	defer hb.Stop()
-	defer pull.Stop()
-	defer traffic.Stop()
+		hb := time.NewTicker(hbEvery)
+		pull := time.NewTicker(a.cfg.PullEvery)
+		// 1s traffic sample → panel realtime rates with minimal lag
+		traffic := time.NewTicker(1 * time.Second)
+		defer hb.Stop()
+		defer pull.Stop()
+		defer traffic.Stop()
 
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-hb.C:
-			if err := a.heartbeat(ctx); err != nil {
-				log.Printf("heartbeat: %v", err)
-			}
-		case <-pull.C:
-			a.schedulePull(ctx)
-		case <-traffic.C:
-			if a.cfg.Role == model.RoleExit || a.cfg.Role == model.RoleHybrid {
-				if err := a.reportTraffic(ctx); err != nil {
-					log.Printf("traffic: %v", err)
+		for {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-hb.C:
+				if err := a.heartbeat(ctx); err != nil {
+					log.Printf("heartbeat: %v", err)
+				}
+			case <-pull.C:
+				a.schedulePull(ctx)
+			case <-traffic.C:
+				if a.cfg.Role == model.RoleExit || a.cfg.Role == model.RoleHybrid {
+					if err := a.reportTraffic(ctx); err != nil {
+						log.Printf("traffic: %v", err)
+					}
 				}
 			}
 		}
 	}
-}
 
 // schedulePull runs pullAndApply in the background so heartbeats keep flowing
 // (hop-to-hop probe jobs are delivered on heartbeat).
@@ -368,12 +379,22 @@ func (a *Agent) apply(ctx context.Context, cfg *model.AgentDesiredConfig) error 
 		okCount++
 		okByType[typ] = true
 	}
-	// seed counters for known users on exit
-	for _, u := range cfg.Users {
-		if _, ok := a.counters[u.UserID]; !ok {
-			a.counters[u.UserID] = &userCounter{}
+		// seed counters + username map for mita metering
+		for _, u := range cfg.Users {
+			if u.UserID <= 0 {
+				continue
+			}
+			if _, ok := a.counters[u.UserID]; !ok {
+				a.counters[u.UserID] = &userCounter{}
+			}
+			name := strings.TrimSpace(u.MitaUser)
+			if name == "" {
+				name = strings.TrimSpace(u.Username)
+			}
+			if name != "" {
+				a.userByName[name] = u.UserID
+			}
 		}
-	}
 	if okCount == 0 && firstErr != nil {
 		return firstErr
 	}
@@ -430,23 +451,97 @@ func usersToMaps(users []model.AgentUser) []map[string]interface{} {
 	return out
 }
 
-// reportTraffic sends deltas. MVP uses tiny synthetic idle zeros unless
-// external meters call AddBytes. Real deployment hooks mita/socks counters here.
+// reportTraffic samples `mita get users` on exit/hybrid, derives per-user bps
+// from 1-second deltas of 1DayDownload/1DayUpload, and posts to the panel.
 func (a *Agent) reportTraffic(ctx context.Context) error {
-	samples := make([]model.TrafficReportSample, 0, len(a.counters))
 	now := time.Now().Unix()
-	for uid, c := range a.counters {
-		// zero deltas by default — placeholder for real meter integration
+	totals, err := a.readMitaUserTotals()
+	if err != nil {
+		// mita not ready / no users yet — report zeros for known users so UI clears stale rates
+		return a.postTrafficSamples(ctx, a.zeroSamples(now))
+	}
+
+	samples := make([]model.TrafficReportSample, 0, len(totals))
+	for name, tot := range totals {
+		uid, ok := a.userByName[name]
+		if !ok || uid <= 0 {
+			// try exact username match only
+			continue
+		}
+		c, ok := a.counters[uid]
+		if !ok {
+			c = &userCounter{}
+			a.counters[uid] = c
+		}
+
+		var upDelta, downDelta int64
+		var upBps, downBps int64
+		if !c.primed {
+			// first sample: establish baseline, no spike
+			c.primed = true
+			c.lastUp = tot.up
+			c.lastDown = tot.down
+			c.lastTS = now
+			c.upBps = 0
+			c.downBps = 0
+		} else {
+			elapsed := now - c.lastTS
+			if elapsed <= 0 {
+				elapsed = 1
+			}
+			// 1-day counters can reset/slide — treat decrease as new baseline
+			if tot.up >= c.lastUp {
+				upDelta = tot.up - c.lastUp
+			} else {
+				upDelta = 0
+			}
+			if tot.down >= c.lastDown {
+				downDelta = tot.down - c.lastDown
+			} else {
+				downDelta = 0
+			}
+			// bytes/sec * 8 = bits/sec
+			upBps = (upDelta * 8) / elapsed
+			downBps = (downDelta * 8) / elapsed
+			c.lastUp = tot.up
+			c.lastDown = tot.down
+			c.lastTS = now
+			c.upBps = upBps
+			c.downBps = downBps
+		}
 		samples = append(samples, model.TrafficReportSample{
 			UserID:    uid,
-			UpDelta:   0,
-			DownDelta: 0,
-			UpBps:     0,
-			DownBps:   0,
+			UpDelta:   upDelta,
+			DownDelta: downDelta,
+			UpBps:     c.upBps,
+			DownBps:   c.downBps,
 			TS:        now,
 		})
-		_ = c
 	}
+	// users with no mita line this tick → 0 rate
+	seen := map[int64]bool{}
+	for _, s := range samples {
+		seen[s.UserID] = true
+	}
+	for uid := range a.counters {
+		if seen[uid] {
+			continue
+		}
+		samples = append(samples, model.TrafficReportSample{
+			UserID: uid, UpBps: 0, DownBps: 0, TS: now,
+		})
+	}
+	if len(samples) == 0 {
+		return nil
+	}
+	return a.postTrafficSamples(ctx, samples)
+}
+
+type mitaUserTotal struct {
+	up, down int64 // cumulative 1-day bytes
+}
+
+func (a *Agent) postTrafficSamples(ctx context.Context, samples []model.TrafficReportSample) error {
 	if len(samples) == 0 {
 		return nil
 	}
@@ -459,15 +554,149 @@ func (a *Agent) reportTraffic(ctx context.Context) error {
 	return a.postJSON(ctx, "/api/agent/traffic", body, &resp)
 }
 
-// AddBytes allows external metering hooks (future socks/mita interceptor).
+func (a *Agent) zeroSamples(now int64) []model.TrafficReportSample {
+	out := make([]model.TrafficReportSample, 0, len(a.counters))
+	for uid := range a.counters {
+		out = append(out, model.TrafficReportSample{UserID: uid, TS: now})
+	}
+	return out
+}
+
+// readMitaUserTotals runs `mita get users` and returns 1DayUpload/1DayDownload per username.
+// Does not download binaries — only uses already-installed mita (PATH or dataDir/bin).
+func (a *Agent) readMitaUserTotals() (map[string]mitaUserTotal, error) {
+	dataDir := filepath.Join(a.cfg.DataDir, "mita")
+	binDir := filepath.Join(a.cfg.DataDir, "bin")
+	bin := procutil.LookPath("mita")
+	if bin == "" {
+		// local install from previous EnsureBinary
+		cand := filepath.Join(binDir, "mita")
+		if st, err := os.Stat(cand); err == nil && !st.IsDir() {
+			bin = cand
+		}
+	}
+	if bin == "" {
+		return nil, fmt.Errorf("mita binary not found")
+	}
+	rt, err := procutil.EnsureMitaDaemon(bin, dataDir)
+	if err != nil {
+		return nil, err
+	}
+	out, err := rt.MitaCmd("get", "users")
+	if err != nil {
+		return nil, err
+	}
+	return parseMitaUsersTable(out), nil
+}
+
+// parseMitaUsersTable parses:
+//
+//	User  LastActive  1DayDownload  1DayUpload  30DaysDownload  30DaysUpload
+//	abcd  2025-...    938.1MiB      12.9MiB     4.0GiB          31.8MiB
+func parseMitaUsersTable(out string) map[string]mitaUserTotal {
+	res := map[string]mitaUserTotal{}
+	lines := strings.Split(out, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		low := strings.ToLower(line)
+		if strings.HasPrefix(low, "user") && strings.Contains(low, "lastactive") {
+			continue
+		}
+		if strings.HasPrefix(line, "---") {
+			continue
+		}
+		fields := strings.Fields(line)
+		// need at least: name lastActive down up
+		if len(fields) < 4 {
+			continue
+		}
+		name := fields[0]
+		// skip if name looks like a header remnant
+		if strings.EqualFold(name, "user") {
+			continue
+		}
+		// columns: User LastActive 1DayDownload 1DayUpload ...
+		// LastActive may be RFC3339 (no spaces) → fields[1]
+		downStr, upStr := fields[2], fields[3]
+		if len(fields) >= 5 && !looksLikeSize(fields[2]) {
+			// LastActive might have been split? uncommon — try last two size-like before 30d
+			downStr, upStr = fields[1], fields[2]
+		}
+		down := parseHumanSize(downStr)
+		up := parseHumanSize(upStr)
+		res[name] = mitaUserTotal{up: up, down: down}
+	}
+	return res
+}
+
+func looksLikeSize(s string) bool {
+	if s == "" {
+		return false
+	}
+	c := s[len(s)-1]
+	return (c >= '0' && c <= '9') || c == 'B' || c == 'b'
+}
+
+// parseHumanSize parses values like 938.1MiB, 4.0GiB, 12.9MB, 100B.
+func parseHumanSize(s string) int64 {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "-" {
+		return 0
+	}
+	// split number and unit
+	i := 0
+	for i < len(s) {
+		c := s[i]
+		if (c >= '0' && c <= '9') || c == '.' {
+			i++
+			continue
+		}
+		break
+	}
+	if i == 0 {
+		return 0
+	}
+	numStr := s[:i]
+	unit := strings.ToLower(strings.TrimSpace(s[i:]))
+	f, err := strconv.ParseFloat(numStr, 64)
+	if err != nil {
+		return 0
+	}
+	var mul float64 = 1
+	switch unit {
+	case "", "b", "byte", "bytes":
+		mul = 1
+	case "k", "kb", "kib":
+		mul = 1024
+	case "m", "mb", "mib":
+		mul = 1024 * 1024
+	case "g", "gb", "gib":
+		mul = 1024 * 1024 * 1024
+	case "t", "tb", "tib":
+		mul = 1024 * 1024 * 1024 * 1024
+	default:
+		// unknown unit
+		mul = 1
+	}
+	if f < 0 {
+		return 0
+	}
+	return int64(f * mul)
+}
+
+// AddBytes allows external metering hooks (optional).
 func (a *Agent) AddBytes(userID int64, up, down int64) {
 	c, ok := a.counters[userID]
 	if !ok {
 		c = &userCounter{}
 		a.counters[userID] = c
 	}
-	c.up += up
-	c.down += down
+	// treat as absolute bump on last totals for next delta
+	c.lastUp += up
+	c.lastDown += down
 }
 
 func (a *Agent) postJSON(ctx context.Context, path string, body any, out any) error {
