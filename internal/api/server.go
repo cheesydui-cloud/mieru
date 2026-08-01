@@ -1484,19 +1484,21 @@ type shareEndpoint struct {
 	Protocol string `json:"protocol"` // TCP|UDP
 }
 
-// resolveUserMitaEndpoints returns mita endpoints the end-user client should dial
-// with the official mieru client (mierus:// share link).
+// resolveUserMitaEndpoints returns endpoints for official mierus:// share links.
 //
-// Aligned with ike-sh/mieru-OneClick:
-//   - Client always dials a **mita** (not socks5).
-//   - Host/port in the link may be an "advertise" front IP (entry_host or node PublicIP);
-//     mita still listens on the backend port — front must DNAT to it.
+// Product path (国内前置 + 美国家宽落地 / TK):
+//
+//	phone ──mierus──► front(entry|relay) public port ──tcp_forward──► exit mita
+//
+// The share link advertises the **front** host:port (what the phone can reach).
+// Auth and egress still happen on the **exit** mita (residential). Front is a
+// transparent TCP pipe (not socks5, not a second mita).
 //
 // Priority:
-//  1. user.EntryHost override (OneClick --advertise-host / --advertise-port)
-//  2. **first** exit/hybrid hop of the bound route (client-facing mita, e.g. cm7 front)
-//  3. last exit/hybrid on the route (legacy multi-hop where only the tail runs mita)
-//  4. all exit/hybrid nodes as fallback
+//  1. user.EntryHost / EntryPort (manual advertise)
+//  2. route: first agent hop that is entry/relay (front) + its public listen port
+//  3. route: first/last exit/hybrid (single-node or client can dial exit directly)
+//  4. all exit/hybrid nodes
 func (s *Server) resolveUserMitaEndpoints(u *model.User) []shareEndpoint {
 	seen := map[string]bool{}
 	out := []shareEndpoint{}
@@ -1517,8 +1519,12 @@ func (s *Server) resolveUserMitaEndpoints(u *model.User) []shareEndpoint {
 		out = append(out, shareEndpoint{Name: name, Host: host, Port: port, Protocol: "TCP"})
 	}
 
-	// Bound route → first mita-capable hop (front) and last (tail exit).
-	var routeFront, routeTail *model.Node
+	var (
+		frontHost string
+		frontPort int
+		frontName string
+		exitNode  *model.Node
+	)
 	if u != nil && u.RouteID != nil {
 		if r, err := s.store.GetRoute(*u.RouteID); err == nil && r.Enabled {
 			var hops []model.Hop
@@ -1531,36 +1537,44 @@ func (s *Server) resolveUserMitaEndpoints(u *model.User) []shareEndpoint {
 				if err != nil {
 					continue
 				}
-				if n.Role != model.RoleExit && n.Role != model.RoleHybrid {
-					continue
+				// First entry/relay = domestic front (tcp_forward listen).
+				if frontHost == "" && (n.Role == model.RoleEntry || n.Role == model.RoleRelay) {
+					frontHost = n.ClientHost()
+					frontPort = n.PublicServicePort()
+					frontName = n.Name
+					if frontName == "" {
+						frontName = frontHost
+					}
 				}
-				if routeFront == nil {
-					routeFront = n
+				if n.Role == model.RoleExit || n.Role == model.RoleHybrid {
+					if exitNode == nil {
+						exitNode = n
+					}
 				}
-				routeTail = n
 			}
 		}
 	}
-	// Prefer front (client-facing). Fall back to tail if somehow only tail set.
-	routeMita := routeFront
-	if routeMita == nil {
-		routeMita = routeTail
-	}
 
-	// Manual public entry host (OneClick advertise-host) — display only for the link.
+	// Manual advertise (operator front IP, e.g. 移动入口 211.x).
 	if u != nil {
 		host := strings.TrimSpace(u.EntryHost)
 		if host != "" {
 			port := u.EntryPort
-			if port <= 0 && routeMita != nil {
-				port = routeMita.MitaPrimaryPort()
+			if port <= 0 {
+				if frontPort > 0 {
+					port = frontPort
+				} else if exitNode != nil {
+					port = exitNode.MitaPrimaryPort()
+				}
 			}
 			if port <= 0 {
 				port = 8964
 			}
 			name := host
-			if routeMita != nil && routeMita.Name != "" {
-				name = routeMita.Name
+			if frontName != "" {
+				name = frontName
+			} else if exitNode != nil && exitNode.Name != "" {
+				name = exitNode.Name
 			}
 			if u.Username != "" {
 				name = u.Username + "@" + name
@@ -1570,20 +1584,29 @@ func (s *Server) resolveUserMitaEndpoints(u *model.User) []shareEndpoint {
 		}
 	}
 
-	if routeMita != nil {
-		host := routeMita.ClientHost()
-		port := routeMita.MitaPrimaryPort()
-		name := routeMita.Name
+	// Multi-hop: advertise front (cm7), not the US public IP.
+	if frontHost != "" && frontPort > 0 {
+		name := frontName
+		if exitNode != nil && exitNode.Name != "" {
+			name = frontName + "→" + exitNode.Name
+		}
+		add(name, frontHost, frontPort)
+		return out
+	}
+
+	// Single-node / direct exit: client dials mita on the exit itself.
+	if exitNode != nil {
+		host := exitNode.ClientHost()
+		port := exitNode.MitaPrimaryPort()
+		name := exitNode.Name
 		if name == "" {
 			name = host
 		}
 		add(name, host, port)
-		if len(out) > 0 {
-			return out
-		}
+		return out
 	}
 
-	// Fallback: all exit/hybrid nodes (ClientHost = public IP preferred).
+	// Fallback: all exit/hybrid.
 	nodes, _ := s.store.ListNodes()
 	for _, n := range nodes {
 		if n.Role != model.RoleExit && n.Role != model.RoleHybrid {

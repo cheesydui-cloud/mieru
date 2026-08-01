@@ -24,9 +24,10 @@ import (
 	"github.com/cheesydui-cloud/mieru/internal/plugins/mita"
 	"github.com/cheesydui-cloud/mieru/internal/plugins/nftables"
 	"github.com/cheesydui-cloud/mieru/internal/plugins/socksin"
+	"github.com/cheesydui-cloud/mieru/internal/plugins/tcpforward"
 )
 
-const AgentVersion = "0.3.8"
+const AgentVersion = "0.3.9"
 
 type Agent struct {
 	cfg      config.AgentConfig
@@ -51,10 +52,11 @@ func New(cfg config.AgentConfig) *Agent {
 	reg := plugins.NewRegistry()
 	data := cfg.DataDir
 	binDir := filepath.Join(data, "bin")
-	reg.Register(&nftables.Plugin{DataDir: filepath.Join(data, "nft"), DryRun: os.Getenv("AGENT_NFT_DRYRUN") != "0"})
-	reg.Register(&mieru.Plugin{DataDir: filepath.Join(data, "mieru"), BinDir: binDir})
-	reg.Register(&mita.Plugin{DataDir: filepath.Join(data, "mita"), BinDir: binDir})
-	reg.Register(&socksin.Plugin{DataDir: filepath.Join(data, "socks")})
+		reg.Register(&nftables.Plugin{DataDir: filepath.Join(data, "nft"), DryRun: os.Getenv("AGENT_NFT_DRYRUN") != "0"})
+		reg.Register(&mieru.Plugin{DataDir: filepath.Join(data, "mieru"), BinDir: binDir})
+		reg.Register(&mita.Plugin{DataDir: filepath.Join(data, "mita"), BinDir: binDir})
+		reg.Register(&socksin.Plugin{DataDir: filepath.Join(data, "socks")})
+		reg.Register(&tcpforward.Plugin{DataDir: filepath.Join(data, "tcpforward")})
 
 	return &Agent{
 		cfg:      cfg,
@@ -276,13 +278,14 @@ func (a *Agent) pullAndApply(ctx context.Context) error {
 }
 
 func (a *Agent) apply(ctx context.Context, cfg *model.AgentDesiredConfig) error {
-	// Apply order: mita/mieru processes first, then socks_in (may use local mieru upstream), then nft.
-	order := map[string]int{
-		"mita_server":  10,
-		"mieru_client": 20,
-		"socks_in":     30,
-		"nft_forward":  40,
-	}
+		// Apply order: mita/mieru first, then public listeners (socks / tcp_forward), then nft.
+		order := map[string]int{
+			"mita_server":  10,
+			"mieru_client": 20,
+			"socks_in":     30,
+			"tcp_forward":  30,
+			"nft_forward":  40,
+		}
 	// Role-required plugins must succeed before we accept the config version.
 	required := requiredPlugins(cfg)
 	plugins := append([]map[string]interface{}{}, cfg.Plugins...)
@@ -374,9 +377,9 @@ func requiredPlugins(cfg *model.AgentDesiredConfig) []string {
 	for _, p := range cfg.Plugins {
 		typ, _ := p["type"].(string)
 		switch typ {
-		case "mita_server", "mieru_client", "socks_in":
-			need[typ] = true
-		}
+			case "mita_server", "mieru_client", "socks_in", "tcp_forward":
+				need[typ] = true
+			}
 	}
 	out := make([]string, 0, len(need))
 	for t := range need {

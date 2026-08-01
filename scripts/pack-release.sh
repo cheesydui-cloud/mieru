@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Build clean Linux release tarballs (no macOS AppleDouble / xattrs).
-# Usage: VERSION=v0.3.8 ./scripts/pack-release.sh
+# Usage: VERSION=v0.3.9 ./scripts/pack-release.sh
 set -euo pipefail
-VERSION="${VERSION:-v0.3.8}"
+VERSION="${VERSION:-v0.3.9}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${ROOT}/dist/release"
 export COPYFILE_DISABLE=1

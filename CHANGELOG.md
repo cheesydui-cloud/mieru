@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.3.9] - 2026-08-01
+
+### Added — 国内前置 + 美国家宽落地（TK 目标链路）
+- 明确产品路径：`手机 mierus → 国内前置(entry/relay) → 透明 TCP → 美国 mita → 家宽出口`。
+- 新增 agent 插件 **`tcp_forward`**：entry/relay 不再用 socks5 给客户端，而是把公网端口字节流转到出口 mita。
+- 扫码/订阅 advertise **前置 host:port**；用户密码仍在 **美国 mita** 校验，出口 IP 是家宽。
+- 单机 exit 线路行为不变（直连 mita）。
+
+### Ops
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | bash
+```
+**panel + cm7 agent 都要升**；美国 exit 建议也升。升完后面板「重建配置」。
+
+配置：
+- cm7：角色 **relay**（或 entry），公网 IP=`211.136.162.184`，端口 `10401~10401`，接入域名空
+- 美国：角色 **exit**，公网/可达地址 + mita 端口，用户已同步
+- 线路：`cm7 → 美国`；用户绑此线路
+- 扫码应是 `mierus://…@211.136.162.184?port=10401…`
+
+
 ## [0.3.8] - 2026-08-01
 
 ### Fixed — 扫码对齐 OneClick：连客户端可触达的 mita，不是美国落地

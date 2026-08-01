@@ -26,17 +26,20 @@ const (
 
 // Builder builds per-node desired configs from routes + users.
 //
-// Data plane (aligned with ike-sh/mieru-OneClick lifecycle + multi-hop panel):
+// Data plane (OneClick client protocol + multi-hop residential exit):
 //
-//	Exit    → mita_server (users = panel users + backbone)
-//	Relay   → mieru_client(→exit mita, backbone) + socks_in(public → local mieru socks)
-//	Entry   → if next is exit: mieru_client + socks_in(local)
-//	        → if next is relay/hybrid: socks_in(→ next PublicServicePort)
-//	Hybrid  → mita + mieru_client(127.0.0.1:mita) + socks_in(→ local mieru)
-//	          (OneClick single-node shape: client talks mita on same host)
+//	Exit    → mita_server (panel end-users + backbone). Real internet egress.
+//	Relay   → tcp_forward(public port → exit mita). Transparent pipe so phone can
+//	          speak official mierus:// to the front IP while auth/egress stay on US mita.
+//	Entry   → same as relay when next hop is exit/hybrid (tcp_forward to mita);
+//	          socks_in only as legacy chain when next is another socks hop.
+//	Hybrid  → mita + local mieru + public socks (single-box OneClick shape; egress = this node).
 //
-// Backbone credentials are stable panel settings so relay↔exit never depends on
-// which sticky end-user was "first" in the user list.
+// Client path for "国内前置 + 美国家宽落地" (e.g. TK):
+//
+//	phone ──mierus──► front(relay):10401 ──raw TCP──► US mita:8964 ──► residential IP
+//
+// Share links advertise the front host/port; passwords are validated on the exit mita.
 type Builder struct {
 	Store *store.Store
 }
@@ -137,56 +140,38 @@ func (b *Builder) RebuildAll() error {
 			})
 
 		case model.RoleEntry:
-			for _, u := range users {
-				cfg.Users = append(cfg.Users, model.AgentUser{
-					UserID:   u.ID,
-					Username: u.Username,
-					Password: u.ProxyPassword,
-					Enabled:  true,
-				})
-			}
-
+			// Entry is the domestic front: transparent TCP to exit mita so clients
+			// can use official mierus:// while egress stays on residential exit.
 			next := b.resolveNextHop(n.ID, routes, users, routeByID)
+			exitTarget := b.resolveExitTarget(n.ID, routes)
 			emin, emax := n.EffectivePortRange()
 			pubPort := n.PublicServicePort()
 
-			// Entry → Exit: talk mita via local mieru (OneClick client shape).
-			// Entry → Relay/Hybrid: chain SOCKS with end-user credentials.
-			if next != nil && next.Role == model.RoleExit {
-				host := next.DialHost()
-				mitaPort := next.MitaPrimaryPort()
-				socksLocal, rpcLocal := localPorts(pubPort)
+			if exitTarget != nil {
+				host := exitTarget.DialHost()
+				mitaPort := exitTarget.MitaPrimaryPort()
 				if host != "" && mitaPort > 0 {
 					cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
-						"type": "mieru_client",
+						"type": "tcp_forward",
 						"config": map[string]interface{}{
-							"server":         host,
-							"port":           mitaPort,
-							"exit_id":        next.ID,
-							"socks5_port":    socksLocal,
-							"rpc_port":       rpcLocal,
-							"link_user":      linkUser,
-							"link_password":  linkPass,
-							"multiplexing":   "MULTIPLEXING_OFF",
-							"handshake_mode": "HANDSHAKE_NO_WAIT",
-							"mtu":            1400,
-						},
-					})
-					cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
-						"type": "socks_in",
-						"config": map[string]interface{}{
-							"auth":          "users",
-							"listen_port":   pubPort,
-							"port_min":      emin,
-							"port_max":      emax,
-							"upstream_host": "127.0.0.1",
-							"upstream_port": socksLocal,
-							"via":           "mieru_client",
+							"listen_port": pubPort,
+							"port_min":    emin,
+							"port_max":    emax,
+							"target_host": host,
+							"target_port": mitaPort,
+							"exit_id":     exitTarget.ID,
+							"comment":     "client mierus → exit mita (transparent)",
 						},
 					})
 				}
 			}
+			// Legacy: no exit resolved — chain SOCKS to next hop if any.
 			if len(cfg.Plugins) == 0 {
+				for _, u := range users {
+					cfg.Users = append(cfg.Users, model.AgentUser{
+						UserID: u.ID, Username: u.Username, Password: u.ProxyPassword, Enabled: true,
+					})
+				}
 				socksCfg := map[string]interface{}{
 					"auth":        "users",
 					"listen_port": pubPort,
@@ -210,62 +195,48 @@ func (b *Builder) RebuildAll() error {
 			}
 
 		case model.RoleRelay:
-			for _, u := range users {
-				cfg.Users = append(cfg.Users, model.AgentUser{
-					UserID:   u.ID,
-					Username: u.Username,
-					Password: u.ProxyPassword,
-					Enabled:  true,
-					MitaUser: u.Username,
-				})
-			}
-
+			// Domestic front / mid hop: transparent TCP pipe to exit mita.
+			// Client speaks mieru end-to-end; this node does not terminate mieru.
 			exitList := b.exitsForRelay(routes, n.ID)
 			pubPort := n.PublicServicePort()
-			socksLocal, rpcLocal := localPorts(pubPort)
+			pmin, pmax := n.EffectivePortRange()
 
 			if len(exitList) > 0 {
 				ex := exitList[0]
 				host := ex.DialHost()
-				if host != "" {
-					mcfg := map[string]interface{}{
-						"server":         host,
-						"port":           ex.MitaPrimaryPort(),
-						"exit_id":        ex.ID,
-						"socks5_port":    socksLocal,
-						"rpc_port":       rpcLocal,
-						"link_user":      linkUser,
-						"link_password":  linkPass,
-						"multiplexing":   "MULTIPLEXING_OFF",
-						"handshake_mode": "HANDSHAKE_NO_WAIT",
-						"mtu":            1400,
-					}
+				mitaPort := ex.MitaPrimaryPort()
+				if host != "" && mitaPort > 0 {
 					cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
-						"type":   "mieru_client",
-						"config": mcfg,
+						"type": "tcp_forward",
+						"config": map[string]interface{}{
+							"listen_port": pubPort,
+							"port_min":    pmin,
+							"port_max":    pmax,
+							"target_host": host,
+							"target_port": mitaPort,
+							"exit_id":     ex.ID,
+							"comment":     "client mierus → exit mita (transparent)",
+						},
 					})
 				}
 			}
-
-			pmin, pmax := n.EffectivePortRange()
-			socksCfg := map[string]interface{}{
-				"auth":        "users",
-				"listen_port": pubPort,
-				"port_min":    pmin,
-				"port_max":    pmax,
+			// Fallback if no exit on route: keep old socks shell so node is not silent.
+			if len(cfg.Plugins) == 0 {
+				for _, u := range users {
+					cfg.Users = append(cfg.Users, model.AgentUser{
+						UserID: u.ID, Username: u.Username, Password: u.ProxyPassword, Enabled: true, MitaUser: u.Username,
+					})
+				}
+				cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
+					"type": "socks_in",
+					"config": map[string]interface{}{
+						"auth":        "users",
+						"listen_port": pubPort,
+						"port_min":    pmin,
+						"port_max":    pmax,
+					},
+				})
 			}
-			if len(exitList) > 0 {
-				socksCfg["upstream_host"] = "127.0.0.1"
-				socksCfg["upstream_port"] = socksLocal
-				socksCfg["via"] = "mieru_client"
-			}
-			if routeHasExternalEntryTo(routes, n.ID) {
-				socksCfg["via_external"] = true
-			}
-			cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
-				"type":   "socks_in",
-				"config": socksCfg,
-			})
 		}
 
 		ver, err := b.Store.BumpNodeConfigVersion(n.ID)
@@ -378,6 +349,48 @@ func (b *Builder) resolveNextHop(nodeID string, routes []model.Route, users []mo
 		if next != nil {
 			return next
 		}
+	}
+	return nil
+}
+
+// resolveExitTarget finds the exit/hybrid this front node should TCP-forward to.
+// Prefers an exit that appears after nodeID on an enabled route; falls back to
+// exitsForRelay (any co-routed exit).
+func (b *Builder) resolveExitTarget(nodeID string, routes []model.Route) *model.Node {
+	for _, r := range routes {
+		if !r.Enabled {
+			continue
+		}
+		var hops []model.Hop
+		_ = json.Unmarshal([]byte(r.HopsJSON), &hops)
+		idx := -1
+		for i, h := range hops {
+			if h.NodeID == nodeID {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			continue
+		}
+		for j := idx + 1; j < len(hops); j++ {
+			h := hops[j]
+			if h.NodeID == "" || h.External {
+				continue
+			}
+			n, err := b.Store.GetNode(h.NodeID)
+			if err != nil {
+				continue
+			}
+			if n.Role == model.RoleExit || n.Role == model.RoleHybrid {
+				return n
+			}
+		}
+	}
+	list := b.exitsForRelay(routes, nodeID)
+	if len(list) > 0 {
+		n := list[0]
+		return &n
 	}
 	return nil
 }

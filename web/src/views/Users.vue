@@ -284,8 +284,8 @@ onUnmounted(() => clearInterval(timer))
           </div>
         </div>
         <div class="muted" style="font-size:12px;line-height:1.5;margin:-4px 0 10px">
-          对应 OneClick 的「客户端展示入口」：商家只给了前置公网 IP（如移动入口）时填这里，端口填前置映射端口。
-          不填则用线路<strong>第一台 exit/hybrid</strong>节点的公网 IP + mita 端口（扫码连这台，不是美国落地）。
+          国内前置 + 美国家宽：扫码连<strong>前置</strong>（如移动入口 IP:端口），流量经 cm7 透明转发到美国 mita，出口是家宽。
+          商家只给了前置 IP 时填这里；不填则用线路第一跳 entry/relay 的公网 IP + 监听端口。
         </div>
         <div class="field">
           <label>备注</label>
@@ -379,8 +379,8 @@ onUnmounted(() => clearInterval(timer))
           </div>
 
           <div class="muted" style="font-size:12px;line-height:1.55;margin-top:10px;text-align:left">
-            用官方 mieru 客户端 / OneClick 扫描上方二维码，导入 mierus:// 节点（直连出口 mita）。
-            协议必须是 mieru，不是 SOCKS5。
+            官方 mieru 客户端扫码导入。多跳线路：二维码是<strong>国内前置</strong>地址，认证与上网出口在<strong>美国 mita/家宽</strong>。
+            协议是 mieru（mierus://），不是 SOCKS5。
           </div>
         </template>
       </div>

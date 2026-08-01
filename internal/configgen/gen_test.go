@@ -2,7 +2,6 @@ package configgen
 
 import (
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -136,22 +135,26 @@ func TestRebuildRelayToExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	var cfg model.AgentDesiredConfig
-	_ = json.Unmarshal([]byte(raw), &cfg)
-	var mitaHost string
-	var mitaPort float64
-	for _, p := range cfg.Plugins {
-		if p["type"] == "mieru_client" {
-			pc, _ := p["config"].(map[string]interface{})
-			mitaHost, _ = pc["server"].(string)
-			mitaPort, _ = pc["port"].(float64)
+		_ = json.Unmarshal([]byte(raw), &cfg)
+		var targetHost string
+		var targetPort float64
+		var typ string
+		for _, p := range cfg.Plugins {
+			if p["type"] == "tcp_forward" {
+				typ = "tcp_forward"
+				pc, _ := p["config"].(map[string]interface{})
+				targetHost, _ = pc["target_host"].(string)
+				targetPort, _ = pc["target_port"].(float64)
+			}
+		}
+		if typ != "tcp_forward" {
+			t.Fatalf("relay should use tcp_forward to exit mita, plugins=%v", cfg.Plugins)
+		}
+		// Prefer private IP of exit (DialHost)
+		if targetHost != "10.0.0.6" {
+			t.Fatalf("relay should forward to exit private IP, got %q", targetHost)
+		}
+		if int(targetPort) != 10001 {
+			t.Fatalf("relay should forward to exit mita port 10001, got %v", targetPort)
 		}
 	}
-	// Prefer private IP of exit
-	if mitaHost != "10.0.0.6" {
-		t.Fatalf("relay should dial exit private IP, got %q", mitaHost)
-	}
-	if int(mitaPort) != 10001 {
-		t.Fatalf("relay should dial exit mita port 10001, got %v", mitaPort)
-	}
-	_ = os.Getenv // silence unused in some go versions
-}
