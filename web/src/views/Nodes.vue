@@ -269,7 +269,7 @@ async function saveEdit() {
       method: 'PUT',
       body: JSON.stringify(payload()),
     })
-    toast.value = '已更新，请点「重建配置」使前置端口池生效'
+    toast.value = '已更新，配置已自动下发（Agent 心跳后生效）'
     show.value = false
     await load()
   } catch (e) {
@@ -450,7 +450,7 @@ onUnmounted(() => {
     <input class="input-filter" v-model="filter" />
     <div class="row-actions">
       <button class="btn btn-ghost btn-sm" @click="pushUpgradeAll" title="向所有在线节点推送 Agent 升级">全部升级 Agent</button>
-      <button class="btn btn-ghost btn-sm" @click="rebuild">重建配置</button>
+      <button class="btn btn-ghost btn-sm" @click="rebuild" title="强制重新生成并 bump 全部节点配置版本；平时增删用户/隧道已自动下发">重建配置</button>
       <button class="btn btn-primary btn-sm" @click="openCreate">新增节点</button>
     </div>
   </div>
@@ -615,7 +615,7 @@ onUnmounted(() => {
             <template v-else>
               落地端口 = mita 监听（如 10001 / 10002）。
             </template>
-            改端口后点「重建配置」。
+            改端口后会自动重建并下发；异常时再点「重建配置」强制重推。
             <span v-if="mode === 'edit'" class="mono"> · {{ editingId }}</span>
           </p>
         </template>

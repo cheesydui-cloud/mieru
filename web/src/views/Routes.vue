@@ -471,7 +471,7 @@ onMounted(load)
           </div>
         </div>
         <p class="help-text">
-          保存后请在节点页点「重建配置」。前置会按指定/分配的入口端口 tcp_forward → 落地 mita。
+          保存后自动重建配置并下发 Agent（约 5 秒内心跳拉取）。前置按指定/分配的入口端口 tcp_forward → 落地 mita。异常时再点节点页「重建配置」强制重推。
         </p>
       </div>
       <div class="modal-ft">
