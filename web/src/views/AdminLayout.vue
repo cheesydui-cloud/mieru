@@ -25,9 +25,13 @@ function logout() {
   router.replace('/login')
 }
 
-onMounted(async () => {
+async function loadVersion() {
   try {
-    const r = await fetch('/api/version', { cache: 'no-store' })
+    // bust any intermediate proxy cache
+    const r = await fetch('/api/version?t=' + Date.now(), {
+      cache: 'no-store',
+      headers: { 'Cache-Control': 'no-cache' },
+    })
     if (r.ok) {
       const j = await r.json()
       version.value = j.version || ''
@@ -35,6 +39,10 @@ onMounted(async () => {
   } catch {
     /* ignore */
   }
+}
+
+onMounted(() => {
+  loadVersion()
 })
 </script>
 

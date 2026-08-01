@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.12] - 2026-08-01
+
+### Fixed — 侧栏版本显示旧号
+- `/api/version` 加 `Cache-Control: no-store`，前端带时间戳请求，避免浏览器/代理缓存旧版本。
+- **说明**：侧栏版本 = 浏览器访问的那台 panel 的版本。若在 A 机升级 panel，却打开 B 机面板地址，会一直显示 B 的旧版本。
+
+
 ## [0.3.11] - 2026-08-01
 
 ### Fixed — 面板节点版本与 `mieru-agent -version` 不一致

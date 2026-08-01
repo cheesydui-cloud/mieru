@@ -87,9 +87,13 @@ func (s *Server) Router() *gin.Engine {
 	r.Use(cors.New(c))
 
 	r.GET("/api/health", func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store, no-cache, must-revalidate")
 		c.JSON(http.StatusOK, gin.H{"ok": true, "ts": time.Now().UTC(), "version": s.Version})
 	})
 	r.GET("/api/version", func(c *gin.Context) {
+		// Prevent CDN/browser from sticky-caching an old panel version in the sidebar.
+		c.Header("Cache-Control", "no-store, no-cache, must-revalidate")
+		c.Header("Pragma", "no-cache")
 		c.JSON(http.StatusOK, gin.H{"version": s.Version, "ui": "embedded"})
 	})
 
