@@ -192,12 +192,31 @@ SIZE=$(wc -c <"$TMP/$ASSET" | tr -d ' ')
 	  cat "$TMP/tar.extract.err" 2>/dev/null >&2 || true
 	  exit 1
 	fi
-	# Only install agent — never overwrite panel binary
-	$SUDO install -m 755 "$AGENT_SRC" "${INSTALL_DIR}/agent"
-	$SUDO install -m 755 "$AGENT_SRC" "${PREFIX}/bin/mieru-agent"
+		# Only install agent — never overwrite panel binary
+		$SUDO install -m 755 "$AGENT_SRC" "${INSTALL_DIR}/agent"
+		$SUDO install -m 755 "$AGENT_SRC" "${PREFIX}/bin/mieru-agent"
 		sync || true
 
-	echo "==> 写入 ${ENV_FILE}"
+		# Fail closed if the binary we installed is not the requested tag.
+		BIN_VER=$("${PREFIX}/bin/mieru-agent" -version 2>/dev/null | tr -d '[:space:]' || true)
+		echo "==> 二进制版本: ${BIN_VER:-未知} （期望 ${VERSION}）"
+		if [[ -z "$BIN_VER" ]]; then
+		  echo "错误: 无法读取 ${PREFIX}/bin/mieru-agent -version" >&2
+		  $SUDO ls -la "${PREFIX}/bin/mieru-agent" "${INSTALL_DIR}/agent" 2>/dev/null || true
+		  exit 1
+		fi
+		# Accept v0.3.10 or 0.3.10
+		want="${VERSION#v}"
+		got="${BIN_VER#v}"
+		if [[ "$got" != "$want" && "$BIN_VER" != "$VERSION" ]]; then
+		  echo "错误: 安装后的 agent 版本是 ${BIN_VER}，不是 ${VERSION}。" >&2
+		  echo "  多半是镜像缓存了旧包，或装到了错误路径。请用：" >&2
+		  echo "  MIERU_VERSION=${VERSION} bash install-agent.sh ..." >&2
+		  echo "  ls: $($SUDO ls -la "${PREFIX}/bin/mieru-agent" "${INSTALL_DIR}/agent" 2>/dev/null || true)" >&2
+		  exit 1
+		fi
+
+		echo "==> 写入 ${ENV_FILE}"
 	$SUDO tee "$ENV_FILE" >/dev/null <<EOF
 AGENT_PANEL_URL=${PANEL_URL}
 AGENT_NODE_ID=${NODE_ID}
