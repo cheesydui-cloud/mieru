@@ -28,10 +28,10 @@ const form = reactive({
   private_ip: '',
   hostname: '',
   alt_hostnames: '',
-  // 落地：单端口 listen_port；前置：port_min–port_max 池（多隧道各占一个）
-  listen_port: 10401,
-  port_min: 10401,
-  port_max: 10499,
+  // 新建全部留白；落地用 listen_port，前置用 port_min–port_max
+  listen_port: '',
+  port_min: '',
+  port_max: '',
 })
 
 function isFrontRole(role) {
@@ -40,19 +40,18 @@ function isFrontRole(role) {
 
 function blankForm(role) {
   const r = role || (tab.value === 'exit' ? 'exit' : 'relay')
-  const front = isFrontRole(r)
   Object.assign(form, {
     name: '',
     role: r,
-    region: r === 'exit' ? 'us' : 'cn',
+    region: '',
     tags: '',
     public_ip: '',
     private_ip: '',
     hostname: '',
     alt_hostnames: '',
-    listen_port: r === 'exit' || r === 'hybrid' ? 10001 : 10401,
-    port_min: front ? 10401 : r === 'exit' || r === 'hybrid' ? 10001 : 10401,
-    port_max: front ? 10499 : r === 'exit' || r === 'hybrid' ? 10001 : 10401,
+    listen_port: '',
+    port_min: '',
+    port_max: '',
   })
 }
 
@@ -188,9 +187,9 @@ function payload() {
     pmin = port
     pmax = port
   } else {
-    if (!pmin) pmin = Number(form.listen_port) || 10401
+    if (!pmin) pmin = Number(form.listen_port) || 0
     if (!pmax) pmax = pmin
-    if (pmax < pmin) {
+    if (pmax && pmin && pmax < pmin) {
       const t = pmin
       pmin = pmax
       pmax = t
@@ -279,19 +278,20 @@ async function saveEdit() {
   }
 }
 
-// 切换类型时调整端口表单默认值
+// 切换类型时只清空另一套端口字段，不自动填默认值
 watch(
   () => form.role,
   (r, prev) => {
-    if (!show.value || mode.value === 'created') return
+    if (!show.value || mode.value === 'created' || mode.value === 'edit') return
     if (r === prev) return
     if (isFrontRole(r) && !isFrontRole(prev)) {
-      if (!form.port_min) form.port_min = 10401
-      if (!form.port_max || form.port_max === form.port_min) form.port_max = 10499
-      form.listen_port = form.port_min
+      // 落地 → 前置：把单端口带到起，止仍留白
+      if (form.listen_port && !form.port_min) form.port_min = form.listen_port
+      form.listen_port = form.port_min || ''
     } else if (!isFrontRole(r) && isFrontRole(prev)) {
-      form.listen_port = form.port_min || 10001
-      form.port_max = form.listen_port
+      // 前置 → 落地：用端口起作单端口
+      form.listen_port = form.port_min || form.listen_port || ''
+      form.port_max = form.listen_port || ''
     }
   },
 )
@@ -384,11 +384,30 @@ async function pushUpgradeAll() {
   }
 }
 
-async function remove(id) {
-  if (!confirm('确认删除该节点？')) return
-  await api(`/api/admin/nodes/${id}`, { method: 'DELETE' })
-  toast.value = '已删除'
-  await load()
+async function remove(n) {
+  const id = typeof n === 'string' ? n : n.id
+  const name = typeof n === 'object' && n ? n.name || id : id
+  if (
+    !confirm(
+      `确认删除节点「${name}」？\n\n` +
+        `• 经过该节点的隧道会一并删除\n` +
+        `• 绑定这些隧道的用户会解绑\n` +
+        `• 在线 Agent 下次心跳后停用服务（释放端口）\n` +
+        `此操作不可恢复。`,
+    )
+  ) {
+    return
+  }
+  try {
+    const res = await api(`/api/admin/nodes/${id}`, { method: 'DELETE' })
+    const parts = ['已删除']
+    if (res.routes_deleted) parts.push(`隧道 ${res.routes_deleted}`)
+    if (res.users_unbound) parts.push(`解绑用户 ${res.users_unbound}`)
+    toast.value = parts.join(' · ') + '；Agent 将停用'
+    await load()
+  } catch (e) {
+    error.value = e.message
+  }
 }
 
 async function rebuild() {
@@ -533,7 +552,7 @@ onUnmounted(() => {
                 {{ upgradeLabel(n) }}
               </button>
               <button class="btn btn-link btn-sm" @click="showInstall(n.id)">安装</button>
-              <button class="btn btn-link-danger btn-sm" @click="remove(n.id)">删除</button>
+              <button class="btn btn-link-danger btn-sm" @click="remove(n)">删除</button>
             </div>
           </td>
         </tr>
@@ -579,28 +598,46 @@ onUnmounted(() => {
             <template v-if="isFrontRole(form.role)">
               <div class="field">
                 <label>端口起</label>
-                <input v-model.number="form.port_min" type="number" min="1" max="65535" />
+                <input
+                  v-model.number="form.port_min"
+                  type="number"
+                  min="1"
+                  max="65535"
+                  placeholder="如 10401"
+                />
               </div>
               <div class="field">
                 <label>端口止</label>
-                <input v-model.number="form.port_max" type="number" min="1" max="65535" />
+                <input
+                  v-model.number="form.port_max"
+                  type="number"
+                  min="1"
+                  max="65535"
+                  placeholder="如 10499"
+                />
               </div>
             </template>
             <div v-else class="field">
               <label>公开端口（mita）</label>
-              <input v-model.number="form.listen_port" type="number" min="1" max="65535" />
+              <input
+                v-model.number="form.listen_port"
+                type="number"
+                min="1"
+                max="65535"
+                placeholder="如 10001"
+              />
             </div>
             <div class="field">
               <label>内网 IP（可选）</label>
-              <input v-model="form.private_ip" />
+              <input v-model="form.private_ip" placeholder="可选" />
             </div>
             <div class="field">
               <label>接入域名（可选）</label>
-              <input v-model="form.hostname" />
+              <input v-model="form.hostname" placeholder="可选" />
             </div>
             <div class="field">
               <label>区域</label>
-              <input v-model="form.region" />
+              <input v-model="form.region" placeholder="如 cn / us" />
             </div>
             <div class="field">
               <label>标签</label>

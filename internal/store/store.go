@@ -358,23 +358,104 @@ func (s *Store) ListNodes() ([]model.Node, error) {
 	return out, nil
 }
 
-func (s *Store) DeleteNode(id string) error {
-	_, err := s.db.Exec(`DELETE FROM nodes WHERE id=?`, id)
-	return err
+// DeleteNodeResult summarizes side effects of removing a node.
+type DeleteNodeResult struct {
+	RoutesDeleted int `json:"routes_deleted"`
+	RoutesUpdated int `json:"routes_updated"`
+	UsersUnbound  int `json:"users_unbound"`
+}
+
+// DeleteNode removes the node and deactivates related data plane:
+//   - deletes tunnels that hop through this node
+//   - strips this node from remaining tunnels' hops
+//   - clears users bound to deleted tunnels / sticky to this exit
+//   - drops desired config so a re-created id starts clean
+//
+// Live agents lose auth on next heartbeat (401) and stop plugins.
+func (s *Store) DeleteNode(id string) (*DeleteNodeResult, error) {
+	res := &DeleteNodeResult{}
+	if strings.TrimSpace(id) == "" {
+		return res, fmt.Errorf("empty node id")
+	}
+	n, err := s.GetNode(id)
+	if err != nil {
+		return res, err
+	}
+	_ = n
+
+	routes, err := s.ListRoutes()
+	if err != nil {
+		return res, err
+	}
+	deletedRouteIDs := map[int64]bool{}
+	for _, r := range routes {
+		var hops []model.Hop
+		if err := json.Unmarshal([]byte(r.HopsJSON), &hops); err != nil {
+			continue
+		}
+		touches := false
+		kept := make([]model.Hop, 0, len(hops))
+		for _, h := range hops {
+			if h.NodeID == id {
+				touches = true
+				continue
+			}
+			kept = append(kept, h)
+		}
+		if !touches {
+			continue
+		}
+		// Any hop removed: drop the whole tunnel (ports free, users unbind).
+		// Multi-hop without front or exit is not a usable path.
+		if err := s.DeleteRoute(r.ID); err != nil {
+			return res, err
+		}
+		deletedRouteIDs[r.ID] = true
+		res.RoutesDeleted++
+	}
+
+	// Unbind users on deleted tunnels; clear sticky exit pointing at this node.
+	ts := now()
+	if len(deletedRouteIDs) > 0 {
+		for rid := range deletedRouteIDs {
+			r, err := s.db.Exec(`UPDATE users SET route_id=NULL, updated_at=? WHERE route_id=?`, ts, rid)
+			if err != nil {
+				return res, err
+			}
+			if n, _ := r.RowsAffected(); n > 0 {
+				res.UsersUnbound += int(n)
+			}
+		}
+	}
+	r2, err := s.db.Exec(`UPDATE users SET sticky_exit_id='', updated_at=? WHERE sticky_exit_id=?`, ts, id)
+	if err != nil {
+		return res, err
+	}
+	if n, _ := r2.RowsAffected(); n > 0 {
+		// may double-count with route unbind on same row — OK for summary
+		res.UsersUnbound += int(n)
+	}
+
+	_, _ = s.db.Exec(`DELETE FROM node_desired_config WHERE node_id=?`, id)
+	_, _ = s.db.Exec(`DELETE FROM capabilities WHERE node_id=?`, id)
+	if _, err := s.db.Exec(`DELETE FROM nodes WHERE id=?`, id); err != nil {
+		return res, err
+	}
+	return res, nil
 }
 
 func (s *Store) Heartbeat(nodeID string, publicIP, hostname string, status string) error {
-		ts := now()
-		// Empty status = preserve existing (meta-only patches from panel jobs).
-		if strings.TrimSpace(status) == "" {
-			_, err := s.db.Exec(`UPDATE nodes SET last_seen=?, public_ip=CASE WHEN ?!='' THEN ? ELSE public_ip END, hostname=CASE WHEN ?!='' THEN ? ELSE hostname END, updated_at=? WHERE id=?`,
-				ts, publicIP, publicIP, hostname, hostname, ts, nodeID)
-			return err
-		}
-		_, err := s.db.Exec(`UPDATE nodes SET last_seen=?, status=?, public_ip=CASE WHEN ?!='' THEN ? ELSE public_ip END, hostname=CASE WHEN ?!='' THEN ? ELSE hostname END, updated_at=? WHERE id=?`,
-			ts, status, publicIP, publicIP, hostname, hostname, ts, nodeID)
+	ts := now()
+	// Empty status = preserve existing (meta-only patches from panel jobs).
+	if strings.TrimSpace(status) == "" {
+		_, err := s.db.Exec(`UPDATE nodes SET last_seen=?, public_ip=CASE WHEN ?!='' THEN ? ELSE public_ip END, hostname=CASE WHEN ?!='' THEN ? ELSE hostname END, updated_at=? WHERE id=?`,
+			ts, publicIP, publicIP, hostname, hostname, ts, nodeID)
 		return err
 	}
+	_, err := s.db.Exec(`UPDATE nodes SET last_seen=?, status=?, public_ip=CASE WHEN ?!='' THEN ? ELSE public_ip END, hostname=CASE WHEN ?!='' THEN ? ELSE hostname END, updated_at=? WHERE id=?`,
+		ts, status, publicIP, publicIP, hostname, hostname, ts, nodeID)
+	return err
+}
 
 // HeartbeatEx updates status + optional meta patch (agent_version, apply_error).
 func (s *Store) HeartbeatEx(nodeID string, publicIP, hostname, status string, metaPatch map[string]string) error {

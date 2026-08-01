@@ -18,6 +18,19 @@ type Plugin struct {
 
 func (p *Plugin) Name() string { return "nft_forward" }
 
+// Stop implements plugins.Stopper — drop DNAT table when removed / node revoked.
+func (p *Plugin) Stop() {
+	if p.DryRun {
+		log.Printf("[nft_forward] stop (dry-run)")
+		return
+	}
+	if _, err := exec.LookPath("nft"); err != nil {
+		return
+	}
+	_ = exec.Command("nft", "delete", "table", "ip", "mieru_panel").Run()
+	log.Printf("[nft_forward] table deleted")
+}
+
 func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 	_ = ctx
 	if err := os.MkdirAll(p.DataDir, 0o755); err != nil {

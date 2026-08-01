@@ -28,9 +28,11 @@ import (
 	"github.com/cheesydui-cloud/mieru/internal/plugins/tcpforward"
 )
 
+var errUnauthorized = fmt.Errorf("unauthorized: node deleted or token invalid")
+
 // AgentVersion is the default when main does not inject a build version.
 // Prefer SetVersion() from cmd/agent so -version and heartbeat always match.
-var AgentVersion = "0.4.11"
+var AgentVersion = "0.4.12"
 
 // SetVersion overrides the version string reported in heartbeats (and logs).
 // Call from main with the same value as -ldflags -X main.Version.
@@ -217,6 +219,10 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 		UpgradeJob *upgradeJob `json:"upgrade_job"`
 	}
 	if err := a.postJSON(ctx, "/api/agent/heartbeat", body, &resp); err != nil {
+		if err == errUnauthorized {
+			log.Printf("heartbeat 401 — node deleted or token revoked; stopping all services")
+			a.stopAllPlugins()
+		}
 		return err
 	}
 	// Hop-to-hop probe jobs FIRST — never wait on apply for these.
@@ -281,6 +287,11 @@ func (a *Agent) pullAndApply(ctx context.Context) error {
 	raw, err := io.ReadAll(res.Body)
 	if err != nil {
 		return err
+	}
+	if res.StatusCode == http.StatusUnauthorized {
+		log.Printf("config pull 401 — node deleted or token revoked; stopping all services")
+		a.stopAllPlugins()
+		return errUnauthorized
 	}
 	if res.StatusCode != 200 {
 		return fmt.Errorf("config status %d: %s", res.StatusCode, string(raw))
@@ -356,9 +367,13 @@ func (a *Agent) apply(ctx context.Context, cfg *model.AgentDesiredConfig) error 
 		if desiredTypes[name] {
 			continue
 		}
-		// Never auto-stop mita on exit — empty user list still needs daemon; Apply handles users.
-		// But stop public pipe plugins when removed.
-		if name != "tcp_forward" && name != "socks_in" && name != "nft_forward" {
+		// Public listeners always stop when removed from desired.
+		// mita/mieru only when desired is completely empty (node revoked / no role plugins).
+		if name == "mita_server" || name == "mieru_client" {
+			if len(desiredTypes) > 0 {
+				continue
+			}
+		} else if name != "tcp_forward" && name != "socks_in" && name != "nft_forward" {
 			continue
 		}
 		if stopper, ok := pl.(plugins.Stopper); ok {
@@ -736,6 +751,21 @@ func (a *Agent) AddBytes(userID int64, up, down int64) {
 	c.lastDown += down
 }
 
+// stopAllPlugins halts every registered Stopper (node deleted / token revoked).
+func (a *Agent) stopAllPlugins() {
+	for _, pl := range a.registry.All() {
+		if stopper, ok := pl.(plugins.Stopper); ok {
+			log.Printf("stopping plugin %s (node deactivated)", pl.Name())
+			stopper.Stop()
+		}
+	}
+	a.stateMu.Lock()
+	a.version = 0
+	a.lastApplyMsg = "node deleted or token revoked"
+	a.stateMu.Unlock()
+	_ = os.WriteFile(filepath.Join(a.cfg.DataDir, "version"), []byte("0"), 0o644)
+}
+
 func (a *Agent) postJSON(ctx context.Context, path string, body any, out any) error {
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -754,6 +784,9 @@ func (a *Agent) postJSON(ctx context.Context, path string, body any, out any) er
 	data, err := io.ReadAll(res.Body)
 	if err != nil {
 		return err
+	}
+	if res.StatusCode == http.StatusUnauthorized {
+		return errUnauthorized
 	}
 	if res.StatusCode >= 300 {
 		return fmt.Errorf("POST %s -> %d %s", path, res.StatusCode, string(data))

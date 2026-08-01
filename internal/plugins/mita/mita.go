@@ -27,6 +27,34 @@ type Plugin struct {
 
 func (p *Plugin) Name() string { return "mita_server" }
 
+// Stop implements plugins.Stopper — halt mita when node is deleted / revoked.
+func (p *Plugin) Stop() {
+	binDir := p.BinDir
+	if binDir == "" {
+		binDir = filepath.Join(p.DataDir, "bin")
+	}
+	bin, err := procutil.EnsureBinary("mita", binDir)
+	if err != nil {
+		log.Printf("[mita_server] stop: no binary: %v", err)
+		return
+	}
+	rt, err := procutil.EnsureMitaDaemon(bin, p.DataDir)
+	if err != nil {
+		// Still try bare stop without managed runtime
+		if out, e := procutil.RunCapture(bin, "stop"); e != nil {
+			log.Printf("[mita_server] stop: %v (%s)", e, strings.TrimSpace(out))
+		} else {
+			log.Printf("[mita_server] stopped (bare)")
+		}
+		return
+	}
+	if out, e := rt.MitaCmd("stop"); e != nil {
+		log.Printf("[mita_server] stop: %v (%s)", e, strings.TrimSpace(out))
+	} else {
+		log.Printf("[mita_server] stopped")
+	}
+}
+
 func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 	_ = ctx
 	if err := os.MkdirAll(p.DataDir, 0o755); err != nil {
@@ -45,46 +73,46 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 		return fmt.Errorf("mita_server: no users — refuse to start (need ≥1 active panel user for auth)")
 	}
 
-		// Single primary port by default; multi-port range only when operator set a real span.
-		// OneClick binds TCP (and optionally UDP); panel data-plane is TCP end-to-end.
-		portBindings := []map[string]interface{}{}
-		addBinding := func(proto string) {
-			if pmin > 0 && pmax > pmin {
-				if port < pmin || port > pmax {
-					portBindings = append(portBindings, map[string]interface{}{
-						"port":     port,
-						"protocol": proto,
-					})
-				}
-				portBindings = append(portBindings, map[string]interface{}{
-					"portRange": fmt.Sprintf("%d-%d", pmin, pmax),
-					"protocol":  proto,
-				})
-			} else {
+	// Single primary port by default; multi-port range only when operator set a real span.
+	// OneClick binds TCP (and optionally UDP); panel data-plane is TCP end-to-end.
+	portBindings := []map[string]interface{}{}
+	addBinding := func(proto string) {
+		if pmin > 0 && pmax > pmin {
+			if port < pmin || port > pmax {
 				portBindings = append(portBindings, map[string]interface{}{
 					"port":     port,
 					"protocol": proto,
 				})
 			}
+			portBindings = append(portBindings, map[string]interface{}{
+				"portRange": fmt.Sprintf("%d-%d", pmin, pmax),
+				"protocol":  proto,
+			})
+		} else {
+			portBindings = append(portBindings, map[string]interface{}{
+				"port":     port,
+				"protocol": proto,
+			})
 		}
-		addBinding("TCP")
-		// Optional UDP if operator asks (default off — matches simple OneClick TCP install).
-		if v, ok := cfg["enable_udp"].(bool); ok && v {
-			addBinding("UDP")
-		}
+	}
+	addBinding("TCP")
+	// Optional UDP if operator asks (default off — matches simple OneClick TCP install).
+	if v, ok := cfg["enable_udp"].(bool); ok && v {
+		addBinding("UDP")
+	}
 
-		mtu := toInt(cfg["mtu"])
-		if mtu < 1280 || mtu > 1500 {
-			mtu = 1400
-		}
+	mtu := toInt(cfg["mtu"])
+	if mtu < 1280 || mtu > 1500 {
+		mtu = 1400
+	}
 
-		// Server shape mirrors OneClick write_server_config (single-instance path).
-		mitaCfg := map[string]interface{}{
-			"portBindings": portBindings,
-			"users":        users,
-			"loggingLevel": "INFO",
-			"mtu":          mtu,
-		}
+	// Server shape mirrors OneClick write_server_config (single-instance path).
+	mitaCfg := map[string]interface{}{
+		"portBindings": portBindings,
+		"users":        users,
+		"loggingLevel": "INFO",
+		"mtu":          mtu,
+	}
 
 	cfgPath := filepath.Join(p.DataDir, "mita-config.json")
 	raw, err := json.MarshalIndent(mitaCfg, "", "  ")

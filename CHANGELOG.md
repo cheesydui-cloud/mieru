@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.4.12] - 2026-07-30
+
+### 新建节点表单
+
+- 新建时**全部留白**（不再预填 10401–10499 / cn）
+- 端口与区域用 placeholder 提示，须自行填写
+
+### 删除节点 = 真正停用
+
+- 删除节点时：删除经过它的隧道、解绑相关用户、清除 desired 配置
+- 在线 Agent 下次心跳 **401** 后 **Stop 全部服务**（tcp_forward / socks_in / mita / mieru / nft）
+- 删除确认提示影响范围
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.12 bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | MIERU_VERSION=v0.4.12 bash
+```
+
+
 ## [0.4.11] - 2026-07-30
 
 ### 删隧道后前置真正停监听
