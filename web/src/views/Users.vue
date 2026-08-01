@@ -360,7 +360,6 @@ onUnmounted(() => clearInterval(timer))
               <label>用户名</label>
               <input
                 v-model="form.username"
-                placeholder="alice"
                 :disabled="mode === 'edit'"
               />
             </div>
@@ -388,11 +387,11 @@ onUnmounted(() => clearInterval(timer))
             </div>
             <div class="field">
               <label>公网入口 IP（可选）</label>
-              <input v-model="form.entry_host" placeholder="商家前置 IP，如 211.x.x.x" />
+              <input v-model="form.entry_host" />
             </div>
             <div class="field">
               <label>入口端口（可选）</label>
-              <input v-model.number="form.entry_port" type="number" min="1" max="65535" placeholder="如 10401" />
+              <input v-model.number="form.entry_port" type="number" min="1" max="65535" />
             </div>
           </div>
           <div class="field">
@@ -492,7 +491,6 @@ onUnmounted(() => clearInterval(timer))
               rows="10"
               class="mono share-ta"
               :value="mihomoYAML"
-              placeholder="暂无 endpoint，请绑线路并填写入口"
             />
             <p class="help-text" style="margin-top:6px">
               下载后用 Mihomo / Clash Meta「从文件导入」。节点类型 <code class="mono">mieru</code>，连前置 IP，出口为家宽。

@@ -111,7 +111,6 @@ onMounted(load)
         <label>面板地址</label>
         <input
           v-model="form.panel_url"
-          placeholder="http://IP:8080 或 https://panel.example.com"
         />
         <p class="help-text" style="margin-top:6px">
           带 http/https。只写 IP:端口 会自动补 http://。
@@ -120,7 +119,7 @@ onMounted(load)
       </div>
       <div class="field" style="margin-bottom:16px">
         <label>面板名称</label>
-        <input v-model="form.panel_name" placeholder="Mieru" />
+        <input v-model="form.panel_name" />
       </div>
       <button class="btn btn-primary" :disabled="loading" @click="saveSettings">保存</button>
     </div>

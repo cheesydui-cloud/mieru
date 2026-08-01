@@ -307,7 +307,7 @@ onMounted(load)
         <div v-if="error && show" class="error" style="margin:0">{{ error }}</div>
         <div class="field">
           <label>名称</label>
-          <input v-model="form.name" placeholder="cm7 → 美国家宽" />
+          <input v-model="form.name" />
         </div>
         <div class="form-grid">
           <div class="field">

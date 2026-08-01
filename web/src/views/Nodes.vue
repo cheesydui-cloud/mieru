@@ -304,7 +304,7 @@ onUnmounted(() => {
   </div>
 
   <div class="panel-toolbar">
-    <input class="input-filter" v-model="filter" placeholder="筛选名称 / IP…" />
+    <input class="input-filter" v-model="filter" />
     <div class="row-actions">
       <button class="btn btn-ghost btn-sm" @click="rebuild">重建配置</button>
       <button class="btn btn-primary btn-sm" @click="openCreate">新增节点</button>
@@ -389,7 +389,7 @@ onUnmounted(() => {
           <div class="form-grid">
             <div class="field">
               <label>名称</label>
-              <input v-model="form.name" placeholder="cm7-front / us-home" />
+              <input v-model="form.name" />
             </div>
             <div class="field">
               <label>类型</label>
@@ -402,7 +402,7 @@ onUnmounted(() => {
             </div>
             <div class="field">
               <label>公网 IP</label>
-              <input v-model="form.public_ip" placeholder="前置填商家 IP 或机器公网" />
+              <input v-model="form.public_ip" />
             </div>
             <div class="field">
               <label>公开端口</label>
@@ -410,19 +410,19 @@ onUnmounted(() => {
             </div>
             <div class="field">
               <label>内网 IP（可选）</label>
-              <input v-model="form.private_ip" placeholder="机房互通时填" />
+              <input v-model="form.private_ip" />
             </div>
             <div class="field">
               <label>接入域名（可选）</label>
-              <input v-model="form.hostname" placeholder="e1.example.com" />
+              <input v-model="form.hostname" />
             </div>
             <div class="field">
               <label>区域</label>
-              <input v-model="form.region" placeholder="cn / us / jp" />
+              <input v-model="form.region" />
             </div>
             <div class="field">
               <label>标签</label>
-              <input v-model="form.tags" placeholder="tk,residential" />
+              <input v-model="form.tags" />
             </div>
           </div>
           <p class="help-text">

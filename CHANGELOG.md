@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.3] - 2026-08-01
+
+### UX
+
+- 去掉表单输入框里的预设提示文字（placeholder），字段留空自行填写
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.3 bash
+```
+
+（仅面板）
+
+
 ## [0.4.2] - 2026-08-01
 
 ### Added — Mihomo YAML + 用户编辑
