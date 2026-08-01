@@ -122,7 +122,7 @@ onUnmounted(() => clearInterval(timer))
       <div class="sub">relay·entry / exit·hybrid</div>
     </div>
     <div class="card">
-      <h3>启用线路</h3>
+      <h3>启用隧道</h3>
       <div class="value">{{ diag.enabled_routes || 0 }}</div>
     </div>
     <div class="card" :class="issueCount ? 'card-warn' : 'card-ok'">
@@ -192,7 +192,7 @@ onUnmounted(() => clearInterval(timer))
       </div>
     </div>
     <div v-else class="empty">
-      还没有节点。先建<strong>前置 (relay)</strong>和<strong>落地 (exit)</strong>，再绑线路。
+      还没有节点。先建<strong>前置 (relay)</strong>和<strong>落地 (exit)</strong>，再绑隧道。
       <div style="margin-top:12px">
         <button class="btn btn-primary btn-sm" @click="router.push('/nodes')">去节点</button>
       </div>
@@ -261,14 +261,15 @@ onUnmounted(() => clearInterval(timer))
 
   <div class="panel" v-if="routes.length">
     <div class="panel-hd">
-      <h2>线路</h2>
-      <button class="btn btn-ghost btn-sm" @click="router.push('/routes')">管理线路</button>
+      <h2>隧道</h2>
+      <button class="btn btn-ghost btn-sm" @click="router.push('/routes')">管理隧道</button>
     </div>
     <div class="panel-bd">
       <table class="data">
         <thead>
           <tr>
             <th>名称</th>
+            <th>入口端口</th>
             <th>健康</th>
             <th>策略</th>
           </tr>
@@ -276,6 +277,7 @@ onUnmounted(() => clearInterval(timer))
         <tbody>
           <tr v-for="r in routes" :key="r.id">
             <td class="name-link">{{ r.name }}</td>
+            <td class="mono">{{ r.front_port > 0 ? r.front_port : '—' }}</td>
             <td>
               <span class="badge" :class="healthClass(r.health)">{{ healthLabel(r.health) }}</span>
             </td>

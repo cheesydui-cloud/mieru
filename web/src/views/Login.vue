@@ -43,7 +43,7 @@ async function submit() {
         </div>
       </div>
       <h1>登录</h1>
-      <p>管理节点、用户、线路与落地计量</p>
+      <p>管理节点、用户、隧道与落地计量</p>
       <form class="stack" @submit.prevent="submit">
         <div class="field">
           <label>用户名</label>

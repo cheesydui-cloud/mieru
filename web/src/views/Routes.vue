@@ -58,7 +58,6 @@ function hopLabel(hop) {
   }
   const n = (nodes.value || []).find((x) => x.id === hop.node_id)
   if (!n) {
-    // orphan node_id — still show short id, not as "不通"
     const short = (hop.node_id || '?').slice(0, 12)
     return short
   }
@@ -69,6 +68,17 @@ function hopLabel(hop) {
         ? '前置'
         : n.role
   return `${n.name}（${kind}）`
+}
+
+/** 前置入口端口：手机扫码连这个（API 已按隧道分配） */
+function frontPortLabel(r) {
+  if (r.front_port > 0) return String(r.front_port)
+  return '—'
+}
+
+function exitPortLabel(r) {
+  if (r.exit_port > 0) return String(r.exit_port)
+  return '—'
 }
 
 function blankForm() {
@@ -130,7 +140,7 @@ function buildHops() {
 
 async function save() {
   if (!form.name.trim()) {
-    error.value = '请填写线路名称'
+    error.value = '请填写隧道名称'
     return
   }
   if (!form.front_id && !form.exit_id) {
@@ -156,13 +166,13 @@ async function save() {
         method: 'PUT',
         body: JSON.stringify(body),
       })
-      toast.value = '线路已更新'
+      toast.value = '隧道已更新'
     } else {
       await api('/api/admin/routes', {
         method: 'POST',
         body: JSON.stringify(body),
       })
-      toast.value = '线路已创建'
+      toast.value = '隧道已创建'
     }
     show.value = false
     await load()
@@ -174,7 +184,7 @@ async function save() {
 }
 
 async function remove(id) {
-  if (!confirm('删除线路？')) return
+  if (!confirm('删除隧道？')) return
   try {
     await api(`/api/admin/routes/${id}`, { method: 'DELETE' })
     toast.value = '已删除'
@@ -241,12 +251,14 @@ onMounted(load)
   <div v-if="toast" class="toast" @click="toast = ''">{{ toast }}</div>
 
   <div class="page-tabs">
-    <div class="page-tab active">线路</div>
+    <div class="page-tab active">隧道</div>
   </div>
 
   <div class="panel-toolbar">
-    <p class="help-text" style="margin:0">前置 → 落地 · 探测前置能否连上落地 mita</p>
-    <button class="btn btn-primary btn-sm" @click="openCreate">新建线路</button>
+    <p class="help-text" style="margin:0">
+      前置 → 落地 · 每条隧道在前置占一个<strong>入口端口</strong>（扫码连这个）
+    </p>
+    <button class="btn btn-primary btn-sm" @click="openCreate">新建隧道</button>
   </div>
 
   <div class="table-wrap">
@@ -255,6 +267,8 @@ onMounted(load)
         <tr>
           <th>名称</th>
           <th>路径</th>
+          <th>入口端口</th>
+          <th>落地端口</th>
           <th>健康</th>
           <th>操作</th>
         </tr>
@@ -275,6 +289,14 @@ onMounted(load)
             </div>
           </td>
           <td>
+            <div class="mono" style="font-weight:600">{{ frontPortLabel(r) }}</div>
+            <div v-if="r.front_host" class="muted mono" style="font-size:11px">{{ r.front_host }}</div>
+          </td>
+          <td>
+            <div class="mono">{{ exitPortLabel(r) }}</div>
+            <div v-if="r.exit_name" class="muted" style="font-size:11px">{{ r.exit_name }}</div>
+          </td>
+          <td>
             <span class="badge" :class="healthClass(r.health)">{{ healthLabel(r.health) }}</span>
           </td>
           <td>
@@ -290,9 +312,9 @@ onMounted(load)
       </tbody>
     </table>
     <div v-else class="empty">
-      <div style="margin-bottom:8px;font-weight:600">还没有线路</div>
+      <div style="margin-bottom:8px;font-weight:600">还没有隧道</div>
       <div class="muted" style="margin-bottom:16px">选一个前置 + 一个落地，手机扫码走前置出口家宽。</div>
-      <button class="btn btn-primary" @click="openCreate">新建线路</button>
+      <button class="btn btn-primary" @click="openCreate">新建隧道</button>
       <div v-if="!hasNodes" class="muted" style="margin-top:12px;font-size:12px">请先在「节点」创建前置和落地</div>
     </div>
   </div>
@@ -300,7 +322,7 @@ onMounted(load)
   <div v-if="show" class="modal-mask" @click.self="show = false">
     <div class="modal" style="max-width:520px">
       <div class="modal-hd">
-        <h3>{{ mode === 'edit' ? '编辑线路' : '新建线路' }}</h3>
+        <h3>{{ mode === 'edit' ? '编辑隧道' : '新建隧道' }}</h3>
         <button class="btn btn-ghost btn-sm" @click="show = false">关闭</button>
       </div>
       <div class="modal-bd">
@@ -338,7 +360,7 @@ onMounted(load)
           </select>
         </div>
         <p class="help-text">
-          保存后请在节点页点「重建配置」。前置会生成 tcp_forward → 落地 mita。
+          保存后请在节点页点「重建配置」。前置会为每条隧道分配入口端口并 tcp_forward → 落地 mita。
         </p>
       </div>
       <div class="modal-ft">

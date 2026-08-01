@@ -28,7 +28,7 @@ const form = reactive({
   private_ip: '',
   hostname: '',
   alt_hostnames: '',
-  // 落地：单端口 listen_port；前置：port_min–port_max 池（多线路各占一个）
+  // 落地：单端口 listen_port；前置：port_min–port_max 池（多隧道各占一个）
   listen_port: 10401,
   port_min: 10401,
   port_max: 10499,
@@ -455,7 +455,7 @@ onUnmounted(() => {
     </div>
   </div>
   <p class="help-text" style="margin-top:-6px">
-    <strong>前置</strong> = 商家入口（端口<strong>段</strong>，如 10401–10499，每条线路占一个）·
+    <strong>前置</strong> = 商家入口（端口<strong>段</strong>，如 10401–10499，每条隧道占一个）·
     <strong>落地</strong> = 家宽 mita（单端口）。
     点<strong>升级</strong>可远程推送 Agent。
   </p>
@@ -609,8 +609,8 @@ onUnmounted(() => {
           </div>
           <p class="help-text">
             <template v-if="isFrontRole(form.role)">
-              前置填<strong>端口池</strong>（如 10401–10499）：每条线路自动占一个端口转发到对应落地；
-              商家 DNAT 需放行整段。不会一次打开 99 个监听，只开「有线路的」端口。
+              前置填<strong>端口池</strong>（如 10401–10499）：每条隧道自动占一个端口转发到对应落地；
+              商家 DNAT 需放行整段。不会一次打开 99 个监听，只开「有隧道的」端口。
             </template>
             <template v-else>
               落地端口 = mita 监听（如 10001 / 10002）。

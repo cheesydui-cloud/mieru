@@ -867,13 +867,80 @@ func (s *Server) nodeDesiredConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"version": ver, "config": cfg})
 }
 
+// routeView enriches a route with allocated front/exit ports for the tunnel list UI.
+type routeView struct {
+	model.Route
+	FrontPort int    `json:"front_port,omitempty"` // 前置入口端口（手机扫码连这个）
+	ExitPort  int    `json:"exit_port,omitempty"`  // 落地 mita 端口
+	FrontHost string `json:"front_host,omitempty"`
+	ExitHost  string `json:"exit_host,omitempty"`
+	FrontName string `json:"front_name,omitempty"`
+	ExitName  string `json:"exit_name,omitempty"`
+}
+
 func (s *Server) listRoutes(c *gin.Context) {
 	list, err := s.store.ListRoutes()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, list)
+	out := make([]routeView, 0, len(list))
+	for i := range list {
+		out = append(out, s.enrichRoute(&list[i]))
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+// enrichRoute fills front/exit port fields using the same allocator as configgen/share.
+func (s *Server) enrichRoute(r *model.Route) routeView {
+	v := routeView{Route: *r}
+	if r == nil {
+		return v
+	}
+	var hops []model.Hop
+	_ = json.Unmarshal([]byte(r.HopsJSON), &hops)
+	var frontID string
+	for _, h := range hops {
+		if h.NodeID == "" || h.External {
+			continue
+		}
+		n, err := s.store.GetNode(h.NodeID)
+		if err != nil {
+			continue
+		}
+		// exit/hybrid first so hybrid is not also counted as front
+		if n.Role == model.RoleExit || n.Role == model.RoleHybrid {
+			if v.ExitName == "" {
+				v.ExitName = n.Name
+				v.ExitHost = n.DialHost()
+				v.ExitPort = n.MitaPrimaryPort()
+			}
+			continue
+		}
+		if n.Role == model.RoleRelay || n.Role == model.RoleEntry {
+			if frontID == "" {
+				frontID = n.ID
+				v.FrontName = n.Name
+				// Client-facing advertise: public IP / hostname preferred over private DialHost
+				if ip := strings.TrimSpace(n.PublicIP); ip != "" {
+					v.FrontHost = ip
+				} else if hn := strings.TrimSpace(n.Hostname); hn != "" {
+					v.FrontHost = hn
+				} else {
+					v.FrontHost = n.DialHost()
+				}
+			}
+		}
+	}
+	// Per-route front listen port (multi-exit pool allocation, same as share/QR).
+	if frontID != "" {
+		if p := configgen.FrontListenPort(s.store, frontID, r); p > 0 {
+			v.FrontPort = p
+		} else if n, err := s.store.GetNode(frontID); err == nil {
+			v.FrontPort = n.PublicServicePort()
+		}
+	}
+	return v
 }
 
 func (s *Server) createRoute(c *gin.Context) {

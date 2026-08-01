@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.9] - 2026-08-01
+
+### UI
+
+- 侧栏顺序：**隧道** 在前、**节点** 在后（原「线路」更名为「隧道」）
+- 隧道列表新增 **入口端口 / 落地端口** 列（与扫码、configgen 分配一致）
+- 总览隧道表同步显示入口端口
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.9 bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | MIERU_VERSION=v0.4.9 bash
+```
+
+
 ## [0.4.8] - 2026-08-01
 
 ### 发布完整性

@@ -494,7 +494,7 @@ onUnmounted(() => {
           <th class="col-date">到期</th>
           <th class="col-traffic">流量</th>
           <th class="col-speed">实时</th>
-          <th class="col-route">线路</th>
+          <th class="col-route">隧道</th>
           <th class="col-entry">入口</th>
           <th class="col-ops">操作</th>
         </tr>
@@ -601,7 +601,7 @@ onUnmounted(() => {
               <input v-model.number="form.traffic_limit_gb" type="number" min="0" />
             </div>
             <div class="field">
-              <label>线路</label>
+              <label>隧道</label>
               <select v-model="form.route_id">
                 <option :value="null">未绑定</option>
                 <option v-for="r in routes" :key="r.id" :value="r.id">{{ r.name }} (#{{ r.id }})</option>
@@ -729,7 +729,7 @@ onUnmounted(() => {
               <img :src="subQR" alt="节点二维码" width="260" height="260" />
             </div>
             <div v-else class="muted" style="padding:16px;text-align:center">
-              无法生成二维码（未绑定线路 / 无前置地址）
+              无法生成二维码（未绑定隧道 / 无前置地址）
             </div>
           </div>
           <div class="field">
