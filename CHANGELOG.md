@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.4.0] - 2026-08-01
+
+### UI — 线框层次 + 产品精简
+
+- 视觉：更深描边、下划线 Tab、表格外框、链接式操作（对齐常见面板截图风格）
+- 导航：去掉独立「落地」页；节点页 Tab = 全部 / 前置 / 落地
+- 总览：拓扑健康（前置→落地→家宽）、diagnose 问题列表、一键重建
+- 节点：单端口表单（不再填 port 范围）；角色文案前置/落地
+- 线路：简化为 前置 + 落地；capability 用 tcp_forward
+- 诊断：relay/entry 期望 tcp_forward（不再误报缺 socks_in）
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.0 bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | MIERU_VERSION=v0.4.0 bash
+```
+
+
 ## [0.3.13] - 2026-08-01
 
 ### Fixed — 连上约 30 秒就断网

@@ -601,7 +601,7 @@ func (s *Server) diagnose(c *gin.Context) {
 					}
 					d.Plugins = append(d.Plugins, summary)
 				}
-				// role-specific checks
+				// role-specific checks (v0.4 product path: front tcp_forward → exit mita)
 				has := map[string]bool{}
 				for _, p := range cfg.Plugins {
 					t, _ := p["type"].(string)
@@ -610,25 +610,30 @@ func (s *Server) diagnose(c *gin.Context) {
 				switch n.Role {
 				case model.RoleExit:
 					if !has["mita_server"] {
-						d.Issues = append(d.Issues, "missing mita_server plugin")
+						d.Issues = append(d.Issues, "缺少 mita_server（落地未配置）")
 					}
 					if d.UserCount == 0 {
-						d.Issues = append(d.Issues, "mita has zero users")
+						d.Issues = append(d.Issues, "mita 用户数为 0")
 					}
-				case model.RoleRelay:
-					if !has["mieru_client"] {
-						d.Issues = append(d.Issues, "missing mieru_client — no exit resolved for this relay")
-					}
-					if !has["socks_in"] {
-						d.Issues = append(d.Issues, "missing socks_in")
-					}
-				case model.RoleEntry:
-					if !has["socks_in"] {
-						d.Issues = append(d.Issues, "missing socks_in")
+				case model.RoleRelay, model.RoleEntry:
+					// Preferred: transparent tcp_forward to exit mita (mierus on front IP).
+					if has["tcp_forward"] {
+						// ok for multi-hop front
+					} else if has["socks_in"] {
+						// legacy socks chain — warn but not hard fail
+						d.Issues = append(d.Issues, "仍是 socks_in 链式（建议绑线路后重建为 tcp_forward）")
+					} else {
+						d.Issues = append(d.Issues, "缺少 tcp_forward（前置未指向落地，请建线路并重建配置）")
 					}
 				case model.RoleHybrid:
-					if !has["mita_server"] || !has["mieru_client"] || !has["socks_in"] {
-						d.Issues = append(d.Issues, "hybrid needs mita_server + mieru_client + socks_in")
+					if !has["mita_server"] {
+						d.Issues = append(d.Issues, "hybrid 缺少 mita_server")
+					}
+					if !has["mieru_client"] && !has["tcp_forward"] {
+						d.Issues = append(d.Issues, "hybrid 缺少 mieru_client")
+					}
+					if !has["socks_in"] && !has["tcp_forward"] {
+						d.Issues = append(d.Issues, "hybrid 缺少对外监听（socks_in）")
 					}
 				}
 			}
@@ -644,7 +649,7 @@ func (s *Server) diagnose(c *gin.Context) {
 		"enabled_routes": enabledRoutes,
 		"global_issues":  globalIssues,
 		"nodes":          out,
-		"topology_hint":  "Client → Entry/External SOCKS → Relay socks_in → mieru → Exit mita → Internet. Hybrid = mita+local mieru+socks on one host.",
+		"topology_hint":  "手机 ──mierus──► 前置(tcp_forward) ──TCP──► 落地 mita ──► 家宽出口",
 	})
 }
 

@@ -94,45 +94,46 @@ onMounted(load)
   <div v-if="error" class="error">{{ error }}</div>
   <div v-if="toast" class="toast" @click="toast = ''">{{ toast }}</div>
 
+  <div class="page-tabs">
+    <div class="page-tab active">设置</div>
+  </div>
+
   <div class="panel">
     <div class="panel-hd">
       <div>
-        <h2>面板信息</h2>
-        <div class="muted" style="font-size:12px;margin-top:4px">
-          节点 Agent 从此地址回连面板；订阅链接也基于此地址生成
-        </div>
+        <h2>面板</h2>
+        <div class="muted" style="font-size:12px;margin-top:3px">Agent 回连地址 · 安装命令基准</div>
       </div>
-      <span class="badge" v-if="form.version">{{ form.version }}</span>
+      <span class="badge mono" v-if="form.version">{{ form.version }}</span>
     </div>
-    <div class="panel-bd" style="padding:20px">
+    <div class="panel-bd" style="padding:16px">
       <div class="field" style="margin-bottom:14px">
         <label>面板地址</label>
         <input
           v-model="form.panel_url"
           placeholder="http://IP:8080 或 https://panel.example.com"
         />
-        <div class="muted" style="font-size:12px;margin-top:6px;line-height:1.5">
-          请带协议（http/https）。只写 IP:端口 时保存会自动补 http://。
-          节点升级/安装会用该地址连接面板。
-          <span v-if="!form.panel_url_set" style="color:var(--warning)">（尚未永久保存，当前为浏览器访问地址）</span>
-        </div>
+        <p class="help-text" style="margin-top:6px">
+          带 http/https。只写 IP:端口 会自动补 http://。
+          <span v-if="!form.panel_url_set" style="color:var(--warning)">尚未永久保存</span>
+        </p>
       </div>
-      <div class="field" style="margin-bottom:18px">
+      <div class="field" style="margin-bottom:16px">
         <label>面板名称</label>
-        <input v-model="form.panel_name" placeholder="Mieru Panel" />
+        <input v-model="form.panel_name" placeholder="Mieru" />
       </div>
-      <button class="btn btn-primary" :disabled="loading" @click="saveSettings">保存设置</button>
+      <button class="btn btn-primary" :disabled="loading" @click="saveSettings">保存</button>
     </div>
   </div>
 
   <div class="panel">
     <div class="panel-hd">
       <div>
-        <h2>管理员账号</h2>
-        <div class="muted" style="font-size:12px;margin-top:4px">修改登录用户名 / 密码（写入数据库）</div>
+        <h2>管理员</h2>
+        <div class="muted" style="font-size:12px;margin-top:3px">修改登录账号</div>
       </div>
     </div>
-    <div class="panel-bd" style="padding:20px">
+    <div class="panel-bd" style="padding:16px">
       <div class="form-grid">
         <div class="field">
           <label>用户名</label>
@@ -151,11 +152,9 @@ onMounted(load)
           <input v-model="pw.new_password2" type="password" autocomplete="new-password" />
         </div>
       </div>
-      <div class="muted" style="font-size:12px;margin:12px 0 16px;line-height:1.5">
-        改密后立即生效。服务器上 <code class="mono">/etc/mieru-panel.env</code> 可手动同步
-        <code class="mono">PANEL_ADMIN_PASS</code>，不要开启 <code class="mono">PANEL_ADMIN_FORCE_SYNC=1</code>
-        （否则重启会用 env 覆盖面板里改的密码）。
-      </div>
+      <p class="help-text" style="margin:12px 0 14px">
+        改密立即生效。勿开 <code class="mono">PANEL_ADMIN_FORCE_SYNC=1</code>，否则重启会用 env 覆盖。
+      </p>
       <button class="btn btn-primary" :disabled="loading" @click="changePassword">修改密码</button>
     </div>
   </div>

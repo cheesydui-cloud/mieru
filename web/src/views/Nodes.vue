@@ -1,9 +1,14 @@
 <script setup>
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { api, copyText, statusBadge } from '../api'
+
+const route = useRoute()
+const router = useRouter()
 
 const nodes = ref([])
 const filter = ref('')
+const tab = ref('all') // all | front | exit
 const error = ref('')
 const toast = ref('')
 const show = ref(false)
@@ -16,55 +21,61 @@ const saving = ref(false)
 
 const form = reactive({
   name: '',
-  role: 'entry',
+  role: 'relay',
   region: '',
   tags: '',
   public_ip: '',
   private_ip: '',
   hostname: '',
   alt_hostnames: '',
-  port_min: 10001,
-  port_max: 20000,
+  listen_port: 10401,
 })
 
-function blankForm() {
+function blankForm(role) {
+  const r = role || (tab.value === 'exit' ? 'exit' : 'relay')
   Object.assign(form, {
     name: '',
-    role: 'entry',
-    region: '',
+    role: r,
+    region: r === 'exit' ? 'us' : 'cn',
     tags: '',
     public_ip: '',
     private_ip: '',
     hostname: '',
     alt_hostnames: '',
-    port_min: 10001,
-    port_max: 20000,
+    listen_port: r === 'exit' ? 10001 : 10401,
   })
 }
 
 function fillForm(n) {
+  const port =
+    n.listen_port > 0
+      ? n.listen_port
+      : n.port_min > 0
+        ? n.port_min
+        : n.role === 'exit' || n.role === 'hybrid'
+          ? 10001
+          : 10401
   Object.assign(form, {
     name: n.name || '',
-    role: n.role || 'entry',
+    role: n.role || 'relay',
     region: n.region || '',
     tags: n.tags || '',
     public_ip: n.public_ip || '',
     private_ip: n.private_ip || '',
     hostname: n.hostname || '',
     alt_hostnames: n.alt_hostnames || '',
-    port_min: n.port_min > 0 ? n.port_min : (n.listen_port > 0 ? n.listen_port : 10001),
-    port_max: n.port_max > 0 ? n.port_max : (n.port_min > 0 ? n.port_min : 20000),
+    listen_port: port,
   })
 }
 
 function portLabel(n) {
-  if (n.port_min > 0 || n.port_max > 0) {
-    const a = n.port_min || n.listen_port || '?'
-    const b = n.port_max || a
-    return a === b ? String(a) : `${a}-${b}`
-  }
   if (n.listen_port > 0) return String(n.listen_port)
-  return '默认'
+  if (n.port_min > 0) {
+    const a = n.port_min
+    const b = n.port_max || a
+    return a === b ? String(a) : `${a}`
+  }
+  return '—'
 }
 
 function statusLabel(s) {
@@ -74,10 +85,30 @@ function statusLabel(s) {
   return s || '离线'
 }
 
-const filteredNodes = computed(() => {
+function roleLabel(role) {
+  const m = {
+    relay: '前置',
+    entry: '前置',
+    exit: '落地',
+    hybrid: '混合',
+  }
+  return m[role] || role
+}
+
+function isFront(n) {
+  return n.role === 'relay' || n.role === 'entry'
+}
+function isExit(n) {
+  return n.role === 'exit' || n.role === 'hybrid'
+}
+
+const tabNodes = computed(() => {
+  let list = nodes.value || []
+  if (tab.value === 'front') list = list.filter(isFront)
+  else if (tab.value === 'exit') list = list.filter(isExit)
   const q = (filter.value || '').trim().toLowerCase()
-  if (!q) return nodes.value || []
-  return (nodes.value || []).filter((n) => {
+  if (!q) return list
+  return list.filter((n) => {
     return (
       (n.name || '').toLowerCase().includes(q) ||
       (n.id || '').toLowerCase().includes(q) ||
@@ -87,6 +118,20 @@ const filteredNodes = computed(() => {
     )
   })
 })
+
+const counts = computed(() => {
+  const all = nodes.value || []
+  return {
+    all: all.length,
+    front: all.filter(isFront).length,
+    exit: all.filter(isExit).length,
+  }
+})
+
+function setTab(t) {
+  tab.value = t
+  router.replace({ query: t === 'all' ? {} : { tab: t } })
+}
 
 async function load() {
   try {
@@ -117,8 +162,7 @@ function openEdit(n) {
 }
 
 function payload() {
-  const min = Number(form.port_min) || 0
-  const max = Number(form.port_max) || 0
+  const port = Number(form.listen_port) || 0
   return {
     name: form.name,
     role: form.role,
@@ -128,10 +172,10 @@ function payload() {
     private_ip: form.private_ip,
     hostname: form.hostname,
     alt_hostnames: form.alt_hostnames,
-    // only start/end; backend treats start as primary listen
-    port_min: min,
-    port_max: max,
-    listen_port: min,
+    // single public/service port — no wide range UI
+    port_min: port,
+    port_max: port,
+    listen_port: port,
   }
 }
 
@@ -140,12 +184,8 @@ async function create() {
     error.value = '请填写名称'
     return
   }
-  if ((form.port_min > 0) !== (form.port_max > 0)) {
-    error.value = '起始端口和结束端口需同时填写'
-    return
-  }
-  if (form.port_min > 0 && form.port_max > 0 && form.port_min > form.port_max) {
-    error.value = '起始端口不能大于结束端口'
+  if (!form.listen_port || form.listen_port < 1 || form.listen_port > 65535) {
+    error.value = '请填写有效端口 (1–65535)'
     return
   }
   saving.value = true
@@ -156,7 +196,7 @@ async function create() {
     })
     created.value = res
     mode.value = 'created'
-    toast.value = `节点已创建：${res.node.id}`
+    toast.value = `已创建：${res.node.name}`
     await load()
   } catch (e) {
     error.value = e.message
@@ -171,12 +211,8 @@ async function saveEdit() {
     error.value = '请填写名称'
     return
   }
-  if ((form.port_min > 0) !== (form.port_max > 0)) {
-    error.value = '起始端口和结束端口需同时填写'
-    return
-  }
-  if (form.port_min > 0 && form.port_max > 0 && form.port_min > form.port_max) {
-    error.value = '起始端口不能大于结束端口'
+  if (!form.listen_port || form.listen_port < 1 || form.listen_port > 65535) {
+    error.value = '请填写有效端口 (1–65535)'
     return
   }
   saving.value = true
@@ -185,7 +221,7 @@ async function saveEdit() {
       method: 'PUT',
       body: JSON.stringify(payload()),
     })
-    toast.value = '节点已更新'
+    toast.value = '已更新'
     show.value = false
     await load()
   } catch (e) {
@@ -221,15 +257,28 @@ async function rebuild() {
 async function copy(text) {
   try {
     await copyText(text)
-    toast.value = '已复制到剪贴板'
+    toast.value = '已复制'
   } catch {
-    // last resort: select the textarea if present
-    toast.value = '自动复制失败：请在文本框内 Ctrl/Cmd+C 手动复制'
+    toast.value = '复制失败，请手动选中'
   }
 }
 
+watch(
+  () => route.query.tab,
+  (t) => {
+    if (t === 'front' || t === 'exit' || t === 'all') tab.value = t
+    else if (t === 'relay' || t === 'entry') tab.value = 'front'
+    else if (!t) {
+      /* keep */
+    }
+  },
+  { immediate: true },
+)
+
 let refreshTimer
 onMounted(() => {
+  const t = route.query.tab
+  if (t === 'front' || t === 'exit') tab.value = t
   load()
   refreshTimer = setInterval(load, 5000)
 })
@@ -239,42 +288,49 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div v-if="error" class="error">{{ error }}</div>
+  <div v-if="error && !show" class="error">{{ error }}</div>
   <div v-if="toast" class="toast" @click="toast = ''">{{ toast }}</div>
 
   <div class="page-tabs">
-    <div class="page-tab active">节点列表</div>
+    <button class="page-tab" :class="{ active: tab === 'all' }" type="button" @click="setTab('all')">
+      全部 ({{ counts.all }})
+    </button>
+    <button class="page-tab" :class="{ active: tab === 'front' }" type="button" @click="setTab('front')">
+      前置 ({{ counts.front }})
+    </button>
+    <button class="page-tab" :class="{ active: tab === 'exit' }" type="button" @click="setTab('exit')">
+      落地 ({{ counts.exit }})
+    </button>
   </div>
 
   <div class="panel-toolbar">
-    <input class="input-filter" v-model="filter" placeholder="筛选名称…" />
+    <input class="input-filter" v-model="filter" placeholder="筛选名称 / IP…" />
     <div class="row-actions">
       <button class="btn btn-ghost btn-sm" @click="rebuild">重建配置</button>
       <button class="btn btn-primary btn-sm" @click="openCreate">新增节点</button>
     </div>
   </div>
-  <div class="muted" style="font-size: 12px; margin: -6px 0 10px; line-height: 1.5">
-    家宽 / 住宅出口请到侧栏「落地」统一管理（角色 exit）。本页可管入口、中继、落地全部角色。
-  </div>
+  <p class="help-text" style="margin-top:-6px">
+    <strong>前置</strong> = 商家入口（relay，tcp_forward 到落地）·
+    <strong>落地</strong> = 美国家宽 mita（exit）。只填<strong>一个公开端口</strong>。
+  </p>
 
   <div class="table-wrap">
-    <table class="data" v-if="filteredNodes.length">
+    <table class="data" v-if="tabNodes.length">
       <thead>
         <tr>
           <th>名称</th>
-          <th>角色</th>
-          <th>在线</th>
-          <th>接入域名</th>
-          <th>公网 IP</th>
-          <th>内网 IP</th>
+          <th>类型</th>
+          <th>状态</th>
+          <th>公网 / 接入</th>
           <th>端口</th>
           <th>区域</th>
-          <th>状态</th>
-          <th></th>
+          <th>Agent</th>
+          <th>操作</th>
         </tr>
       </thead>
       <tbody>
-        <tr v-for="n in filteredNodes" :key="n.id">
+        <tr v-for="n in tabNodes" :key="n.id">
           <td>
             <div class="name-link">{{ n.name }}</div>
             <div class="muted mono" style="font-size:11px">{{ n.id }}</div>
@@ -282,26 +338,30 @@ onUnmounted(() => {
               {{ n.apply_error }}
             </div>
           </td>
-          <td><span class="badge">{{ n.role }}</span></td>
+          <td>
+            <span class="badge">{{ roleLabel(n.role) }}</span>
+            <div class="muted" style="font-size:11px;margin-top:2px">{{ n.role }}</div>
+          </td>
           <td>
             <span class="badge" :class="statusBadge(n.status)">
               <span class="dot"></span>{{ statusLabel(n.status) }}
             </span>
           </td>
-          <td class="mono">{{ n.hostname || '—' }}</td>
-          <td class="mono">{{ n.public_ip || '—' }}</td>
-          <td class="mono">{{ n.private_ip || '—' }}</td>
-          <td class="mono" style="font-size:12px">{{ portLabel(n) }}</td>
+          <td class="mono" style="font-size:12px">
+            <div>{{ n.public_ip || '—' }}</div>
+            <div class="muted" v-if="n.hostname">{{ n.hostname }}</div>
+            <div class="muted" v-if="n.private_ip">内网 {{ n.private_ip }}</div>
+          </td>
+          <td class="mono">{{ portLabel(n) }}</td>
           <td>{{ n.region || '—' }}</td>
-          <td>
-            <span class="badge" :class="statusBadge(n.status)">{{ n.status || '—' }}</span>
-            <div v-if="n.agent_version" class="muted" style="font-size:11px;margin-top:2px">v{{ n.agent_version }}</div>
+          <td class="mono" style="font-size:12px">
+            {{ n.agent_version ? 'v' + n.agent_version : '—' }}
           </td>
           <td>
             <div class="row-actions">
-              <button class="btn btn-ghost btn-sm" @click="openEdit(n)">编辑</button>
-              <button class="btn btn-ghost btn-sm" @click="showInstall(n.id)">安装命令</button>
-              <button class="btn btn-danger btn-sm" @click="remove(n.id)">删除</button>
+              <button class="btn btn-link btn-sm" @click="openEdit(n)">编辑</button>
+              <button class="btn btn-link btn-sm" @click="showInstall(n.id)">安装</button>
+              <button class="btn btn-link-danger btn-sm" @click="remove(n.id)">删除</button>
             </div>
           </td>
         </tr>
@@ -314,7 +374,7 @@ onUnmounted(() => {
   </div>
 
   <div v-if="show" class="modal-mask" @click.self="show = false">
-    <div class="modal" style="width:min(640px,100%)">
+    <div class="modal" style="width:min(600px,100%)">
       <div class="modal-hd">
         <h3>
           <template v-if="mode === 'created'">节点已创建</template>
@@ -324,57 +384,52 @@ onUnmounted(() => {
         <button class="btn btn-ghost btn-sm" @click="show = false">关闭</button>
       </div>
       <div class="modal-bd">
+        <div v-if="error && show" class="error" style="margin:0">{{ error }}</div>
         <template v-if="mode !== 'created'">
           <div class="form-grid">
             <div class="field">
               <label>名称</label>
-              <input v-model="form.name" placeholder="us-exit-01" />
+              <input v-model="form.name" placeholder="cm7-front / us-home" />
             </div>
             <div class="field">
-              <label>角色</label>
+              <label>类型</label>
               <select v-model="form.role">
-                <option value="entry">entry（入口）</option>
-                <option value="relay">relay（中继）</option>
-                <option value="exit">exit（落地）</option>
-                <option value="hybrid">hybrid</option>
+                <option value="relay">前置（relay）— 商家入口，转发到落地</option>
+                <option value="exit">落地（exit）— 家宽 mita 出口</option>
+                <option value="entry">前置·entry（同 relay）</option>
+                <option value="hybrid">混合 hybrid（单机自用）</option>
               </select>
             </div>
             <div class="field">
-              <label>接入域名</label>
+              <label>公网 IP</label>
+              <input v-model="form.public_ip" placeholder="前置填商家 IP 或机器公网" />
+            </div>
+            <div class="field">
+              <label>公开端口</label>
+              <input v-model.number="form.listen_port" type="number" min="1" max="65535" />
+            </div>
+            <div class="field">
+              <label>内网 IP（可选）</label>
+              <input v-model="form.private_ip" placeholder="机房互通时填" />
+            </div>
+            <div class="field">
+              <label>接入域名（可选）</label>
               <input v-model="form.hostname" placeholder="e1.example.com" />
             </div>
             <div class="field">
-              <label>公网 IP</label>
-              <input v-model="form.public_ip" placeholder="x.x.x.x" />
-            </div>
-            <div class="field">
-              <label>内网 IP</label>
-              <input v-model="form.private_ip" placeholder="IX/机房内网，如 10.x.x.x" />
-            </div>
-            <div class="field">
               <label>区域</label>
-              <input v-model="form.region" placeholder="cn / us / sh-ix" />
+              <input v-model="form.region" placeholder="cn / us / jp" />
             </div>
             <div class="field">
               <label>标签</label>
-              <input v-model="form.tags" placeholder="residential,tk" />
-            </div>
-            <div class="field">
-              <label>起始端口</label>
-              <input v-model.number="form.port_min" type="number" min="0" max="65535" placeholder="10001" />
-            </div>
-            <div class="field">
-              <label>结束端口</label>
-              <input v-model.number="form.port_max" type="number" min="0" max="65535" placeholder="20000" />
+              <input v-model="form.tags" placeholder="tk,residential" />
             </div>
           </div>
-          <div class="muted" style="font-size:12px;line-height:1.55">
-            只填端口范围，例如 <code class="mono">10001</code> ～ <code class="mono">20000</code>。
-            起始端口同时作为订阅/客户端主端口；范围内端口用于按用户分配转发。
-            都填 <code class="mono">0</code> 则用角色默认范围。
-            <strong>内网 IP</strong>：上一跳连本节点时优先用（入口→中继、中继→落地在 IX 内网互通时填）。
-            <span v-if="mode === 'edit'" class="mono"> · ID：{{ editingId }}</span>
-          </div>
+          <p class="help-text">
+            前置端口 = 手机 mierus 连接端口（如 10401）。落地端口 = mita 监听（如 10001）。
+            改端口后点「重建配置」，agent 会拉新配置。
+            <span v-if="mode === 'edit'" class="mono"> · {{ editingId }}</span>
+          </p>
         </template>
         <template v-else>
           <div class="kv">
@@ -382,22 +437,22 @@ onUnmounted(() => {
             <dd class="mono">{{ created.node.id }}</dd>
             <dt>Token</dt>
             <dd class="mono" style="word-break:break-all">{{ created.agent_token }}</dd>
-            <dt>面板地址</dt>
+            <dt>面板</dt>
             <dd class="mono">{{ created.panel_url }}</dd>
-            <dt>端口范围</dt>
-            <dd class="mono">{{ created.node.port_min }}-{{ created.node.port_max }}</dd>
+            <dt>端口</dt>
+            <dd class="mono">{{ created.node.listen_port || created.node.port_min }}</dd>
           </div>
-          <div class="field" style="margin-top:12px">
-            <label>一键安装 Agent（在目标 Linux 上执行）</label>
+          <div class="field" style="margin-top:4px">
+            <label>一键安装 Agent（目标 Linux）</label>
             <textarea
               readonly
               rows="4"
               class="mono"
-              style="width:100%;resize:vertical;background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;padding:12px"
+              style="width:100%;resize:vertical;background:var(--bg-elevated);border:1px solid var(--border-line);border-radius:6px;padding:12px"
               :value="created.install_cmd"
             />
           </div>
-          <div class="row-actions" style="margin-top:10px">
+          <div class="row-actions">
             <button class="btn btn-primary btn-sm" @click="copy(created.install_cmd)">复制安装命令</button>
             <button class="btn btn-ghost btn-sm" @click="copy(created.agent_token)">复制 Token</button>
           </div>
@@ -411,36 +466,36 @@ onUnmounted(() => {
           {{ saving ? '创建中…' : '创建' }}
         </button>
         <button v-else-if="mode === 'edit'" class="btn btn-primary" :disabled="saving" @click="saveEdit">
-          {{ saving ? '保存中…' : '保存修改' }}
+          {{ saving ? '保存中…' : '保存' }}
         </button>
       </div>
     </div>
   </div>
 
   <div v-if="installShow && installInfo" class="modal-mask" @click.self="installShow = false">
-    <div class="modal" style="width:min(640px,100%)">
+    <div class="modal" style="width:min(600px,100%)">
       <div class="modal-hd">
-        <h3>Agent 安装命令</h3>
+        <h3>Agent 安装</h3>
         <button class="btn btn-ghost btn-sm" @click="installShow = false">关闭</button>
       </div>
       <div class="modal-bd">
         <div class="kv">
           <dt>Node ID</dt>
           <dd class="mono">{{ installInfo.node_id }}</dd>
-          <dt>Role</dt>
+          <dt>角色</dt>
           <dd><span class="badge">{{ installInfo.role }}</span></dd>
           <dt>Token</dt>
           <dd class="mono" style="word-break:break-all">{{ installInfo.agent_token }}</dd>
           <dt>面板</dt>
           <dd class="mono">{{ installInfo.panel_url }}</dd>
         </div>
-        <div class="field" style="margin-top:12px">
+        <div class="field">
           <label>在目标机器执行</label>
           <textarea
             readonly
             rows="4"
             class="mono"
-            style="width:100%;resize:vertical;background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;padding:12px"
+            style="width:100%;resize:vertical;background:var(--bg-elevated);border:1px solid var(--border-line);border-radius:6px;padding:12px"
             :value="installInfo.install_cmd"
           />
         </div>
@@ -456,14 +511,14 @@ onUnmounted(() => {
 <style scoped>
 .apply-err {
   margin-top: 4px;
-  max-width: 320px;
+  max-width: 280px;
   font-size: 11px;
   line-height: 1.35;
-  color: #b45309;
-  background: #fff7ed;
-  border: 1px solid #fdba74;
-  border-radius: 6px;
-  padding: 4px 8px;
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #f59e0b;
+  border-radius: 4px;
+  padding: 3px 7px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

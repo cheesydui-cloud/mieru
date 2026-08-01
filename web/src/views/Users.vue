@@ -1,7 +1,7 @@
 <script setup>
 import { onMounted, onUnmounted, reactive, ref } from 'vue'
 import QRCode from 'qrcode'
-import { api, copyText, formatBytes, formatBps, statusBadge } from '../api'
+import { api, copyText, formatBytes, statusBadge } from '../api'
 
 const users = ref([])
 const routes = ref([])
@@ -189,11 +189,11 @@ onUnmounted(() => clearInterval(timer))
   <div v-if="toast" class="toast" @click="toast = ''">{{ toast }}</div>
 
   <div class="page-tabs">
-    <div class="page-tab active">用户列表</div>
+    <div class="page-tab active">用户</div>
   </div>
 
   <div class="panel-toolbar">
-    <span class="muted" style="font-size:13px">开户、绑定线路、扫码导入节点</span>
+    <p class="help-text" style="margin:0">开户 → 绑线路 → 扫码（mierus 连前置，出口家宽）</p>
     <button class="btn btn-primary btn-sm" @click="openCreate">开户</button>
   </div>
 
@@ -205,9 +205,8 @@ onUnmounted(() => clearInterval(timer))
           <th>状态</th>
           <th>到期</th>
           <th>流量</th>
-          <th>实时</th>
           <th>线路</th>
-          <th></th>
+          <th>操作</th>
         </tr>
       </thead>
       <tbody>
@@ -227,18 +226,13 @@ onUnmounted(() => clearInterval(timer))
             <span class="muted">/</span>
             {{ u.traffic_limit_bytes ? formatBytes(u.traffic_limit_bytes) : '∞' }}
           </td>
-          <td class="num">
-            ↓ {{ formatBps(u.down_bps) }}
-            <span class="muted">·</span>
-            ↑ {{ formatBps(u.up_bps) }}
-          </td>
           <td class="mono">{{ u.route_id || '—' }}</td>
           <td>
             <div class="row-actions">
-              <button class="btn btn-primary btn-sm" @click="openSub(u)">扫码使用</button>
-              <button class="btn btn-ghost btn-sm" @click="resetPw(u.id)">重置密码</button>
-              <button class="btn btn-ghost btn-sm" @click="resetSub(u.id)">重置订阅</button>
-              <button class="btn btn-danger btn-sm" @click="remove(u.id)">删除</button>
+              <button class="btn btn-link btn-sm" @click="openSub(u)">扫码</button>
+              <button class="btn btn-link btn-sm" @click="resetPw(u.id)">重置密码</button>
+              <button class="btn btn-link btn-sm" @click="resetSub(u.id)">重置订阅</button>
+              <button class="btn btn-link-danger btn-sm" @click="remove(u.id)">删除</button>
             </div>
           </td>
         </tr>
@@ -275,18 +269,17 @@ onUnmounted(() => clearInterval(timer))
             </select>
           </div>
           <div class="field">
-            <label>公网入口 IP/域名（可选）</label>
-            <input v-model="form.entry_host" placeholder="留空则用出口 mita 公网地址" />
+            <label>公网入口 IP（可选）</label>
+            <input v-model="form.entry_host" placeholder="商家前置 IP，如 211.x.x.x" />
           </div>
           <div class="field">
             <label>入口端口（可选）</label>
-            <input v-model.number="form.entry_port" type="number" min="1" max="65535" placeholder="留空用出口 mita 端口" />
+            <input v-model.number="form.entry_port" type="number" min="1" max="65535" placeholder="如 10401" />
           </div>
         </div>
-        <div class="muted" style="font-size:12px;line-height:1.5;margin:-4px 0 10px">
-          国内前置 + 美国家宽：扫码连<strong>前置</strong>（如移动入口 IP:端口），流量经 cm7 透明转发到美国 mita，出口是家宽。
-          商家只给了前置 IP 时填这里；不填则用线路第一跳 entry/relay 的公网 IP + 监听端口。
-        </div>
+        <p class="help-text" style="margin:0">
+          扫码连<strong>前置</strong>；认证与出口在<strong>落地 mita/家宽</strong>。商家只给前置 IP 时填上面两项。
+        </p>
         <div class="field">
           <label>备注</label>
           <input v-model="form.note" />
@@ -335,7 +328,7 @@ onUnmounted(() => clearInterval(timer))
         <template v-else>
           <div
             v-if="subQR"
-            style="display:inline-block;padding:14px;background:#fff;border-radius:12px;border:1px solid var(--border);margin-bottom:14px"
+            style="display:inline-block;padding:14px;background:#fff;border-radius:6px;border:1px solid var(--border-line);margin-bottom:14px"
           >
             <img :src="subQR" alt="节点二维码" width="280" height="280" style="display:block" />
           </div>
@@ -349,13 +342,13 @@ onUnmounted(() => clearInterval(timer))
               readonly
               rows="3"
               class="mono"
-              style="width:100%;resize:vertical;background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;padding:12px;font-size:12px"
+              style="width:100%;resize:vertical;background:var(--bg-elevated);border:1px solid var(--border-line);border-radius:6px;padding:12px;font-size:12px"
               :value="shareURL"
             />
           </div>
 
           <div v-if="entries.length > 1" class="field" style="text-align:left;margin-top:10px">
-            <label>全部出口</label>
+            <label>全部入口</label>
             <div
               v-for="(e, i) in entries"
               :key="i"
@@ -363,25 +356,24 @@ onUnmounted(() => clearInterval(timer))
               style="font-size:12px;word-break:break-all;padding:6px 0;border-bottom:1px solid var(--border)"
             >
               {{ e.name }} · {{ e.host }}:{{ e.port }} · {{ e.protocol || 'TCP' }}
-              <button class="btn btn-ghost btn-sm" style="margin-left:8px" @click="copy(e.url)">复制</button>
+              <button class="btn btn-link btn-sm" style="margin-left:8px" @click="copy(e.url)">复制</button>
             </div>
           </div>
 
           <div class="field" style="text-align:left;margin-top:12px">
-            <label class="muted">订阅地址（纯文本 mierus:// 列表）</label>
+            <label class="muted">订阅地址</label>
             <textarea
               readonly
               rows="2"
               class="mono"
-              style="width:100%;resize:vertical;background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;padding:12px;font-size:11px;opacity:0.85"
+              style="width:100%;resize:vertical;background:var(--bg-elevated);border:1px solid var(--border-line);border-radius:6px;padding:12px;font-size:11px;opacity:0.85"
               :value="subLink"
             />
           </div>
 
-          <div class="muted" style="font-size:12px;line-height:1.55;margin-top:10px;text-align:left">
-            官方 mieru 客户端扫码导入。多跳线路：二维码是<strong>国内前置</strong>地址，认证与上网出口在<strong>美国 mita/家宽</strong>。
-            协议是 mieru（mierus://），不是 SOCKS5。
-          </div>
+          <p class="help-text" style="margin-top:10px;text-align:left">
+            官方 mieru 扫码。链接指向<strong>前置</strong>，认证与出口在<strong>落地家宽 mita</strong>。协议 mierus://，不是 SOCKS5。
+          </p>
         </template>
       </div>
       <div class="modal-ft">
