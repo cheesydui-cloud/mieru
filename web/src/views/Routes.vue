@@ -34,7 +34,7 @@ const selectedFront = computed(() =>
   (nodes.value || []).find((n) => n.id === form.front_id) || null,
 )
 
-/** 前置端口池 [min, max] */
+/** 前置端口池 [min, max] — 与后端 EffectivePortRange 一致（前置单端口自动扩成 99 端口池） */
 function frontPool(n) {
   if (!n) return { min: 0, max: 0 }
   let min = n.port_min > 0 ? n.port_min : n.listen_port > 0 ? n.listen_port : 0
@@ -48,8 +48,11 @@ function frontPool(n) {
     min = max
     max = t
   }
-  // 历史单端口 10401 时给出常用池提示
-  if (min === max && min === 10401) max = 10499
+  // 前置历史只存了单端口 → 与后端 DefaultFrontPortPoolSpan=98 对齐
+  const isFront = n.role === 'relay' || n.role === 'entry'
+  if (isFront && max <= min) {
+    max = Math.min(65535, min + 98)
+  }
   return { min, max }
 }
 

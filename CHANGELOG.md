@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.10] - 2026-08-01
+
+### 前置端口池
+
+- **不是写死 10403**：自定义入口端口校验读节点真实端口池
+- 历史前置只存了单端口（如 cm7 `10401–10401`）时，自动按 `min..(min+98)` 展开（默认 10401–10499），与隧道 UI 一致
+- 重建配置时把展开后的池写回节点，编辑页不再显示成单端口
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.10 bash
+```
+
+
 ## [0.4.9] - 2026-08-01
 
 ### UI

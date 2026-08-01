@@ -67,6 +67,24 @@ func (b *Builder) RebuildAll() error {
 		return fmt.Errorf("backbone: %w", err)
 	}
 
+	// Persist expanded front port pools so list/edit UI matches EffectivePortRange
+	// (legacy single-port front: 10401–10401 → 10401–10499).
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Role != model.RoleRelay && n.Role != model.RoleEntry {
+			continue
+		}
+		pmin, pmax := n.EffectivePortRange()
+		if n.PortMin != pmin || n.PortMax != pmax {
+			n.PortMin = pmin
+			n.PortMax = pmax
+			if n.ListenPort <= 0 {
+				n.ListenPort = pmin
+			}
+			_ = b.Store.UpdateNode(n)
+		}
+	}
+
 	for _, n := range nodes {
 		cfg := model.AgentDesiredConfig{
 			NodeID:  n.ID,

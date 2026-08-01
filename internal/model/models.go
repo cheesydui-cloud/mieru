@@ -120,29 +120,46 @@ func (n *Node) EffectiveListenPort() int {
 	return DefaultListenPort(n.Role)
 }
 
+// DefaultFrontPortPoolSpan is how many ports a front (relay/entry) may use for
+// multi-tunnel allocation when the node only has a single listen port saved
+// (legacy: port_min=port_max=10401). Matches UI default 10401–10499 (99 ports).
+const DefaultFrontPortPoolSpan = 98
+
 // EffectivePortRange returns [min,max]. When unset, defaults to a SINGLE port
 // equal to EffectiveListenPort so probe/subscription/mita/socks never disagree.
-// Multi-port ranges are only used when the operator explicitly sets port_min/max.
+//
+// Front (relay/entry) is multi-tunnel by design (one listen port per tunnel).
+// Historical nodes often only stored a single port (min==max). Those expand to
+// min..(min+DefaultFrontPortPoolSpan) so custom hop.Port and sequential alloc
+// match the panel UI — not a hardcoded 10403, just the node's pool.
 func (n *Node) EffectivePortRange() (int, int) {
 	min, max := n.PortMin, n.PortMax
 	if min <= 0 && max <= 0 {
 		p := n.EffectiveListenPort()
-		return p, p
-	}
-	if min <= 0 {
-		min = n.EffectiveListenPort()
-	}
-	if max <= 0 {
-		max = min
-	}
-	if min > max {
-		min, max = max, min
+		min, max = p, p
+	} else {
+		if min <= 0 {
+			min = n.EffectiveListenPort()
+		}
+		if max <= 0 {
+			max = min
+		}
+		if min > max {
+			min, max = max, min
+		}
 	}
 	if min < 1 {
 		min = 1
 	}
 	if max > 65535 {
 		max = 65535
+	}
+	// Expand legacy single-port front into a multi-tunnel pool.
+	if (n.Role == RoleRelay || n.Role == RoleEntry) && min > 0 && max <= min {
+		max = min + DefaultFrontPortPoolSpan
+		if max > 65535 {
+			max = 65535
+		}
 	}
 	return min, max
 }

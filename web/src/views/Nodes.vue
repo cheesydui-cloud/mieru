@@ -68,9 +68,9 @@ function fillForm(n) {
           ? 10401
           : 10001
   let pmax = n.port_max > 0 ? n.port_max : pmin
-  // 前置若历史数据是单端口，编辑时给出常用池，避免误以为只能开一个
-  if (front && pmin === pmax && pmin === 10401) {
-    pmax = 10499
+  // 前置若历史数据是单端口，编辑时展开为常用池（与后端 EffectivePortRange 一致）
+  if (front && pmin > 0 && pmax <= pmin) {
+    pmax = Math.min(65535, pmin + 98)
   }
   Object.assign(form, {
     name: n.name || '',
