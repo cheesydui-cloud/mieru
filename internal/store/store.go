@@ -364,11 +364,17 @@ func (s *Store) DeleteNode(id string) error {
 }
 
 func (s *Store) Heartbeat(nodeID string, publicIP, hostname string, status string) error {
-	ts := now()
-	_, err := s.db.Exec(`UPDATE nodes SET last_seen=?, status=?, public_ip=CASE WHEN ?!='' THEN ? ELSE public_ip END, hostname=CASE WHEN ?!='' THEN ? ELSE hostname END, updated_at=? WHERE id=?`,
-		ts, status, publicIP, publicIP, hostname, hostname, ts, nodeID)
-	return err
-}
+		ts := now()
+		// Empty status = preserve existing (meta-only patches from panel jobs).
+		if strings.TrimSpace(status) == "" {
+			_, err := s.db.Exec(`UPDATE nodes SET last_seen=?, public_ip=CASE WHEN ?!='' THEN ? ELSE public_ip END, hostname=CASE WHEN ?!='' THEN ? ELSE hostname END, updated_at=? WHERE id=?`,
+				ts, publicIP, publicIP, hostname, hostname, ts, nodeID)
+			return err
+		}
+		_, err := s.db.Exec(`UPDATE nodes SET last_seen=?, status=?, public_ip=CASE WHEN ?!='' THEN ? ELSE public_ip END, hostname=CASE WHEN ?!='' THEN ? ELSE hostname END, updated_at=? WHERE id=?`,
+			ts, status, publicIP, publicIP, hostname, hostname, ts, nodeID)
+		return err
+	}
 
 // HeartbeatEx updates status + optional meta patch (agent_version, apply_error).
 func (s *Store) HeartbeatEx(nodeID string, publicIP, hostname, status string, metaPatch map[string]string) error {

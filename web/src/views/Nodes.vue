@@ -241,6 +241,84 @@ async function showInstall(id) {
   }
 }
 
+const upgrading = ref({}) // id -> true while request in flight
+
+function needsUpgrade(n) {
+  const cur = (n.agent_version || '').replace(/^v/, '')
+  const want = (n.panel_version || '').replace(/^v/, '')
+  if (!cur || !want) return !!n.agent_version // show if we have agent but no panel ver compare
+  return cur !== want
+}
+
+function upgradeLabel(n) {
+  const st = n.upgrade_status || ''
+  if (st === 'pending' || n.upgrade_pending) return '排队中…'
+  if (st === 'running') return '升级中…'
+  if (upgrading.value[n.id]) return '推送中…'
+  if (needsUpgrade(n)) return '升级'
+  return '升级'
+}
+
+function upgradeBusy(n) {
+  return (
+    !!upgrading.value[n.id] ||
+    n.upgrade_status === 'pending' ||
+    n.upgrade_status === 'running' ||
+    !!n.upgrade_pending
+  )
+}
+
+function agentSupportsRemoteUpgrade(n) {
+  // Remote push needs agent that understands upgrade_job (shipped in v0.4.6+).
+  const v = (n.agent_version || '').replace(/^v/, '')
+  if (!v) return false
+  const parts = v.split('.').map((x) => parseInt(x, 10) || 0)
+  const [maj = 0, min = 0, patch = 0] = parts
+  if (maj > 0) return true
+  if (min > 4) return true
+  if (min === 4 && patch >= 6) return true
+  return false
+}
+
+async function pushUpgrade(n) {
+  if (!n?.id || upgradeBusy(n)) return
+  if (!agentSupportsRemoteUpgrade(n)) {
+    const ok = confirm(
+      `${n.name} 当前 Agent 为 v${n.agent_version || '?'}，还不支持远程推送升级。\n\n` +
+        `需要先在该机器执行一次「安装」命令升到 v0.4.6+，之后即可点升级。\n\n` +
+        `仍要排队推送吗？（旧 Agent 会忽略，无效果）`,
+    )
+    if (!ok) {
+      // open install cmd for convenience
+      await showInstall(n.id)
+      return
+    }
+  }
+  upgrading.value = { ...upgrading.value, [n.id]: true }
+  try {
+    const res = await api(`/api/admin/nodes/${n.id}/upgrade`, { method: 'POST' })
+    toast.value = res.message || `已推送升级 → ${res.version || ''}`
+    await load()
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    const next = { ...upgrading.value }
+    delete next[n.id]
+    upgrading.value = next
+  }
+}
+
+async function pushUpgradeAll() {
+  if (!confirm('向所有在线节点推送 Agent 升级到面板版本？')) return
+  try {
+    const res = await api('/api/admin/nodes/upgrade-all', { method: 'POST' })
+    toast.value = res.message || '已推送'
+    await load()
+  } catch (e) {
+    error.value = e.message
+  }
+}
+
 async function remove(id) {
   if (!confirm('确认删除该节点？')) return
   await api(`/api/admin/nodes/${id}`, { method: 'DELETE' })
@@ -306,13 +384,16 @@ onUnmounted(() => {
   <div class="panel-toolbar">
     <input class="input-filter" v-model="filter" />
     <div class="row-actions">
+      <button class="btn btn-ghost btn-sm" @click="pushUpgradeAll" title="向所有在线节点推送 Agent 升级">全部升级 Agent</button>
       <button class="btn btn-ghost btn-sm" @click="rebuild">重建配置</button>
       <button class="btn btn-primary btn-sm" @click="openCreate">新增节点</button>
     </div>
   </div>
   <p class="help-text" style="margin-top:-6px">
     <strong>前置</strong> = 商家入口（relay，tcp_forward 到落地）·
-    <strong>落地</strong> = 美国家宽 mita（exit）。只填<strong>一个公开端口</strong>。
+    <strong>落地</strong> = 美国家宽 mita（exit）。
+    多落地时前置会按线路自动开多个端口（PortMin 起）。
+    点<strong>升级</strong>可远程推送 Agent，无需 SSH。
   </p>
 
   <div class="table-wrap">
@@ -355,11 +436,38 @@ onUnmounted(() => {
           <td class="mono">{{ portLabel(n) }}</td>
           <td>{{ n.region || '—' }}</td>
           <td class="mono" style="font-size:12px">
-            {{ n.agent_version ? 'v' + n.agent_version : '—' }}
+            <div>
+              {{ n.agent_version ? 'v' + n.agent_version : '—' }}
+              <span
+                v-if="needsUpgrade(n) && n.agent_version"
+                class="badge"
+                style="margin-left:4px;font-size:10px;background:#fef3c7;color:#92400e"
+                title="面板版本更新"
+              >可升</span>
+            </div>
+            <div
+              v-if="n.upgrade_status === 'pending' || n.upgrade_status === 'running' || n.upgrade_pending"
+              class="muted"
+              style="font-size:11px;color:#b45309"
+            >
+              {{ n.upgrade_status === 'running' ? '升级中…' : '升级排队…' }}
+              <template v-if="n.upgrade_target"> → v{{ n.upgrade_target }}</template>
+            </div>
+            <div v-else-if="n.upgrade_status === 'error' && n.upgrade_error" class="apply-err" :title="n.upgrade_error">
+              升级失败
+            </div>
           </td>
           <td>
             <div class="row-actions">
               <button class="btn btn-link btn-sm" @click="openEdit(n)">编辑</button>
+              <button
+                class="btn btn-link btn-sm"
+                :disabled="upgradeBusy(n) || n.status === 'offline'"
+                :title="n.status === 'offline' ? '节点离线，无法推送' : '远程升级到面板同版本'"
+                @click="pushUpgrade(n)"
+              >
+                {{ upgradeLabel(n) }}
+              </button>
               <button class="btn btn-link btn-sm" @click="showInstall(n.id)">安装</button>
               <button class="btn btn-link-danger btn-sm" @click="remove(n.id)">删除</button>
             </div>

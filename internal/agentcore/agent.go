@@ -30,7 +30,7 @@ import (
 
 // AgentVersion is the default when main does not inject a build version.
 // Prefer SetVersion() from cmd/agent so -version and heartbeat always match.
-var AgentVersion = "0.4.5"
+var AgentVersion = "0.4.6"
 
 // SetVersion overrides the version string reported in heartbeats (and logs).
 // Call from main with the same value as -ldflags -X main.Version.
@@ -55,10 +55,13 @@ type Agent struct {
 	stateMu      sync.Mutex
 	version      int64
 	lastApplyMsg string
-	// applyMu serializes pullAndApply so heartbeat never blocks on plugin apply.
-	applyMu   chan struct{}
-	applyBusy int32 // atomic: 1 while apply running
-}
+// applyMu serializes pullAndApply so heartbeat never blocks on plugin apply.
+		applyMu   chan struct{}
+		applyBusy int32 // atomic: 1 while apply running
+		// upgradeBusy: 1 while self-upgrade download/install running
+		upgradeBusy      int32
+		lastUpgradeJobID string // avoid re-running same job every heartbeat
+	}
 
 // userCounter tracks absolute totals from mita and derived bps.
 type userCounter struct {
@@ -201,49 +204,54 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 			Message:       msg,
 			ApplyError:    applyErr,
 		}
-		var resp struct {
-		OK            bool  `json:"ok"`
-		ConfigVersion int64 `json:"config_version"`
-		NeedPull      bool  `json:"need_pull"`
-		DialJobs      []struct {
-			ID        string `json:"id"`
-			Host      string `json:"host"`
-			Port      int    `json:"port"`
-			TimeoutMS int    `json:"timeout_ms"`
-		} `json:"dial_jobs"`
-	}
-	if err := a.postJSON(ctx, "/api/agent/heartbeat", body, &resp); err != nil {
-		return err
-	}
-	// Hop-to-hop probe jobs FIRST — never wait on apply for these.
-	for _, job := range resp.DialJobs {
-		if job.ID == "" || job.Host == "" || job.Port <= 0 {
-			continue
+var resp struct {
+			OK            bool  `json:"ok"`
+			ConfigVersion int64 `json:"config_version"`
+			NeedPull      bool  `json:"need_pull"`
+			DialJobs      []struct {
+				ID        string `json:"id"`
+				Host      string `json:"host"`
+				Port      int    `json:"port"`
+				TimeoutMS int    `json:"timeout_ms"`
+			} `json:"dial_jobs"`
+			UpgradeJob *upgradeJob `json:"upgrade_job"`
 		}
-		timeout := time.Duration(job.TimeoutMS) * time.Millisecond
-		if timeout <= 0 {
-			timeout = 4 * time.Second
+		if err := a.postJSON(ctx, "/api/agent/heartbeat", body, &resp); err != nil {
+			return err
 		}
-		ok, lat, errMsg := tcpDial(job.Host, job.Port, timeout)
-		if err := a.postJSON(ctx, "/api/agent/dial-result", map[string]interface{}{
-			"node_id":    a.cfg.NodeID,
-			"token":      a.cfg.Token,
-			"job_id":     job.ID,
-			"ok":         ok,
-			"latency_ms": lat,
-			"error":      errMsg,
-		}, nil); err != nil {
-			log.Printf("dial-result job=%s: %v", job.ID, err)
-		} else {
-			log.Printf("dial-result job=%s %s:%d ok=%v lat=%dms %s",
-				job.ID, job.Host, job.Port, ok, lat, errMsg)
+		// Hop-to-hop probe jobs FIRST — never wait on apply for these.
+		for _, job := range resp.DialJobs {
+			if job.ID == "" || job.Host == "" || job.Port <= 0 {
+				continue
+			}
+			timeout := time.Duration(job.TimeoutMS) * time.Millisecond
+			if timeout <= 0 {
+				timeout = 4 * time.Second
+			}
+			ok, lat, errMsg := tcpDial(job.Host, job.Port, timeout)
+			if err := a.postJSON(ctx, "/api/agent/dial-result", map[string]interface{}{
+				"node_id":    a.cfg.NodeID,
+				"token":      a.cfg.Token,
+				"job_id":     job.ID,
+				"ok":         ok,
+				"latency_ms": lat,
+				"error":      errMsg,
+			}, nil); err != nil {
+				log.Printf("dial-result job=%s: %v", job.ID, err)
+			} else {
+				log.Printf("dial-result job=%s %s:%d ok=%v lat=%dms %s",
+					job.ID, job.Host, job.Port, ok, lat, errMsg)
+			}
 		}
+		// Panel-pushed self-upgrade (download tarball + restart). Non-blocking.
+		if resp.UpgradeJob != nil && resp.UpgradeJob.ID != "" {
+			a.scheduleUpgrade(ctx, *resp.UpgradeJob)
+		}
+		if resp.NeedPull {
+			a.schedulePull(ctx)
+		}
+		return nil
 	}
-	if resp.NeedPull {
-		a.schedulePull(ctx)
-	}
-	return nil
-}
 
 // tcpDial measures TCP connect latency from this host to host:port.
 func tcpDial(host string, port int, timeout time.Duration) (ok bool, latencyMs int64, errMsg string) {

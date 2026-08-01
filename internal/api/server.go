@@ -40,6 +40,14 @@ type dialResult struct {
 	Error   string
 }
 
+// upgradeJob is delivered on heartbeat; agent downloads release tarball and restarts.
+type upgradeJob struct {
+	ID      string   `json:"id"`
+	Version string   `json:"version"` // e.g. v0.4.6
+	URLs    []string `json:"urls"`    // full tarball URLs (github + mirrors)
+	Asset   string   `json:"asset"`   // filename hint
+}
+
 type Server struct {
 	cfg     config.PanelConfig
 	store   *store.Store
@@ -51,17 +59,22 @@ type Server struct {
 	dialMu   sync.Mutex
 	dialWait map[string]map[string]chan dialResult // nodeID -> jobID -> ch
 	dialJobs map[string][]dialJob                  // nodeID -> queued jobs
+
+	// pending agent self-upgrades (one per node; replaced if re-queued)
+	upgradeMu   sync.Mutex
+	upgradeJobs map[string]*upgradeJob // nodeID -> job
 }
 
 func New(cfg config.PanelConfig, st *store.Store) *Server {
 	return &Server{
-		cfg:      cfg,
-		store:    st,
-		jwt:      auth.NewTokenManager(cfg.JWTSecret),
-		gen:      &configgen.Builder{Store: st},
-		Version:  "dev",
-		dialWait: map[string]map[string]chan dialResult{},
-		dialJobs: map[string][]dialJob{},
+		cfg:         cfg,
+		store:       st,
+		jwt:         auth.NewTokenManager(cfg.JWTSecret),
+		gen:         &configgen.Builder{Store: st},
+		Version:     "dev",
+		dialWait:    map[string]map[string]chan dialResult{},
+		dialJobs:    map[string][]dialJob{},
+		upgradeJobs: map[string]*upgradeJob{},
 	}
 }
 
@@ -104,13 +117,14 @@ func (s *Server) Router() *gin.Engine {
 	r.GET("/api/sub/:token/mihomo.yaml", s.subscriptionMihomo)
 	r.POST("/api/auth/login", s.login)
 
-	agent := r.Group("/api/agent")
-	{
-		agent.POST("/heartbeat", s.agentHeartbeat)
-		agent.GET("/config", s.agentConfig)
-		agent.POST("/traffic", s.agentTraffic)
-		agent.POST("/dial-result", s.agentDialResult)
-	}
+		agent := r.Group("/api/agent")
+		{
+			agent.POST("/heartbeat", s.agentHeartbeat)
+			agent.GET("/config", s.agentConfig)
+			agent.POST("/traffic", s.agentTraffic)
+			agent.POST("/dial-result", s.agentDialResult)
+			agent.POST("/upgrade-result", s.agentUpgradeResult)
+		}
 
 	admin := r.Group("/api/admin")
 	admin.Use(s.requireAdmin())
@@ -121,8 +135,10 @@ func (s *Server) Router() *gin.Engine {
 		admin.GET("/nodes/:id", s.getNode)
 		admin.PUT("/nodes/:id", s.updateNode)
 		admin.DELETE("/nodes/:id", s.deleteNode)
-		admin.POST("/nodes/:id/rebuild", s.rebuildAll)
-		admin.POST("/rebuild", s.rebuildAll)
+			admin.POST("/nodes/:id/rebuild", s.rebuildAll)
+			admin.POST("/nodes/:id/upgrade", s.upgradeNode)
+			admin.POST("/nodes/upgrade-all", s.upgradeAllNodes)
+			admin.POST("/rebuild", s.rebuildAll)
 
 		admin.GET("/routes", s.listRoutes)
 		admin.POST("/routes", s.createRoute)
@@ -346,40 +362,63 @@ func (s *Server) listNodes(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	type nodeOut struct {
-		model.Node
-		AgentToken   string `json:"agent_token,omitempty"`
-		AgentVersion string `json:"agent_version,omitempty"`
-		ApplyError   string `json:"apply_error,omitempty"`
-	}
-	out := make([]nodeOut, 0, len(list))
-	reveal := c.Query("reveal") == "1"
-	for _, n := range list {
-		no := nodeOut{Node: n}
-		no.AgentToken = ""
-		no.Node.AgentToken = ""
-		// surface last apply error from meta_json for degraded nodes
-		if n.MetaJSON != "" {
-			var meta map[string]interface{}
-			if json.Unmarshal([]byte(n.MetaJSON), &meta) == nil {
-				if v, ok := meta["apply_error"].(string); ok {
-					no.ApplyError = v
-				}
+		type nodeOut struct {
+			model.Node
+			AgentToken     string `json:"agent_token,omitempty"`
+			AgentVersion   string `json:"agent_version,omitempty"`
+			ApplyError     string `json:"apply_error,omitempty"`
+			UpgradeStatus  string `json:"upgrade_status,omitempty"`  // pending|running|ok|error
+			UpgradeTarget  string `json:"upgrade_target,omitempty"`  // target version
+			UpgradeError   string `json:"upgrade_error,omitempty"`
+			UpgradePending bool   `json:"upgrade_pending,omitempty"` // still in panel queue
+			PanelVersion   string `json:"panel_version,omitempty"`
+		}
+		out := make([]nodeOut, 0, len(list))
+		reveal := c.Query("reveal") == "1"
+		panelVer := strings.TrimPrefix(strings.TrimSpace(s.Version), "v")
+		for _, n := range list {
+			no := nodeOut{Node: n, PanelVersion: panelVer}
+			no.AgentToken = ""
+			no.Node.AgentToken = ""
+			// surface last apply error from meta_json for degraded nodes
+			if n.MetaJSON != "" {
+				var meta map[string]interface{}
+				if json.Unmarshal([]byte(n.MetaJSON), &meta) == nil {
+					if v, ok := meta["apply_error"].(string); ok {
+						no.ApplyError = v
+					}
 					if v, ok := meta["agent_version"].(string); ok {
 						// Normalize: strip leading "v" so UI "v{{ver}}" never becomes "vv0.3.10"
 						no.AgentVersion = strings.TrimPrefix(strings.TrimSpace(v), "v")
 					}
+					if v, ok := meta["upgrade_status"].(string); ok {
+						no.UpgradeStatus = v
+					}
+					if v, ok := meta["upgrade_target"].(string); ok {
+						no.UpgradeTarget = strings.TrimPrefix(strings.TrimSpace(v), "v")
+					}
+					if v, ok := meta["upgrade_error"].(string); ok {
+						no.UpgradeError = v
+					}
+				}
 			}
-		}
-		if reveal {
-			if full, err := s.store.GetNode(n.ID); err == nil {
-				no.AgentToken = full.AgentToken
+			s.upgradeMu.Lock()
+			if _, ok := s.upgradeJobs[n.ID]; ok {
+				no.UpgradePending = true
+				if no.UpgradeStatus == "" {
+					no.UpgradeStatus = "pending"
+				}
 			}
+			s.upgradeMu.Unlock()
+			if reveal {
+				if full, err := s.store.GetNode(n.ID); err == nil {
+					no.AgentToken = full.AgentToken
+				}
+			}
+			out = append(out, no)
 		}
-		out = append(out, no)
+		c.JSON(http.StatusOK, out)
 	}
-	c.JSON(http.StatusOK, out)
-}
 
 func (s *Server) createNode(c *gin.Context) {
 	var req model.Node
@@ -500,6 +539,129 @@ func (s *Server) deleteNode(c *gin.Context) {
 	_ = s.gen.RebuildAll()
 	s.store.Audit("admin", "delete_node", id, "")
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// agentReleaseURLs builds GitHub + CN-mirror tarball URLs for a panel release tag.
+func agentReleaseURLs(version string) (asset string, urls []string) {
+	ver := strings.TrimSpace(version)
+	if ver == "" {
+		return "", nil
+	}
+	if !strings.HasPrefix(ver, "v") {
+		ver = "v" + ver
+	}
+	// Agent is packed inside the panel release tarball (amd64/arm64 selected on agent).
+	// We hand the agent the version; it picks arch-specific asset name itself.
+	// URLs here are templates replaced by agent for arch — panel sends both arches.
+	repo := "cheesydui-cloud/mieru"
+	for _, arch := range []string{"amd64", "arm64"} {
+		asset = fmt.Sprintf("mieru-panel-%s-linux-%s.tar.gz", ver, arch)
+		base := fmt.Sprintf("%s/releases/download/%s/%s", repo, ver, asset)
+		urls = append(urls,
+			"https://github.com/"+base,
+			"https://ghfast.top/https://github.com/"+base,
+			"https://mirror.ghproxy.com/https://github.com/"+base,
+			"https://ghproxy.net/https://github.com/"+base,
+			"https://gitdl.cn/https://github.com/"+base,
+		)
+	}
+	return asset, urls
+}
+
+// queueUpgrade enqueues a self-upgrade job for nodeID targeting panel Version.
+func (s *Server) queueUpgrade(nodeID string) (*upgradeJob, error) {
+	ver := strings.TrimSpace(s.Version)
+	if ver == "" || ver == "dev" {
+		return nil, fmt.Errorf("panel version is %q — cannot push upgrade (need release build)", ver)
+	}
+	if !strings.HasPrefix(ver, "v") {
+		ver = "v" + ver
+	}
+	_, urls := agentReleaseURLs(ver)
+	if len(urls) == 0 {
+		return nil, fmt.Errorf("no release urls")
+	}
+	job := &upgradeJob{
+		ID:      strings.ReplaceAll(uuid.NewString(), "-", ""),
+		Version: ver,
+		URLs:    urls,
+		Asset:   fmt.Sprintf("mieru-panel-%s-linux-*.tar.gz", ver),
+	}
+	s.upgradeMu.Lock()
+	s.upgradeJobs[nodeID] = job
+	s.upgradeMu.Unlock()
+	_ = s.store.HeartbeatEx(nodeID, "", "", "", map[string]string{
+		"upgrade_status": "pending",
+		"upgrade_target": ver,
+		"upgrade_error":  "",
+	})
+	return job, nil
+}
+
+// peekUpgradeJob returns the pending job without removing it (re-delivered each
+// heartbeat until agent reports result or version matches — works if agent restarts mid-upgrade).
+func (s *Server) peekUpgradeJob(nodeID string) *upgradeJob {
+	s.upgradeMu.Lock()
+	defer s.upgradeMu.Unlock()
+	return s.upgradeJobs[nodeID]
+}
+
+func (s *Server) clearUpgradeJob(nodeID string) {
+	s.upgradeMu.Lock()
+	delete(s.upgradeJobs, nodeID)
+	s.upgradeMu.Unlock()
+}
+
+func (s *Server) upgradeNode(c *gin.Context) {
+	id := c.Param("id")
+	n, err := s.store.GetNode(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "node not found"})
+		return
+	}
+	job, err := s.queueUpgrade(n.ID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	s.store.Audit("admin", "node.upgrade", n.ID, "target="+job.Version)
+	c.JSON(http.StatusOK, gin.H{
+		"ok":      true,
+		"node_id": n.ID,
+		"job_id":  job.ID,
+		"version": job.Version,
+		"message": "已排队升级，节点下次心跳（≤5s）会开始下载并重启 agent",
+	})
+}
+
+func (s *Server) upgradeAllNodes(c *gin.Context) {
+	list, err := s.store.ListNodes()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	var queued []string
+	var skipped []string
+	for _, n := range list {
+		// Only online/degraded nodes can receive heartbeat jobs.
+		if n.Status != model.StatusOnline && n.Status != model.StatusDegraded {
+			skipped = append(skipped, n.ID+"(offline)")
+			continue
+		}
+		if _, err := s.queueUpgrade(n.ID); err != nil {
+			skipped = append(skipped, n.ID+"("+err.Error()+")")
+			continue
+		}
+		queued = append(queued, n.ID)
+	}
+	s.store.Audit("admin", "node.upgrade_all", "", fmt.Sprintf("queued=%d", len(queued)))
+	c.JSON(http.StatusOK, gin.H{
+		"ok":      true,
+		"queued":  queued,
+		"skipped": skipped,
+		"version": s.Version,
+		"message": fmt.Sprintf("已向 %d 个在线节点推送升级", len(queued)),
+	})
 }
 
 func (s *Server) rebuildAll(c *gin.Context) {
@@ -2154,18 +2316,82 @@ func (s *Server) agentHeartbeat(c *gin.Context) {
 	} else {
 		metaPatch["apply_error"] = "" // clear previous error
 	}
-	_ = s.store.HeartbeatEx(req.NodeID, req.PublicIP, req.Hostname, status, metaPatch)
-	n, _ := s.store.GetNode(req.NodeID)
-	needPull := n != nil && n.ConfigVersion > req.ConfigVersion
-	// Drain pending dial jobs for this agent (hop-to-hop probe).
-	jobs := s.takeDialJobs(req.NodeID)
-	c.JSON(http.StatusOK, gin.H{
-		"ok":             true,
-		"config_version": n.ConfigVersion,
-		"need_pull":      needPull,
-		"dial_jobs":      jobs,
-	})
-}
+		_ = s.store.HeartbeatEx(req.NodeID, req.PublicIP, req.Hostname, status, metaPatch)
+		n, _ := s.store.GetNode(req.NodeID)
+		needPull := n != nil && n.ConfigVersion > req.ConfigVersion
+		// Drain pending dial jobs for this agent (hop-to-hop probe).
+		jobs := s.takeDialJobs(req.NodeID)
+		// Self-upgrade: keep delivering until agent reports or already on target.
+		var upJob *upgradeJob
+		if job := s.peekUpgradeJob(req.NodeID); job != nil {
+			agentVer := strings.TrimPrefix(strings.TrimSpace(req.AgentVersion), "v")
+			wantVer := strings.TrimPrefix(strings.TrimSpace(job.Version), "v")
+			if agentVer != "" && wantVer != "" && agentVer == wantVer {
+				s.clearUpgradeJob(req.NodeID)
+				_ = s.store.HeartbeatEx(req.NodeID, "", "", "", map[string]string{
+					"upgrade_status": "ok",
+					"upgrade_target": job.Version,
+					"upgrade_error":  "",
+					"agent_version":  agentVer,
+				})
+			} else {
+				upJob = job
+			}
+		}
+		cfgVer := int64(0)
+		if n != nil {
+			cfgVer = n.ConfigVersion
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"ok":             true,
+			"config_version": cfgVer,
+			"need_pull":      needPull,
+			"dial_jobs":      jobs,
+			"upgrade_job":    upJob,
+		})
+	}
+
+	func (s *Server) agentUpgradeResult(c *gin.Context) {
+		var req struct {
+			NodeID  string `json:"node_id"`
+			Token   string `json:"token"`
+			JobID   string `json:"job_id"`
+			OK      bool   `json:"ok"`
+			Version string `json:"version"`
+			Error   string `json:"error"`
+		}
+		if err := c.BindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
+			return
+		}
+		if _, err := s.store.GetNodeByToken(req.NodeID, req.Token); err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+		patch := map[string]string{}
+		if req.OK {
+			s.clearUpgradeJob(req.NodeID)
+			patch["upgrade_status"] = "ok"
+			patch["upgrade_error"] = ""
+			if v := strings.TrimSpace(req.Version); v != "" {
+				patch["agent_version"] = strings.TrimPrefix(v, "v")
+				patch["upgrade_target"] = strings.TrimPrefix(v, "v")
+			}
+		} else {
+			// Keep job queued so a capable agent can retry; surface error in UI.
+			patch["upgrade_status"] = "error"
+			errMsg := strings.TrimSpace(req.Error)
+			if errMsg == "" {
+				errMsg = "upgrade failed"
+			}
+			if len(errMsg) > 500 {
+				errMsg = errMsg[:500] + "…"
+			}
+			patch["upgrade_error"] = errMsg
+		}
+		_ = s.store.HeartbeatEx(req.NodeID, "", "", "", patch)
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	}
 
 func (s *Server) agentDialResult(c *gin.Context) {
 	var req struct {
