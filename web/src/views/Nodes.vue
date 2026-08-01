@@ -28,11 +28,19 @@ const form = reactive({
   private_ip: '',
   hostname: '',
   alt_hostnames: '',
+  // 落地：单端口 listen_port；前置：port_min–port_max 池（多线路各占一个）
   listen_port: 10401,
+  port_min: 10401,
+  port_max: 10499,
 })
+
+function isFrontRole(role) {
+  return role === 'relay' || role === 'entry'
+}
 
 function blankForm(role) {
   const r = role || (tab.value === 'exit' ? 'exit' : 'relay')
+  const front = isFrontRole(r)
   Object.assign(form, {
     name: '',
     role: r,
@@ -42,40 +50,49 @@ function blankForm(role) {
     private_ip: '',
     hostname: '',
     alt_hostnames: '',
-    listen_port: r === 'exit' ? 10001 : 10401,
+    listen_port: r === 'exit' || r === 'hybrid' ? 10001 : 10401,
+    port_min: front ? 10401 : r === 'exit' || r === 'hybrid' ? 10001 : 10401,
+    port_max: front ? 10499 : r === 'exit' || r === 'hybrid' ? 10001 : 10401,
   })
 }
 
 function fillForm(n) {
-  const port =
-    n.listen_port > 0
-      ? n.listen_port
-      : n.port_min > 0
-        ? n.port_min
-        : n.role === 'exit' || n.role === 'hybrid'
-          ? 10001
-          : 10401
+  const role = n.role || 'relay'
+  const front = isFrontRole(role)
+  let pmin =
+    n.port_min > 0
+      ? n.port_min
+      : n.listen_port > 0
+        ? n.listen_port
+        : front
+          ? 10401
+          : 10001
+  let pmax = n.port_max > 0 ? n.port_max : pmin
+  // 前置若历史数据是单端口，编辑时给出常用池，避免误以为只能开一个
+  if (front && pmin === pmax && pmin === 10401) {
+    pmax = 10499
+  }
   Object.assign(form, {
     name: n.name || '',
-    role: n.role || 'relay',
+    role,
     region: n.region || '',
     tags: n.tags || '',
     public_ip: n.public_ip || '',
     private_ip: n.private_ip || '',
     hostname: n.hostname || '',
     alt_hostnames: n.alt_hostnames || '',
-    listen_port: port,
+    listen_port: pmin,
+    port_min: pmin,
+    port_max: pmax,
   })
 }
 
 function portLabel(n) {
-  if (n.listen_port > 0) return String(n.listen_port)
-  if (n.port_min > 0) {
-    const a = n.port_min
-    const b = n.port_max || a
-    return a === b ? String(a) : `${a}`
-  }
-  return '—'
+  const a = n.port_min > 0 ? n.port_min : n.listen_port > 0 ? n.listen_port : 0
+  const b = n.port_max > 0 ? n.port_max : a
+  if (!a) return '—'
+  if (isFront(n) && b > a) return `${a}–${b}`
+  return String(a)
 }
 
 function statusLabel(s) {
@@ -162,7 +179,23 @@ function openEdit(n) {
 }
 
 function payload() {
-  const port = Number(form.listen_port) || 0
+  const front = isFrontRole(form.role)
+  let pmin = Number(form.port_min) || 0
+  let pmax = Number(form.port_max) || 0
+  if (!front) {
+    // 落地 / hybrid：单端口
+    const port = Number(form.listen_port) || pmin || 0
+    pmin = port
+    pmax = port
+  } else {
+    if (!pmin) pmin = Number(form.listen_port) || 10401
+    if (!pmax) pmax = pmin
+    if (pmax < pmin) {
+      const t = pmin
+      pmin = pmax
+      pmax = t
+    }
+  }
   return {
     name: form.name,
     role: form.role,
@@ -172,22 +205,44 @@ function payload() {
     private_ip: form.private_ip,
     hostname: form.hostname,
     alt_hostnames: form.alt_hostnames,
-    // single public/service port — no wide range UI
-    port_min: port,
-    port_max: port,
-    listen_port: port,
+    port_min: pmin,
+    port_max: pmax,
+    listen_port: pmin,
   }
 }
 
-async function create() {
+function validatePorts() {
   if (!form.name.trim()) {
     error.value = '请填写名称'
-    return
+    return false
   }
-  if (!form.listen_port || form.listen_port < 1 || form.listen_port > 65535) {
-    error.value = '请填写有效端口 (1–65535)'
-    return
+  if (isFrontRole(form.role)) {
+    const a = Number(form.port_min) || 0
+    const b = Number(form.port_max) || 0
+    if (!a || a < 1 || a > 65535 || !b || b < 1 || b > 65535) {
+      error.value = '请填写有效端口起止 (1–65535)'
+      return false
+    }
+    if (b < a) {
+      error.value = '端口止不能小于端口起'
+      return false
+    }
+    if (b - a > 200) {
+      error.value = '端口池过大（最多 200 个），请缩小范围'
+      return false
+    }
+  } else {
+    const port = Number(form.listen_port) || Number(form.port_min) || 0
+    if (!port || port < 1 || port > 65535) {
+      error.value = '请填写有效端口 (1–65535)'
+      return false
+    }
   }
+  return true
+}
+
+async function create() {
+  if (!validatePorts()) return
   saving.value = true
   try {
     const res = await api('/api/admin/nodes', {
@@ -207,21 +262,14 @@ async function create() {
 
 async function saveEdit() {
   if (!editingId.value) return
-  if (!form.name.trim()) {
-    error.value = '请填写名称'
-    return
-  }
-  if (!form.listen_port || form.listen_port < 1 || form.listen_port > 65535) {
-    error.value = '请填写有效端口 (1–65535)'
-    return
-  }
+  if (!validatePorts()) return
   saving.value = true
   try {
     await api(`/api/admin/nodes/${editingId.value}`, {
       method: 'PUT',
       body: JSON.stringify(payload()),
     })
-    toast.value = '已更新'
+    toast.value = '已更新，请点「重建配置」使前置端口池生效'
     show.value = false
     await load()
   } catch (e) {
@@ -230,6 +278,23 @@ async function saveEdit() {
     saving.value = false
   }
 }
+
+// 切换类型时调整端口表单默认值
+watch(
+  () => form.role,
+  (r, prev) => {
+    if (!show.value || mode.value === 'created') return
+    if (r === prev) return
+    if (isFrontRole(r) && !isFrontRole(prev)) {
+      if (!form.port_min) form.port_min = 10401
+      if (!form.port_max || form.port_max === form.port_min) form.port_max = 10499
+      form.listen_port = form.port_min
+    } else if (!isFrontRole(r) && isFrontRole(prev)) {
+      form.listen_port = form.port_min || 10001
+      form.port_max = form.listen_port
+    }
+  },
+)
 
 async function showInstall(id) {
   try {
@@ -390,10 +455,9 @@ onUnmounted(() => {
     </div>
   </div>
   <p class="help-text" style="margin-top:-6px">
-    <strong>前置</strong> = 商家入口（relay，tcp_forward 到落地）·
-    <strong>落地</strong> = 美国家宽 mita（exit）。
-    多落地时前置会按线路自动开多个端口（PortMin 起）。
-    点<strong>升级</strong>可远程推送 Agent，无需 SSH。
+    <strong>前置</strong> = 商家入口（端口<strong>段</strong>，如 10401–10499，每条线路占一个）·
+    <strong>落地</strong> = 家宽 mita（单端口）。
+    点<strong>升级</strong>可远程推送 Agent。
   </p>
 
   <div class="table-wrap">
@@ -404,7 +468,7 @@ onUnmounted(() => {
           <th>类型</th>
           <th>状态</th>
           <th>公网 / 接入</th>
-          <th>端口</th>
+          <th>端口 / 池</th>
           <th>区域</th>
           <th>Agent</th>
           <th>操作</th>
@@ -512,8 +576,18 @@ onUnmounted(() => {
               <label>公网 IP</label>
               <input v-model="form.public_ip" />
             </div>
-            <div class="field">
-              <label>公开端口</label>
+            <template v-if="isFrontRole(form.role)">
+              <div class="field">
+                <label>端口起</label>
+                <input v-model.number="form.port_min" type="number" min="1" max="65535" />
+              </div>
+              <div class="field">
+                <label>端口止</label>
+                <input v-model.number="form.port_max" type="number" min="1" max="65535" />
+              </div>
+            </template>
+            <div v-else class="field">
+              <label>公开端口（mita）</label>
               <input v-model.number="form.listen_port" type="number" min="1" max="65535" />
             </div>
             <div class="field">
@@ -534,8 +608,14 @@ onUnmounted(() => {
             </div>
           </div>
           <p class="help-text">
-            前置端口 = 手机 mierus 连接端口（如 10401）。落地端口 = mita 监听（如 10001）。
-            改端口后点「重建配置」，agent 会拉新配置。
+            <template v-if="isFrontRole(form.role)">
+              前置填<strong>端口池</strong>（如 10401–10499）：每条线路自动占一个端口转发到对应落地；
+              商家 DNAT 需放行整段。不会一次打开 99 个监听，只开「有线路的」端口。
+            </template>
+            <template v-else>
+              落地端口 = mita 监听（如 10001 / 10002）。
+            </template>
+            改端口后点「重建配置」。
             <span v-if="mode === 'edit'" class="mono"> · {{ editingId }}</span>
           </p>
         </template>
@@ -548,7 +628,14 @@ onUnmounted(() => {
             <dt>面板</dt>
             <dd class="mono">{{ created.panel_url }}</dd>
             <dt>端口</dt>
-            <dd class="mono">{{ created.node.listen_port || created.node.port_min }}</dd>
+            <dd class="mono">
+              <template v-if="created.node.port_max > created.node.port_min">
+                {{ created.node.port_min }}–{{ created.node.port_max }}
+              </template>
+              <template v-else>
+                {{ created.node.listen_port || created.node.port_min }}
+              </template>
+            </dd>
           </div>
           <div class="field" style="margin-top:4px">
             <label>一键安装 Agent（目标 Linux）</label>

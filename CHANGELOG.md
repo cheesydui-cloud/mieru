@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.7] - 2026-08-01
+
+### 节点端口 UI
+
+- 前置节点编辑改为 **端口起 / 端口止**（默认 10401–10499），列表显示 `10401–10499`
+- 落地仍为单端口（mita）
+- 说明：端口池是分配上限，实际只监听「有线路」的端口；商家 DNAT 需放行整段
+
+### 升级（仅面板即可；Agent 可选）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.7 bash
+```
+
+
 ## [0.4.6] - 2026-08-01
 
 ### 节点一键升级 Agent
