@@ -32,7 +32,7 @@ var errUnauthorized = fmt.Errorf("unauthorized: node deleted or token invalid")
 
 // AgentVersion is the default when main does not inject a build version.
 // Prefer SetVersion() from cmd/agent so -version and heartbeat always match.
-var AgentVersion = "0.4.14"
+var AgentVersion = "0.4.15"
 
 // SetVersion overrides the version string reported in heartbeats (and logs).
 // Call from main with the same value as -ldflags -X main.Version.
@@ -108,6 +108,15 @@ func (a *Agent) Run(ctx context.Context) error {
 		var v int64
 		_, _ = fmt.Sscanf(string(b), "%d", &v)
 		a.version = v
+	}
+	// Restore user→id map from last desired.json so traffic metering works
+	// immediately after restart (before / while first pull skips full apply).
+	if b, err := os.ReadFile(filepath.Join(a.cfg.DataDir, "desired.json")); err == nil {
+		var last model.AgentDesiredConfig
+		if json.Unmarshal(b, &last) == nil && len(last.Users) > 0 {
+			a.seedMeteringUsers(last.Users)
+			log.Printf("restored metering map users=%d from desired.json", len(a.userByName))
+		}
 	}
 
 	panel := strings.TrimRight(strings.TrimSpace(a.cfg.PanelURL), "/")
@@ -307,6 +316,11 @@ func (a *Agent) pullAndApply(ctx context.Context) error {
 	// Skip full re-apply when desired version is already live.
 	// Re-applying tcp_forward/mita every pull (default 10s) tears down active
 	// phone sessions — classic "works ~30s then dies" symptom.
+	//
+	// Still seed metering maps every pull: after agent restart, version is
+	// restored from disk but userByName is empty — without this, traffic
+	// samples from `mita get users` never match panel user IDs (all zeros).
+	a.seedMeteringUsers(cfg.Users)
 	a.stateMu.Lock()
 	cur := a.version
 	needRetry := a.lastApplyMsg != ""
@@ -330,6 +344,33 @@ func (a *Agent) pullAndApply(ctx context.Context) error {
 	_ = os.WriteFile(filepath.Join(a.cfg.DataDir, "version"), []byte(fmt.Sprintf("%d", cfg.Version)), 0o644)
 	log.Printf("applied config version=%d plugins=%d users=%d", cfg.Version, len(cfg.Plugins), len(cfg.Users))
 	return nil
+}
+
+// seedMeteringUsers rebuilds username→user_id for traffic reporting without
+// touching plugins. Safe to call on every pull (idempotent).
+func (a *Agent) seedMeteringUsers(users []model.AgentUser) {
+	// Always replace so revoked users stop matching; empty → clear map.
+	next := map[string]int64{}
+	for _, u := range users {
+		if u.UserID <= 0 {
+			continue
+		}
+		if _, ok := a.counters[u.UserID]; !ok {
+			a.counters[u.UserID] = &userCounter{}
+		}
+		name := strings.TrimSpace(u.MitaUser)
+		if name == "" {
+			name = strings.TrimSpace(u.Username)
+		}
+		if name != "" {
+			next[name] = u.UserID
+			low := strings.ToLower(name)
+			if low != name {
+				next[low] = u.UserID
+			}
+		}
+	}
+	a.userByName = next
 }
 
 func (a *Agent) apply(ctx context.Context, cfg *model.AgentDesiredConfig) error {
@@ -432,21 +473,7 @@ func (a *Agent) apply(ctx context.Context, cfg *model.AgentDesiredConfig) error 
 		okByType[typ] = true
 	}
 	// seed counters + username map for mita metering
-	for _, u := range cfg.Users {
-		if u.UserID <= 0 {
-			continue
-		}
-		if _, ok := a.counters[u.UserID]; !ok {
-			a.counters[u.UserID] = &userCounter{}
-		}
-		name := strings.TrimSpace(u.MitaUser)
-		if name == "" {
-			name = strings.TrimSpace(u.Username)
-		}
-		if name != "" {
-			a.userByName[name] = u.UserID
-		}
-	}
+	a.seedMeteringUsers(cfg.Users)
 	if okCount == 0 && firstErr != nil {
 		return firstErr
 	}
@@ -514,10 +541,15 @@ func (a *Agent) reportTraffic(ctx context.Context) error {
 	}
 
 	samples := make([]model.TrafficReportSample, 0, len(totals))
+	skipped := 0
 	for name, tot := range totals {
 		uid, ok := a.userByName[name]
 		if !ok || uid <= 0 {
-			// try exact username match only
+			// case-insensitive fallback (mita usernames are usually exact)
+			uid, ok = a.userByName[strings.ToLower(name)]
+		}
+		if !ok || uid <= 0 {
+			skipped++
 			continue
 		}
 		c, ok := a.counters[uid]
@@ -583,10 +615,26 @@ func (a *Agent) reportTraffic(ctx context.Context) error {
 			UserID: uid, UpBps: 0, DownBps: 0, TS: now,
 		})
 	}
+	if skipped > 0 && len(a.userByName) == 0 {
+		log.Printf("traffic: mita has %d user line(s) but agent user map empty — wait for config pull", len(totals))
+	} else if skipped > 0 {
+		log.Printf("traffic: skipped %d mita user(s) not in panel map (names=%v map=%d)", skipped, keysOf(totals), len(a.userByName))
+	}
 	if len(samples) == 0 {
 		return nil
 	}
 	return a.postTrafficSamples(ctx, samples)
+}
+
+func keysOf(m map[string]mitaUserTotal) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	if len(out) > 8 {
+		out = out[:8]
+	}
+	return out
 }
 
 type mitaUserTotal struct {
@@ -638,7 +686,16 @@ func (a *Agent) readMitaUserTotals() (map[string]mitaUserTotal, error) {
 	if err != nil {
 		return nil, err
 	}
-	return parseMitaUsersTable(out), nil
+	m := parseMitaUsersTable(out)
+	if len(m) == 0 && strings.TrimSpace(out) != "" {
+		// Log a short sample so operators can see format drift.
+		sample := strings.TrimSpace(out)
+		if len(sample) > 240 {
+			sample = sample[:240] + "…"
+		}
+		log.Printf("traffic: mita get users parsed 0 rows; raw sample: %q", sample)
+	}
+	return m, nil
 }
 
 // parseMitaUsersTable parses:

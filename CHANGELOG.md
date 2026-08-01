@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.4.15] - 2026-07-30
+
+### 流量 / 实时网速修复
+
+- **根因**：Agent 重启后配置版本未变会跳过 `apply`，内存里的 `userByName` 为空，`mita get users` 统计对不上面板用户 ID，流量与实时 bps 一直为 0
+- 每次 pull 即使跳过 apply 也会 **重建计量用户表**
+- 启动时从 `desired.json` 恢复用户映射，立刻可上报
+- 解析 0 行 / 跳过未映射用户时打日志，方便 journalctl 排查
+
+### 升级（落地 Agent 必须升）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | MIERU_VERSION=v0.4.15 bash
+```
+
+面板可选同步：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.15 bash
+```
+
+
 ## [0.4.14] - 2026-07-30
 
 ### 同一前置 · 多落地 · 强制不同入口端口
