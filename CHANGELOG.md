@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.4.6] - 2026-08-01
+
+### 多落地 / 多线路（同一前置）
+
+- **根因**：cm7 等前置只生成「单端口 → 第一条线路的落地」，新线路用户仍走旧出口 IP
+- **修复**：每条启用线路在前置各占一个 listen 端口，`tcp_forward` 支持 `rules[]` 多目标
+  - 端口分配：hop.Port 优先 → 否则从节点 PortMin 池顺序分配（如 10401、10402）
+  - 单线路 / 单端口节点仍兼容原来的 PublicServicePort
+- 用户扫码 / 分享 / 列表入口端口 = 该用户线路对应的前置端口
+- 运营商 DNAT：每个公开端口需映射到 cm7 内网同端口（不要只开一个）
+
+### 升级（面板 + **cm7 前置 agent** 都要升）
+
+```bash
+# 面板
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.6 bash
+
+# cm7 前置 agent（多端口转发必须）
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | MIERU_VERSION=v0.4.6 bash
+```
+
+升级后在面板「重建配置」或等 agent 拉取；确认新线路用户入口端口与旧线路不同，并在商家侧放行对应 DNAT。
+
+
 ## [0.4.5] - 2026-08-01
 
 ### UX

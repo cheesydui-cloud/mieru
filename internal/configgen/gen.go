@@ -142,30 +142,14 @@ func (b *Builder) RebuildAll() error {
 		case model.RoleEntry:
 			// Entry is the domestic front: transparent TCP to exit mita so clients
 			// can use official mierus:// while egress stays on residential exit.
+			// Multi-exit: one listen port per enabled route (not the whole pool).
 			next := b.resolveNextHop(n.ID, routes, users, routeByID)
-			exitTarget := b.resolveExitTarget(n.ID, routes)
 			emin, emax := n.EffectivePortRange()
 			pubPort := n.PublicServicePort()
+			forwards := b.frontForwardsForNode(n, routes)
 
-			if exitTarget != nil {
-				host := exitTarget.DialHost()
-				mitaPort := exitTarget.MitaPrimaryPort()
-				if host != "" && mitaPort > 0 {
-					// Single public port only — wide port pools (10401-10499) are
-					// operator metadata, not 99 parallel listeners.
-					cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
-						"type": "tcp_forward",
-						"config": map[string]interface{}{
-							"listen_port": pubPort,
-							"port_min":    pubPort,
-							"port_max":    pubPort,
-							"target_host": host,
-							"target_port": mitaPort,
-							"exit_id":     exitTarget.ID,
-							"comment":     "client mierus → exit mita (transparent)",
-						},
-					})
-				}
+			if len(forwards) > 0 {
+				cfg.Plugins = append(cfg.Plugins, tcpForwardPlugin(forwards))
 			}
 			// Legacy: no exit resolved — chain SOCKS to next hop if any.
 			if len(cfg.Plugins) == 0 {
@@ -199,29 +183,13 @@ func (b *Builder) RebuildAll() error {
 		case model.RoleRelay:
 			// Domestic front / mid hop: transparent TCP pipe to exit mita.
 			// Client speaks mieru end-to-end; this node does not terminate mieru.
-			exitList := b.exitsForRelay(routes, n.ID)
+			// Multi-exit: one listen port per enabled route sharing this front.
 			pubPort := n.PublicServicePort()
 			pmin, pmax := n.EffectivePortRange()
+			forwards := b.frontForwardsForNode(n, routes)
 
-			if len(exitList) > 0 {
-				ex := exitList[0]
-				host := ex.DialHost()
-				mitaPort := ex.MitaPrimaryPort()
-				if host != "" && mitaPort > 0 {
-					// Single public port (front entry). Do not open pmin..pmax.
-					cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
-						"type": "tcp_forward",
-						"config": map[string]interface{}{
-							"listen_port": pubPort,
-							"port_min":    pubPort,
-							"port_max":    pubPort,
-							"target_host": host,
-							"target_port": mitaPort,
-							"exit_id":     ex.ID,
-							"comment":     "client mierus → exit mita (transparent)",
-						},
-					})
-				}
+			if len(forwards) > 0 {
+				cfg.Plugins = append(cfg.Plugins, tcpForwardPlugin(forwards))
 			}
 			// Fallback if no exit on route: keep old socks shell so node is not silent.
 			if len(cfg.Plugins) == 0 {
@@ -356,9 +324,194 @@ func (b *Builder) resolveNextHop(nodeID string, routes []model.Route, users []mo
 	return nil
 }
 
+// frontForward is one public listen on a front (entry/relay) → exit mita.
+type frontForward struct {
+	RouteID    int64
+	ListenPort int
+	ExitID     string
+	TargetHost string
+	TargetPort int
+	Comment    string
+}
+
+// frontForwardsForNode builds one tcp_forward rule per enabled route that uses
+// this front node and has an exit/hybrid after it. Ports:
+//
+//  1. hop.Port on the front hop (operator override)
+//  2. else sequential from node PortMin pool (10401, 10402, …)
+//  3. single-route / no pool → PublicServicePort (backward compatible)
+//
+// Same exit on multiple routes still gets distinct ports when routes differ,
+// so merchant DNAT can map each public port independently.
+func (b *Builder) frontForwardsForNode(n model.Node, routes []model.Route) []frontForward {
+	type cand struct {
+		routeID int64
+		hopPort int
+		exit    *model.Node
+		name    string
+	}
+	var cands []cand
+	for _, r := range routes {
+		if !r.Enabled {
+			continue
+		}
+		var hops []model.Hop
+		if err := json.Unmarshal([]byte(r.HopsJSON), &hops); err != nil {
+			continue
+		}
+		idx := -1
+		var hopPort int
+		for i, h := range hops {
+			if h.NodeID == n.ID {
+				idx = i
+				hopPort = h.Port
+				break
+			}
+		}
+		if idx < 0 {
+			continue
+		}
+		var exit *model.Node
+		for j := idx + 1; j < len(hops); j++ {
+			h := hops[j]
+			if h.NodeID == "" || h.External {
+				continue
+			}
+			nn, err := b.Store.GetNode(h.NodeID)
+			if err != nil {
+				continue
+			}
+			if nn.Role == model.RoleExit || nn.Role == model.RoleHybrid {
+				exit = nn
+				break
+			}
+		}
+		if exit == nil {
+			continue
+		}
+		cands = append(cands, cand{routeID: r.ID, hopPort: hopPort, exit: exit, name: r.Name})
+	}
+	if len(cands) == 0 {
+		return nil
+	}
+	// Stable order: route id ascending so port assignment is deterministic.
+	sort.Slice(cands, func(i, j int) bool { return cands[i].routeID < cands[j].routeID })
+
+	pmin, pmax := n.EffectivePortRange()
+	base := n.PublicServicePort()
+	used := map[int]bool{}
+	nextAuto := pmin
+	if nextAuto <= 0 {
+		nextAuto = base
+	}
+
+	alloc := func(prefer int) int {
+		if prefer > 0 && !used[prefer] {
+			used[prefer] = true
+			return prefer
+		}
+		// Prefer sequential from pool; stay within [pmin,pmax] when multi-port pool.
+		for p := nextAuto; ; p++ {
+			if pmax > pmin && p > pmax {
+				// Pool exhausted — keep going above max (operator must open DNAT).
+				// Still unique among our rules.
+			}
+			if p < 1 {
+				p = 1
+			}
+			if used[p] {
+				continue
+			}
+			// Skip reserved SSH-ish only if pool starts higher; otherwise allow.
+			used[p] = true
+			nextAuto = p + 1
+			return p
+		}
+	}
+
+	// First pass: honor explicit hop.Port so operator can pin.
+	// When only one candidate and no hop port and pool is single-port → base.
+	out := make([]frontForward, 0, len(cands))
+	for _, c := range cands {
+		prefer := c.hopPort
+		if prefer <= 0 && len(cands) == 1 && (pmax <= pmin || pmax-pmin == 0) {
+			prefer = base
+		}
+		// Multi-route without hop port: allocate from pool starting at pmin.
+		listen := alloc(prefer)
+		host := c.exit.DialHost()
+		mitaPort := c.exit.MitaPrimaryPort()
+		if host == "" || mitaPort <= 0 {
+			continue
+		}
+		comment := fmt.Sprintf("route#%d %s → %s mita", c.routeID, c.name, c.exit.Name)
+		out = append(out, frontForward{
+			RouteID:    c.routeID,
+			ListenPort: listen,
+			ExitID:     c.exit.ID,
+			TargetHost: host,
+			TargetPort: mitaPort,
+			Comment:    comment,
+		})
+	}
+	return out
+}
+
+// tcpForwardPlugin emits one tcp_forward plugin with rules[] (multi-target).
+func tcpForwardPlugin(forwards []frontForward) map[string]interface{} {
+	rules := make([]map[string]interface{}, 0, len(forwards))
+	for _, f := range forwards {
+		rules = append(rules, map[string]interface{}{
+			"listen_port": f.ListenPort,
+			"target_host": f.TargetHost,
+			"target_port": f.TargetPort,
+			"exit_id":     f.ExitID,
+			"route_id":    f.RouteID,
+			"comment":     f.Comment,
+		})
+	}
+	// Primary listen_port = first rule (diagnostics / single-port UIs).
+	primary := forwards[0].ListenPort
+	return map[string]interface{}{
+		"type": "tcp_forward",
+		"config": map[string]interface{}{
+			"listen_port": primary,
+			"port_min":    primary,
+			"port_max":    primary,
+			"rules":       rules,
+			"comment":     "client mierus → exit mita (per-route ports)",
+		},
+	}
+}
+
+// FrontListenPort returns the public listen port on frontNodeID for the given
+// enabled route (same allocation as configgen). Used by share/subscription.
+// Returns 0 if the front is not on the route or no exit follows it.
+func FrontListenPort(st *store.Store, frontNodeID string, route *model.Route) int {
+	if st == nil || frontNodeID == "" || route == nil || !route.Enabled {
+		return 0
+	}
+	n, err := st.GetNode(frontNodeID)
+	if err != nil {
+		return 0
+	}
+	routes, err := st.ListRoutes()
+	if err != nil {
+		return 0
+	}
+	b := &Builder{Store: st}
+	forwards := b.frontForwardsForNode(*n, routes)
+	for _, f := range forwards {
+		if f.RouteID == route.ID {
+			return f.ListenPort
+		}
+	}
+	return 0
+}
+
 // resolveExitTarget finds the exit/hybrid this front node should TCP-forward to.
 // Prefers an exit that appears after nodeID on an enabled route; falls back to
-// exitsForRelay (any co-routed exit).
+// exitsForRelay (any co-routed exit). Kept for diagnostics / single-target callers.
 func (b *Builder) resolveExitTarget(nodeID string, routes []model.Route) *model.Node {
 	for _, r := range routes {
 		if !r.Enabled {

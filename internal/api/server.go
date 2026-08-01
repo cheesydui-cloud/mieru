@@ -1758,41 +1758,58 @@ func (s *Server) resolveUserMitaEndpoints(u *model.User) []shareEndpoint {
 		out = append(out, shareEndpoint{Name: name, Host: host, Port: port, Protocol: "TCP"})
 	}
 
-	var (
-		frontHost string
-		frontPort int
-		frontName string
-		exitNode  *model.Node
-	)
-	if u != nil && u.RouteID != nil {
-		if r, err := s.store.GetRoute(*u.RouteID); err == nil && r.Enabled {
-			var hops []model.Hop
-			_ = json.Unmarshal([]byte(r.HopsJSON), &hops)
-			for _, h := range hops {
-				if h.NodeID == "" || h.External {
-					continue
-				}
-				n, err := s.store.GetNode(h.NodeID)
-				if err != nil {
-					continue
-				}
-				// First entry/relay = domestic front (tcp_forward listen).
-				if frontHost == "" && (n.Role == model.RoleEntry || n.Role == model.RoleRelay) {
-					frontHost = n.ClientHost()
-					frontPort = n.PublicServicePort()
-					frontName = n.Name
-					if frontName == "" {
-						frontName = frontHost
+var (
+			frontHost string
+			frontPort int
+			frontName string
+			frontID   string
+			exitNode  *model.Node
+			route     *model.Route
+		)
+		if u != nil && u.RouteID != nil {
+			if r, err := s.store.GetRoute(*u.RouteID); err == nil && r.Enabled {
+				route = r
+				var hops []model.Hop
+				_ = json.Unmarshal([]byte(r.HopsJSON), &hops)
+				for _, h := range hops {
+					if h.NodeID == "" || h.External {
+						continue
+					}
+					n, err := s.store.GetNode(h.NodeID)
+					if err != nil {
+						continue
+					}
+					// First entry/relay = domestic front (tcp_forward listen).
+					if frontHost == "" && (n.Role == model.RoleEntry || n.Role == model.RoleRelay) {
+						frontHost = n.ClientHost()
+						frontID = n.ID
+						frontName = n.Name
+						if frontName == "" {
+							frontName = frontHost
+						}
+						// Per-route front port (multi-exit: 10401→exitA, 10402→exitB).
+						if p := configgen.FrontListenPort(s.store, n.ID, r); p > 0 {
+							frontPort = p
+						} else if h.Port > 0 {
+							frontPort = h.Port
+						} else {
+							frontPort = n.PublicServicePort()
+						}
+					}
+					if n.Role == model.RoleExit || n.Role == model.RoleHybrid {
+						if exitNode == nil {
+							exitNode = n
+						}
 					}
 				}
-				if n.Role == model.RoleExit || n.Role == model.RoleHybrid {
-					if exitNode == nil {
-						exitNode = n
+				// If front was found but port still 0, re-resolve via allocator.
+				if frontID != "" && frontPort <= 0 && route != nil {
+					if p := configgen.FrontListenPort(s.store, frontID, route); p > 0 {
+						frontPort = p
 					}
 				}
 			}
 		}
-	}
 
 	// Manual advertise (operator front IP, e.g. 移动入口 211.x).
 		if u != nil {

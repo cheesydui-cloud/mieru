@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"sort"
 	"strconv"
 	"sync"
 	"syscall"
@@ -18,41 +19,44 @@ import (
 //
 //	phone ──mierus──► front:listen  ──raw TCP──►  exit mita:port  ──► residential exit
 //
-// Bytes are not interpreted; mieru handshake/auth happens end-to-end on the exit mita.
+// Multi-exit on one front: multiple listen ports, each with its own target
+// (e.g. 10401→exitA, 10402→exitB). Bytes are not interpreted; mieru auth/egress
+// happen end-to-end on the destination mita.
 type Plugin struct {
 	DataDir string
 
-	mu       sync.Mutex
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	running  bool
-	lastKey  string // listen/target fingerprint — skip rebind when unchanged
-	target   string
+	mu      sync.Mutex
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
+	running bool
+	lastKey string // listen/target fingerprint — skip rebind when unchanged
+}
+
+type forwardRule struct {
+	listenPort int
+	target     string // host:port
 }
 
 func (p *Plugin) Name() string { return "tcp_forward" }
 
 func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 	_ = ctx
-	listenPort := toInt(cfg["listen_port"])
-	pmin := toInt(cfg["port_min"])
-	pmax := toInt(cfg["port_max"])
-	targetHost, _ := cfg["target_host"].(string)
-	targetPort := toInt(cfg["target_port"])
-	targetHost = trim(targetHost)
-	if targetHost == "" || targetPort <= 0 {
-		return fmt.Errorf("tcp_forward: target_host/target_port required")
+	rules, err := parseRules(cfg)
+	if err != nil {
+		return err
+	}
+	if len(rules) == 0 {
+		return fmt.Errorf("tcp_forward: no rules")
 	}
 
-	ports := collectPorts(listenPort, pmin, pmax)
-	if len(ports) == 0 {
-		return fmt.Errorf("tcp_forward: no listen port")
+	// Stable key for idempotent re-apply.
+	parts := make([]string, 0, len(rules))
+	for _, r := range rules {
+		parts = append(parts, fmt.Sprintf("%d→%s", r.listenPort, r.target))
 	}
+	sort.Strings(parts)
+	key := fmt.Sprintf("%v", parts)
 
-	target := net.JoinHostPort(targetHost, strconv.Itoa(targetPort))
-	key := fmt.Sprintf("%v→%s", ports, target)
-
-	// Idempotent: same listen+target already running → keep existing sessions.
 	p.mu.Lock()
 	if p.running && p.lastKey == key {
 		p.mu.Unlock()
@@ -69,22 +73,22 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 	p.cancel = cancel
 	p.running = true
 	p.lastKey = key
-	p.target = target
 	p.mu.Unlock()
 
 	var firstErr error
 	started := 0
-	for _, port := range ports {
-		ln, err := listenTCP(port)
+	for _, r := range rules {
+		ln, err := listenTCP(r.listenPort)
 		if err != nil {
 			if firstErr == nil {
-				firstErr = fmt.Errorf("tcp_forward listen %d: %w", port, err)
+				firstErr = fmt.Errorf("tcp_forward listen %d: %w", r.listenPort, err)
 			}
-			log.Printf("[tcp_forward] listen %d failed: %v", port, err)
+			log.Printf("[tcp_forward] listen %d failed: %v", r.listenPort, err)
 			continue
 		}
 		started++
-		port := port
+		port := r.listenPort
+		target := r.target
 		p.wg.Add(1)
 		go func() {
 			defer p.wg.Done()
@@ -223,18 +227,105 @@ func (p *Plugin) handle(ctx context.Context, client net.Conn, target string) {
 	}
 }
 
-// collectPorts: for front tcp_forward we only need the primary public port.
-// A wide port_min/port_max (e.g. 10401-10499) is treated as operator pool metadata
-// and must NOT open dozens of listeners (causes bind storms + rebind races).
+// parseRules accepts either:
+//
+//	rules: [{listen_port, target_host, target_port}, ...]   // multi-exit
+//	or legacy single: listen_port + target_host + target_port
+//	  (optional port_min/port_max only when no listen_port; wide pools collapse)
+func parseRules(cfg map[string]interface{}) ([]forwardRule, error) {
+	if raw, ok := cfg["rules"]; ok && raw != nil {
+		list, ok := raw.([]interface{})
+		if !ok {
+			// already typed from non-JSON path
+			if typed, ok2 := raw.([]map[string]interface{}); ok2 {
+				out := make([]forwardRule, 0, len(typed))
+				seen := map[int]bool{}
+				for _, m := range typed {
+					r, err := ruleFromMap(m)
+					if err != nil {
+						return nil, err
+					}
+					if seen[r.listenPort] {
+						continue
+					}
+					seen[r.listenPort] = true
+					out = append(out, r)
+				}
+				return out, nil
+			}
+			return nil, fmt.Errorf("tcp_forward: rules must be an array")
+		}
+		out := make([]forwardRule, 0, len(list))
+		seen := map[int]bool{}
+		for i, item := range list {
+			m, ok := item.(map[string]interface{})
+			if !ok {
+				return nil, fmt.Errorf("tcp_forward: rules[%d] invalid", i)
+			}
+			r, err := ruleFromMap(m)
+			if err != nil {
+				return nil, fmt.Errorf("tcp_forward: rules[%d]: %w", i, err)
+			}
+			if seen[r.listenPort] {
+				continue
+			}
+			seen[r.listenPort] = true
+			out = append(out, r)
+		}
+		if len(out) == 0 {
+			return nil, fmt.Errorf("tcp_forward: empty rules")
+		}
+		return out, nil
+	}
+
+	// Legacy single-target config.
+	targetHost, _ := cfg["target_host"].(string)
+	targetHost = trim(targetHost)
+	targetPort := toInt(cfg["target_port"])
+	if targetHost == "" || targetPort <= 0 {
+		return nil, fmt.Errorf("tcp_forward: target_host/target_port required")
+	}
+	target := net.JoinHostPort(targetHost, strconv.Itoa(targetPort))
+	listenPort := toInt(cfg["listen_port"])
+	pmin := toInt(cfg["port_min"])
+	pmax := toInt(cfg["port_max"])
+	ports := collectPorts(listenPort, pmin, pmax)
+	if len(ports) == 0 {
+		return nil, fmt.Errorf("tcp_forward: no listen port")
+	}
+	out := make([]forwardRule, 0, len(ports))
+	for _, port := range ports {
+		out = append(out, forwardRule{listenPort: port, target: target})
+	}
+	return out, nil
+}
+
+func ruleFromMap(m map[string]interface{}) (forwardRule, error) {
+	listen := toInt(m["listen_port"])
+	host, _ := m["target_host"].(string)
+	host = trim(host)
+	tport := toInt(m["target_port"])
+	if listen <= 0 {
+		return forwardRule{}, fmt.Errorf("listen_port required")
+	}
+	if host == "" || tport <= 0 {
+		return forwardRule{}, fmt.Errorf("target_host/target_port required")
+	}
+	return forwardRule{
+		listenPort: listen,
+		target:     net.JoinHostPort(host, strconv.Itoa(tport)),
+	}, nil
+}
+
+// collectPorts: for legacy single-target configs. A wide port_min/port_max
+// (e.g. 10401-10499) is treated as operator pool metadata and must NOT open
+// dozens of listeners (causes bind storms + rebind races).
 func collectPorts(listen, pmin, pmax int) []int {
-	// Prefer explicit single listen_port.
 	if listen > 0 {
 		return []int{listen}
 	}
-	// Only expand a tiny explicit range (≤8 ports) if no listen_port.
 	if pmin > 0 && pmax >= pmin {
 		if pmax-pmin > 7 {
-			// Wide pool → single primary (min).
 			return []int{pmin}
 		}
 		out := make([]int, 0, pmax-pmin+1)
