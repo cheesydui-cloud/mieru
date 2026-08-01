@@ -91,17 +91,12 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(cfgPath, raw, 0o600); err != nil {
-		return err
-	}
-	_ = os.WriteFile(filepath.Join(p.DataDir, "mita-users.json"), raw, 0o600)
 	desiredNames := make([]string, 0, len(users))
 	for _, u := range users {
 		if n, _ := u["name"].(string); n != "" {
 			desiredNames = append(desiredNames, n)
 		}
 	}
-	log.Printf("[mita_server] wrote %s users=%d port=%d names=%v", cfgPath, len(users), port, desiredNames)
 
 	binDir := p.BinDir
 	if binDir == "" {
@@ -116,6 +111,33 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 	if err != nil {
 		return fmt.Errorf("mita daemon: %w", err)
 	}
+
+	// If desired config bytes match last apply and mita is already RUNNING,
+	// do not stop/start — that drops every live client session.
+	if prev, err := os.ReadFile(cfgPath); err == nil && string(prev) == string(raw) {
+		status, _ := rt.MitaCmd("status")
+		if strings.Contains(strings.ToUpper(strings.TrimSpace(status)), "RUNNING") {
+			return nil
+		}
+		// Config same but not running — just start.
+		if _, startErr := rt.MitaCmd("start"); startErr == nil {
+			for i := 0; i < 10; i++ {
+				time.Sleep(500 * time.Millisecond)
+				status, _ = rt.MitaCmd("status")
+				if strings.Contains(strings.ToUpper(strings.TrimSpace(status)), "RUNNING") {
+					return nil
+				}
+				_, _ = rt.MitaCmd("start")
+			}
+		}
+		// fall through to full apply path
+	}
+
+	if err := os.WriteFile(cfgPath, raw, 0o600); err != nil {
+		return err
+	}
+	_ = os.WriteFile(filepath.Join(p.DataDir, "mita-users.json"), raw, 0o600)
+	log.Printf("[mita_server] wrote %s users=%d port=%d names=%v", cfgPath, len(users), port, desiredNames)
 
 	// apply config with retries (OneClick apply_config)
 	var applyOut string

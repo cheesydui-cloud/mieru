@@ -22,10 +22,12 @@ import (
 type Plugin struct {
 	DataDir string
 
-	mu      sync.Mutex
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
-	running bool
+	mu       sync.Mutex
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	running  bool
+	lastKey  string // listen/target fingerprint — skip rebind when unchanged
+	target   string
 }
 
 func (p *Plugin) Name() string { return "tcp_forward" }
@@ -47,6 +49,17 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 		return fmt.Errorf("tcp_forward: no listen port")
 	}
 
+	target := net.JoinHostPort(targetHost, strconv.Itoa(targetPort))
+	key := fmt.Sprintf("%v→%s", ports, target)
+
+	// Idempotent: same listen+target already running → keep existing sessions.
+	p.mu.Lock()
+	if p.running && p.lastKey == key {
+		p.mu.Unlock()
+		return nil
+	}
+	p.mu.Unlock()
+
 	// Stop previous listeners fully before rebinding (avoids "address already in use"
 	// when panel rebuilds while agent still holds the old sockets).
 	p.stop()
@@ -55,9 +68,10 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 	p.mu.Lock()
 	p.cancel = cancel
 	p.running = true
+	p.lastKey = key
+	p.target = target
 	p.mu.Unlock()
 
-	target := net.JoinHostPort(targetHost, strconv.Itoa(targetPort))
 	var firstErr error
 	started := 0
 	for _, port := range ports {
@@ -94,6 +108,7 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 						continue
 					}
 				}
+				setTCPKeepAlive(c)
 				p.wg.Add(1)
 				go func(client net.Conn) {
 					defer p.wg.Done()
@@ -107,6 +122,7 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 		p.mu.Lock()
 		p.running = false
 		p.cancel = nil
+		p.lastKey = ""
 		p.mu.Unlock()
 		return firstErr
 	}
@@ -121,6 +137,7 @@ func (p *Plugin) stop() {
 	cancel := p.cancel
 	p.cancel = nil
 	p.running = false
+	p.lastKey = ""
 	p.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -157,16 +174,26 @@ func listenTCP(port int) (net.Listener, error) {
 	return lc.Listen(context.Background(), "tcp", net.JoinHostPort("0.0.0.0", strconv.Itoa(port)))
 }
 
+func setTCPKeepAlive(c net.Conn) {
+	if tc, ok := c.(*net.TCPConn); ok {
+		_ = tc.SetKeepAlive(true)
+		_ = tc.SetKeepAlivePeriod(30 * time.Second)
+	}
+}
+
 func (p *Plugin) handle(ctx context.Context, client net.Conn, target string) {
 	defer client.Close()
+	// Only bound the dial phase — once connected, keep the stream open for
+	// long-lived mieru sessions (TK / streaming). Do not re-arm absolute deadlines.
 	_ = client.SetDeadline(time.Now().Add(30 * time.Second))
-	dialer := net.Dialer{Timeout: 15 * time.Second}
+	dialer := net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}
 	upstream, err := dialer.DialContext(ctx, "tcp", target)
 	if err != nil {
 		log.Printf("[tcp_forward] dial %s: %v", target, err)
 		return
 	}
 	defer upstream.Close()
+	setTCPKeepAlive(upstream)
 	_ = client.SetDeadline(time.Time{})
 	_ = upstream.SetDeadline(time.Time{})
 

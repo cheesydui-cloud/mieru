@@ -129,35 +129,46 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 		"socks5ListenLAN": true, // local socks_in on 127.0.0.1 must reach it
 	}
 
-	// patch file = what we apply; store file = live config (MIERU_CONFIG_JSON_FILE).
-	// Keeping them separate matches official client usage and lets apply hash passwords.
-	patchPath := filepath.Join(p.DataDir, "mieru-patch.json")
-	storePath := filepath.Join(p.DataDir, "mieru-config.json")
-	raw, err := json.MarshalIndent(mieruCfg, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(patchPath, raw, 0o600); err != nil {
-		return err
-	}
-	// Keep debug copy under the old name for ops.
-	_ = os.WriteFile(filepath.Join(p.DataDir, "mieru-client.json"), raw, 0o600)
-	_ = os.WriteFile(filepath.Join(p.DataDir, "socks5.port"), []byte(strconv.Itoa(socksPort)), 0o644)
+		// patch file = what we apply; store file = live config (MIERU_CONFIG_JSON_FILE).
+		// Keeping them separate matches official client usage and lets apply hash passwords.
+		patchPath := filepath.Join(p.DataDir, "mieru-patch.json")
+		storePath := filepath.Join(p.DataDir, "mieru-config.json")
+		raw, err := json.MarshalIndent(mieruCfg, "", "  ")
+		if err != nil {
+			return err
+		}
 
-	// Drop legacy / poisoned stores. apply merges into existing store and will fail
-	// if the store still has httpProxyPort:0 from older agents.
-	for _, stale := range []string{
-		storePath,
-		filepath.Join(p.DataDir, "client-store.json"),
-		filepath.Join(p.DataDir, "mieru.json"),
-	} {
-		_ = os.Remove(stale)
-	}
-	// Also scrub any other json under data dir that looks like a mieru store with port 0.
-	scrubHTTPProxyPortZero(p.DataDir)
+		// Idempotent: same patch + local socks still accepting → do not stop/start
+		// (periodic agent re-apply would drop hybrid/relay client sessions).
+		if prev, err := os.ReadFile(patchPath); err == nil && string(prev) == string(raw) {
+			addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(socksPort))
+			if c, err := net.DialTimeout("tcp", addr, 400*time.Millisecond); err == nil {
+				_ = c.Close()
+				return nil
+			}
+		}
 
-	log.Printf("[mieru_client] wrote patch %s → %s:%d socks5=:%d user=%s mux=%s hs=%s",
-		patchPath, server, port, socksPort, linkUser, muxLevel, handshake)
+		if err := os.WriteFile(patchPath, raw, 0o600); err != nil {
+			return err
+		}
+		// Keep debug copy under the old name for ops.
+		_ = os.WriteFile(filepath.Join(p.DataDir, "mieru-client.json"), raw, 0o600)
+		_ = os.WriteFile(filepath.Join(p.DataDir, "socks5.port"), []byte(strconv.Itoa(socksPort)), 0o644)
+
+		// Drop legacy / poisoned stores. apply merges into existing store and will fail
+		// if the store still has httpProxyPort:0 from older agents.
+		for _, stale := range []string{
+			storePath,
+			filepath.Join(p.DataDir, "client-store.json"),
+			filepath.Join(p.DataDir, "mieru.json"),
+		} {
+			_ = os.Remove(stale)
+		}
+		// Also scrub any other json under data dir that looks like a mieru store with port 0.
+		scrubHTTPProxyPortZero(p.DataDir)
+
+		log.Printf("[mieru_client] wrote patch %s → %s:%d socks5=:%d user=%s mux=%s hs=%s",
+			patchPath, server, port, socksPort, linkUser, muxLevel, handshake)
 
 	binDir := p.BinDir
 	if binDir == "" {

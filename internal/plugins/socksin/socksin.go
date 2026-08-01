@@ -77,9 +77,26 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 		return p.restart(listenAddr, users, upstream)
 	}
 
+	func usersEqual(a, b map[string]string) bool {
+		if len(a) != len(b) {
+			return false
+		}
+		for k, v := range a {
+			if b[k] != v {
+				return false
+			}
+		}
+		return true
+	}
+
 	func (p *Plugin) restart(listen string, users map[string]string, upstream string) error {
 		p.mu.Lock()
 		defer p.mu.Unlock()
+
+		// Same listen/users/upstream already up — keep sessions (agent may re-apply).
+		if p.listener != nil && p.listen == listen && p.upstream == upstream && usersEqual(p.users, users) {
+			return nil
+		}
 
 		if p.cancel != nil {
 			p.cancel()

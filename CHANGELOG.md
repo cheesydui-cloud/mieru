@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.3.13] - 2026-08-01
+
+### Fixed — 连上约 30 秒就断网
+
+- Agent 每 10s 拉配置后**不再重复 apply**（版本未变则跳过），避免 `tcp_forward` / `mita` 周期性 stop 掐断会话。
+- `tcp_forward` / `socks_in` / `mieru_client` / `mita` 配置未变时幂等，不 rebind、不 stop/start。
+- `tcp_forward` 开启 TCP keepalive，长连接更稳。
+
+### 升级
+
+```bash
+# 面板
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.3.13 bash
+
+# 所有 agent（cm7 前置 + 美国家宽 exit 都要升）
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | MIERU_VERSION=v0.3.13 bash
+```
+
+升完后手机重连；`journalctl -u mieru-agent -f` 不应再每 10s 出现 `applied config` / `[tcp_forward] 10401 →`。
+
+
 ## [0.3.12] - 2026-08-01
 
 ### Fixed — 侧栏版本显示旧号

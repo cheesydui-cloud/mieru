@@ -29,7 +29,7 @@ import (
 
 // AgentVersion is the default when main does not inject a build version.
 // Prefer SetVersion() from cmd/agent so -version and heartbeat always match.
-var AgentVersion = "0.3.12"
+var AgentVersion = "0.3.13"
 
 // SetVersion overrides the version string reported in heartbeats (and logs).
 // Call from main with the same value as -ldflags -X main.Version.
@@ -273,6 +273,17 @@ func (a *Agent) pullAndApply(ctx context.Context) error {
 
 	// persist last_good payload (even on failed apply — useful for debug)
 	_ = os.WriteFile(filepath.Join(a.cfg.DataDir, "desired.json"), raw, 0o600)
+
+	// Skip full re-apply when desired version is already live.
+	// Re-applying tcp_forward/mita every pull (default 10s) tears down active
+	// phone sessions — classic "works ~30s then dies" symptom.
+	a.stateMu.Lock()
+	cur := a.version
+	needRetry := a.lastApplyMsg != ""
+	a.stateMu.Unlock()
+	if cfg.Version > 0 && cfg.Version == cur && !needRetry {
+		return nil
+	}
 
 	if err := a.apply(ctx, &cfg); err != nil {
 		a.stateMu.Lock()
