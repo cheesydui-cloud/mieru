@@ -6,7 +6,7 @@
 set -euo pipefail
 
 REPO="${MIERU_REPO:-cheesydui-cloud/mieru}"
-# 默认拉 GitHub latest；可 MIERU_VERSION=v0.4.7 钉死
+# 默认拉 GitHub latest；可 MIERU_VERSION=v0.4.8 钉死
 VERSION="${MIERU_VERSION:-}"
 PREFIX="${MIERU_PREFIX:-/usr/local}"
 INSTALL_DIR="${MIERU_INSTALL_DIR:-/opt/mieru-panel}"
@@ -39,7 +39,7 @@ if [[ -z "$VERSION" || "$VERSION" == "latest" ]]; then
       "https://ghfast.top/https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
       | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1) || true
   fi
-  VERSION="${tag:-v0.4.7}"
+  VERSION="${tag:-v0.4.8}"
 fi
 echo "==> 目标版本 ${VERSION}"
 
@@ -134,6 +134,64 @@ listener_exe() {
   return 0
 }
 
+
+# Verify tarball against release SHA256SUMS (optional if file missing / offline).
+# Set MIERU_SKIP_CHECKSUM=1 to skip. Fail closed when sums file is available.
+verify_release_sha256() {
+  local asset="$1"  # basename
+  local tgz="$2"    # local path
+  if [[ "${MIERU_SKIP_CHECKSUM:-0}" == "1" ]]; then
+    echo "==> 跳过 SHA256 校验 (MIERU_SKIP_CHECKSUM=1)"
+    return 0
+  fi
+  local sums_urls=(
+    "https://github.com/${REPO}/releases/download/${VERSION}/SHA256SUMS"
+    "https://ghfast.top/https://github.com/${REPO}/releases/download/${VERSION}/SHA256SUMS"
+    "https://mirror.ghproxy.com/https://github.com/${REPO}/releases/download/${VERSION}/SHA256SUMS"
+    "https://ghproxy.net/https://github.com/${REPO}/releases/download/${VERSION}/SHA256SUMS"
+    "https://gitdl.cn/https://github.com/${REPO}/releases/download/${VERSION}/SHA256SUMS"
+  )
+  local sums_file="$TMP/SHA256SUMS"
+  local got="" expect=""
+  rm -f "$sums_file"
+  for su in "${sums_urls[@]}"; do
+    if curl -fsSL --connect-timeout 10 --retry 1 "$su" -o "$sums_file" 2>/dev/null; then
+      if [[ -s "$sums_file" ]] && grep -qE '^[0-9a-fA-F]{64} ' "$sums_file" 2>/dev/null; then
+        break
+      fi
+    fi
+    rm -f "$sums_file"
+  done
+  if [[ ! -s "$sums_file" ]]; then
+    echo "==> 未找到 SHA256SUMS（旧 release 或网络），跳过校验"
+    return 0
+  fi
+  expect=$(grep -E "[[:space:]]${asset}$" "$sums_file" | head -1 | awk '{print $1}' || true)
+  if [[ -z "$expect" ]]; then
+    echo "==> SHA256SUMS 中无 ${asset}，跳过校验" >&2
+    return 0
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    got=$(sha256sum "$tgz" | awk '{print $1}')
+  elif command -v shasum >/dev/null 2>&1; then
+    got=$(shasum -a 256 "$tgz" | awk '{print $1}')
+  else
+    got=$(python3 -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$tgz")
+  fi
+  # bash 3.2 (mac) has no ${var,,}; use tr for portability
+  got_l=$(printf '%s' "$got" | tr 'A-F' 'a-f')
+  expect_l=$(printf '%s' "$expect" | tr 'A-F' 'a-f')
+  if [[ "$got_l" != "$expect_l" ]]; then
+    echo "错误: SHA256 校验失败" >&2
+    echo "  文件: ${asset}" >&2
+    echo "  期望: ${expect}" >&2
+    echo "  实际: ${got}" >&2
+    echo "  可能镜像缓存了旧包。请换镜像、清缓存，或 MIERU_SKIP_CHECKSUM=1（不推荐）" >&2
+    exit 1
+  fi
+  echo "==> SHA256 校验通过 ${got:0:12}…"
+}
+
 DL_OK=0
 for URL in "${URLS[@]}"; do
   echo "==> 下载 ${URL}"
@@ -154,6 +212,7 @@ if [[ "$DL_OK" -ne 1 ]]; then
 fi
 SIZE=$(wc -c <"$TMP/$ASSET" | tr -d ' ')
 echo "==> 下载完成 ${SIZE} bytes"
+verify_release_sha256 "$ASSET" "$TMP/$ASSET"
 
 	# 列出成员：忽略 macOS AppleDouble (._*) / xattr 警告（GNU tar 可能 exit≠0）
 	LIST_FILE="$TMP/tar.list"

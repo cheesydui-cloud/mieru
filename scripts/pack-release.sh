@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Build clean Linux release tarballs (no macOS AppleDouble / xattrs).
-# Usage: VERSION=v0.4.7 ./scripts/pack-release.sh
+# Build clean Linux release tarballs (no macOS AppleDouble / xattrs) + SHA256SUMS.
+# Usage: VERSION=v0.4.8 ./scripts/pack-release.sh
 set -euo pipefail
-VERSION="${VERSION:-v0.4.7}"
+VERSION="${VERSION:-v0.4.8}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${ROOT}/dist/release"
 export COPYFILE_DISABLE=1
@@ -35,10 +35,43 @@ with tarfile.open(out, "w:gz", format=tarfile.GNU_FORMAT) as tar:
 with tarfile.open(out) as tar:
     names = tar.getnames()
 assert any(n.endswith("/panel") for n in names), names
+assert any(n.endswith("/agent") for n in names), names
 assert not any("._" in n for n in names), names
 print("  ", out, out.stat().st_size, "bytes", names)
 PY
 }
+
 build_one linux amd64
 build_one linux arm64
+
+echo "==> SHA256SUMS"
+python3 - "$OUT" "$VERSION" <<'PY'
+import hashlib, pathlib, sys
+out = pathlib.Path(sys.argv[1])
+ver = sys.argv[2]
+names = [
+    f"mieru-panel-{ver}-linux-amd64.tar.gz",
+    f"mieru-panel-{ver}-linux-arm64.tar.gz",
+]
+lines = []
+for name in names:
+    p = out / name
+    if not p.is_file():
+        raise SystemExit(f"missing {p}")
+    h = hashlib.sha256(p.read_bytes()).hexdigest()
+    lines.append(f"{h}  {name}")
+    print(f"  {h}  {name}")
+text = "\n".join(lines) + "\n"
+(out / "SHA256SUMS").write_text(text)
+(out / f"SHA256SUMS-{ver}").write_text(text)
+# re-verify
+for line in lines:
+    expect, name = line.split("  ", 1)
+    got = hashlib.sha256((out / name).read_bytes()).hexdigest()
+    if got != expect:
+        raise SystemExit(f"SHA256 mismatch {name}")
+    print(f"  OK {name}")
+print(f"  wrote {out / 'SHA256SUMS'}")
+PY
+
 echo "OK: $OUT"

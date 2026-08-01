@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.4.8] - 2026-08-01
+
+### 发布完整性
+
+- `pack-release.sh` 生成 **SHA256SUMS**（与每个 `.tar.gz` 一并上传）
+- `install-panel.sh` / `install-agent.sh` 下载后自动校验；失败拒绝安装
+- 无 SHA256SUMS 的旧 release 仍可安装（跳过校验）；`MIERU_SKIP_CHECKSUM=1` 可强制跳过
+
+### 含 v0.4.7 全部修复
+
+- 扫码显示名：`profile=用户名-M月D日`（不再是 default）
+- 前置节点端口起/止 UI（10401–10499）
+- 多落地 per-route 端口 + 远程升级 Agent
+
+### 升级
+
+```bash
+# 面板
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.8 bash
+
+# 节点 agent（cm7 等多落地必须）
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | MIERU_VERSION=v0.4.8 bash
+```
+
+
 ## [0.4.7] - 2026-08-01
 
 ### 扫码显示名修复

@@ -11,7 +11,7 @@
 set -euo pipefail
 
 REPO="${MIERU_REPO:-cheesydui-cloud/mieru}"
-# 默认跟随 GitHub latest；也可 MIERU_VERSION=v0.4.7 钉死版本
+# 默认跟随 GitHub latest；也可 MIERU_VERSION=v0.4.8 钉死版本
 VERSION="${MIERU_VERSION:-}"
 PREFIX="${MIERU_PREFIX:-/usr/local}"
 # Agent has its own install dir — never overwrite panel's /opt/mieru-panel
@@ -35,7 +35,7 @@ usage() {
   bash install-agent.sh --panel-url URL --node-id ID --token TOKEN [--role exit|entry|relay|hybrid]
 
 环境变量:
-  MIERU_VERSION=v0.4.7   钉死版本（默认拉 GitHub latest）
+  MIERU_VERSION=v0.4.8   钉死版本（默认拉 GitHub latest）
 EOF
 }
 
@@ -103,7 +103,7 @@ resolve_version() {
       | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1) || true
   fi
   if [[ -z "$tag" ]]; then
-    tag="v0.4.7"
+    tag="v0.4.8"
     echo "==> 无法查询 latest，回退 ${tag}"
   fi
   VERSION="$tag"
@@ -152,6 +152,64 @@ $SUDO pkill -9 -f '/usr/local/bin/mieru-agent' 2>/dev/null || true
 $SUDO pkill -9 -f "${INSTALL_DIR}/agent" 2>/dev/null || true
 sleep 1
 
+
+# Verify tarball against release SHA256SUMS (optional if file missing / offline).
+# Set MIERU_SKIP_CHECKSUM=1 to skip. Fail closed when sums file is available.
+verify_release_sha256() {
+  local asset="$1"  # basename
+  local tgz="$2"    # local path
+  if [[ "${MIERU_SKIP_CHECKSUM:-0}" == "1" ]]; then
+    echo "==> 跳过 SHA256 校验 (MIERU_SKIP_CHECKSUM=1)"
+    return 0
+  fi
+  local sums_urls=(
+    "https://github.com/${REPO}/releases/download/${VERSION}/SHA256SUMS"
+    "https://ghfast.top/https://github.com/${REPO}/releases/download/${VERSION}/SHA256SUMS"
+    "https://mirror.ghproxy.com/https://github.com/${REPO}/releases/download/${VERSION}/SHA256SUMS"
+    "https://ghproxy.net/https://github.com/${REPO}/releases/download/${VERSION}/SHA256SUMS"
+    "https://gitdl.cn/https://github.com/${REPO}/releases/download/${VERSION}/SHA256SUMS"
+  )
+  local sums_file="$TMP/SHA256SUMS"
+  local got="" expect=""
+  rm -f "$sums_file"
+  for su in "${sums_urls[@]}"; do
+    if curl -fsSL --connect-timeout 10 --retry 1 "$su" -o "$sums_file" 2>/dev/null; then
+      if [[ -s "$sums_file" ]] && grep -qE '^[0-9a-fA-F]{64} ' "$sums_file" 2>/dev/null; then
+        break
+      fi
+    fi
+    rm -f "$sums_file"
+  done
+  if [[ ! -s "$sums_file" ]]; then
+    echo "==> 未找到 SHA256SUMS（旧 release 或网络），跳过校验"
+    return 0
+  fi
+  expect=$(grep -E "[[:space:]]${asset}$" "$sums_file" | head -1 | awk '{print $1}' || true)
+  if [[ -z "$expect" ]]; then
+    echo "==> SHA256SUMS 中无 ${asset}，跳过校验" >&2
+    return 0
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    got=$(sha256sum "$tgz" | awk '{print $1}')
+  elif command -v shasum >/dev/null 2>&1; then
+    got=$(shasum -a 256 "$tgz" | awk '{print $1}')
+  else
+    got=$(python3 -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$tgz")
+  fi
+  # bash 3.2 (mac) has no ${var,,}; use tr for portability
+  got_l=$(printf '%s' "$got" | tr 'A-F' 'a-f')
+  expect_l=$(printf '%s' "$expect" | tr 'A-F' 'a-f')
+  if [[ "$got_l" != "$expect_l" ]]; then
+    echo "错误: SHA256 校验失败" >&2
+    echo "  文件: ${asset}" >&2
+    echo "  期望: ${expect}" >&2
+    echo "  实际: ${got}" >&2
+    echo "  可能镜像缓存了旧包。请换镜像、清缓存，或 MIERU_SKIP_CHECKSUM=1（不推荐）" >&2
+    exit 1
+  fi
+  echo "==> SHA256 校验通过 ${got:0:12}…"
+}
+
 DL_OK=0
 for URL in "${URLS[@]}"; do
   echo "==> 下载 ${URL}"
@@ -171,6 +229,7 @@ if [[ "$DL_OK" -ne 1 ]]; then
   exit 1
 fi
 SIZE=$(wc -c <"$TMP/$ASSET" | tr -d ' ')
+verify_release_sha256 "$ASSET" "$TMP/$ASSET"
 
 	$SUDO mkdir -p "$INSTALL_DIR" "$DATA_DIR" "${PREFIX}/bin" "$TMP/extract"
 	# 忽略 macOS xattr / AppleDouble 警告
@@ -205,7 +264,7 @@ SIZE=$(wc -c <"$TMP/$ASSET" | tr -d ' ')
 		  $SUDO ls -la "${PREFIX}/bin/mieru-agent" "${INSTALL_DIR}/agent" 2>/dev/null || true
 		  exit 1
 		fi
-		# Accept v0.4.7 or 0.3.10
+		# Accept v0.4.8 or 0.3.10
 		want="${VERSION#v}"
 		got="${BIN_VER#v}"
 		if [[ "$got" != "$want" && "$BIN_VER" != "$VERSION" ]]; then
