@@ -2046,9 +2046,12 @@ var (
 		return out
 	}
 
-// mierusShareURL builds official simple share link (ike-sh/mieru-OneClick / mieru client):
+// mierusShareURL builds official simple share link (enfein/mieru simple export):
 //
-//	mierus://user:pass@host?handshake-mode=...&mtu=...&multiplexing=...&port=N&profile=default&protocol=TCP
+//	mierus://user:pass@host?handshake-mode=...&mtu=...&multiplexing=...&port=N&profile=NAME&protocol=TCP
+//
+// Official client uses query param **profile** as the profile/list display name
+// (NOT the URL #fragment). Empty name falls back to "default".
 func mierusShareURL(username, password, host string, port int, protocol, name string) string {
 	if host == "" || port <= 0 {
 		return ""
@@ -2062,12 +2065,20 @@ func mierusShareURL(username, password, host string, port int, protocol, name st
 	if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
 		hostPart = "[" + host + "]"
 	}
+	profile := strings.TrimSpace(name)
+	if profile == "" {
+		profile = "default"
+	}
+	// profile is a single token in official format; strip chars that break query parsing.
+	profile = strings.ReplaceAll(profile, "&", "-")
+	profile = strings.ReplaceAll(profile, "?", "-")
+	profile = strings.ReplaceAll(profile, "#", "-")
 	q := url.Values{}
 	q.Set("handshake-mode", "HANDSHAKE_NO_WAIT")
 	q.Set("mtu", "1400")
 	q.Set("multiplexing", "MULTIPLEXING_OFF")
 	q.Set("port", strconv.Itoa(port))
-	q.Set("profile", "default")
+	q.Set("profile", profile)
 	q.Set("protocol", protocol)
 	u := url.URL{
 		Scheme:   "mierus",
@@ -2075,8 +2086,9 @@ func mierusShareURL(username, password, host string, port int, protocol, name st
 		Host:     hostPart,
 		RawQuery: q.Encode(),
 	}
-	if name != "" {
-		u.Fragment = name
+	// Fragment kept as secondary hint for clients that read #remark; official mieru uses profile.
+	if profile != "" && profile != "default" {
+		u.Fragment = profile
 	}
 	return u.String()
 }
