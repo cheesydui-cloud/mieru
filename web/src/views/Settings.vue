@@ -5,7 +5,10 @@ import { setBrandMeta } from '../brand'
 
 const error = ref('')
 const toast = ref('')
-const loading = ref(false)
+const savingBrand = ref(false)
+const savingCF = ref(false)
+const savingPw = ref(false)
+const backupLoading = ref(false)
 const audit = ref([])
 const auditQ = ref('')
 const auditAction = ref('')
@@ -84,7 +87,7 @@ async function load() {
 }
 
 async function downloadBackup() {
-  loading.value = true
+  backupLoading.value = true
   error.value = ''
   try {
     const tok = getToken()
@@ -117,7 +120,7 @@ async function downloadBackup() {
   } catch (e) {
     error.value = e.message
   } finally {
-    loading.value = false
+    backupLoading.value = false
   }
 }
 
@@ -139,50 +142,85 @@ function clearFavicon() {
   form.panel_favicon = ''
 }
 
-async function saveSettings() {
-  loading.value = true
+function brandPayload() {
+  return {
+    panel_url: form.panel_url,
+    panel_name: form.panel_name,
+    panel_subtitle: form.panel_subtitle,
+    panel_favicon: form.panel_favicon,
+  }
+}
+
+function applySettingsResponse(res, { touchBrand = false, touchCF = false } = {}) {
+  if (touchBrand) {
+    form.panel_url = res.panel_url
+    form.panel_name = res.panel_name
+    form.panel_subtitle = res.panel_subtitle || ''
+    form.panel_favicon = res.panel_favicon || ''
+    form.panel_url_set = true
+    setBrandMeta({
+      name: res.panel_name,
+      subtitle: res.panel_subtitle,
+      faviconData: res.panel_favicon || '',
+    })
+  }
+  if (touchCF || res.cf_configured !== undefined) {
+    form.cf_configured = !!res.cf_configured
+    form.cf_token_set = !!res.cf_token_set
+    if (res.cf_zone_id !== undefined && res.cf_zone_id !== null) {
+      form.cf_zone_id = res.cf_zone_id || form.cf_zone_id
+    }
+    form.cf_api_token = form.cf_token_set ? '********' : ''
+  }
+}
+
+async function putSettingsBody(body) {
+  return api('/api/admin/settings', {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+}
+
+/** 仅保存面板品牌 / 地址（不改动 CF Token） */
+async function saveBrandSettings() {
+  savingBrand.value = true
+  error.value = ''
+  try {
+    const res = await putSettingsBody(brandPayload())
+    applySettingsResponse(res, { touchBrand: true, touchCF: true })
+    toast.value = '面板设置已保存（名称 / 副标题 / 图标 / 地址）'
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    savingBrand.value = false
+  }
+}
+
+/** 仅保存 Cloudflare；仍带上当前面板字段以满足后端必填，但不改写用户未编辑的 Token 占位 */
+async function saveCFSettings() {
+  savingCF.value = true
   error.value = ''
   try {
     const body = {
-      panel_url: form.panel_url,
-      panel_name: form.panel_name,
-      panel_subtitle: form.panel_subtitle,
-      panel_favicon: form.panel_favicon,
+      ...brandPayload(),
       cf_zone_id: form.cf_zone_id,
       cf_proxied_default: !!form.cf_proxied_default,
     }
-    // only send token when user typed a new one / clear (not placeholder)
     const tok = (form.cf_api_token || '').trim()
     if (tok === 'clear') {
       body.cf_api_token = 'clear'
     } else if (tok && tok !== '********') {
       body.cf_api_token = tok
     }
-    // empty + was set → keep existing (omit field)
-    const res = await api('/api/admin/settings', {
-      method: 'PUT',
-      body: JSON.stringify(body),
-    })
-    form.panel_url = res.panel_url
-    form.panel_name = res.panel_name
-    form.panel_subtitle = res.panel_subtitle || ''
-    form.panel_favicon = res.panel_favicon || ''
-    form.panel_url_set = true
-    form.cf_configured = !!res.cf_configured
-    form.cf_token_set = !!res.cf_token_set
-    form.cf_zone_id = res.cf_zone_id || form.cf_zone_id
-    form.cf_api_token = form.cf_token_set ? '********' : ''
-    setBrandMeta({
-      name: res.panel_name,
-      subtitle: res.panel_subtitle,
-      faviconData: res.panel_favicon || '',
-    })
-    toast.value = '设置已保存。侧栏名称、登录副标题与图标已更新。'
-    await load()
+    const res = await putSettingsBody(body)
+    applySettingsResponse(res, { touchBrand: true, touchCF: true })
+    toast.value = form.cf_configured || res.cf_configured
+      ? 'Cloudflare 配置已保存'
+      : '已保存（请填写 Token + Zone ID 后即可在节点页一键解析）'
   } catch (e) {
     error.value = e.message
   } finally {
-    loading.value = false
+    savingCF.value = false
   }
 }
 
@@ -190,8 +228,8 @@ async function testCF() {
   cfTesting.value = true
   error.value = ''
   try {
-    // save first if user typed new token
-    await saveSettings()
+    await saveCFSettings()
+    if (error.value) return
     const res = await api('/api/admin/cloudflare/test', { method: 'POST', body: '{}' })
     toast.value = res.zone_name ? `Cloudflare 正常 · Zone ${res.zone_name}` : 'Cloudflare 连接正常'
   } catch (e) {
@@ -201,9 +239,10 @@ async function testCF() {
   }
 }
 
-function clearCFToken() {
+async function clearCFTokenAndSave() {
   form.cf_api_token = 'clear'
   form.cf_token_set = false
+  await saveCFSettings()
 }
 
 async function changePassword() {
@@ -216,7 +255,7 @@ async function changePassword() {
     error.value = '新密码至少 6 位'
     return
   }
-  loading.value = true
+  savingPw.value = true
   try {
     await api('/api/admin/admin-password', {
       method: 'POST',
@@ -234,7 +273,7 @@ async function changePassword() {
   } catch (e) {
     error.value = e.message
   } finally {
-    loading.value = false
+    savingPw.value = false
   }
 }
 
@@ -348,7 +387,9 @@ onMounted(load)
         </div>
         <p class="help-text">PNG/SVG/WebP，建议 ≤100KB。清空后恢复名称首字图标。</p>
       </div>
-      <button class="btn btn-primary" :disabled="loading" @click="saveSettings">保存</button>
+      <button type="button" class="btn btn-primary" :disabled="savingBrand" @click="saveBrandSettings">
+        {{ savingBrand ? '保存中…' : '保存' }}
+      </button>
     </div>
   </div>
 
@@ -390,16 +431,18 @@ onMounted(load)
         节点弹窗点「CF 添加/更新解析」即可把公网 IP 写到接入域名。
       </p>
       <div class="row-actions">
-        <button class="btn btn-primary" :disabled="loading" @click="saveSettings">保存 CF 配置</button>
-        <button class="btn btn-ghost" :disabled="loading || cfTesting" @click="testCF">
+        <button type="button" class="btn btn-primary" :disabled="savingCF || cfTesting" @click="saveCFSettings">
+          {{ savingCF ? '保存中…' : '保存 CF 配置' }}
+        </button>
+        <button type="button" class="btn btn-ghost" :disabled="savingCF || cfTesting" @click="testCF">
           {{ cfTesting ? '测试中…' : '测试连接' }}
         </button>
         <button
           v-if="form.cf_token_set"
           class="btn btn-ghost"
           type="button"
-          :disabled="loading"
-          @click="clearCFToken(); saveSettings()"
+          :disabled="savingCF || cfTesting"
+          @click="clearCFTokenAndSave"
         >
           清除 Token
         </button>
@@ -415,7 +458,9 @@ onMounted(load)
           JSON 快照：设置 / 节点（无 token）/ 隧道 / 用户
         </div>
       </div>
-      <button class="btn btn-ghost btn-sm" :disabled="loading" @click="downloadBackup">下载备份</button>
+      <button type="button" class="btn btn-ghost btn-sm" :disabled="backupLoading" @click="downloadBackup">
+        {{ backupLoading ? '导出中…' : '下载备份' }}
+      </button>
     </div>
     <div class="panel-bd" style="padding:14px 16px">
       <p class="help-text" style="margin:0">
@@ -454,7 +499,9 @@ onMounted(load)
       <p class="help-text" style="margin:12px 0 14px">
         改密立即生效。勿开 <code class="mono">PANEL_ADMIN_FORCE_SYNC=1</code>，否则重启会用 env 覆盖。
       </p>
-      <button class="btn btn-primary" :disabled="loading" @click="changePassword">修改密码</button>
+      <button type="button" class="btn btn-primary" :disabled="savingPw" @click="changePassword">
+        {{ savingPw ? '提交中…' : '修改密码' }}
+      </button>
     </div>
   </div>
 

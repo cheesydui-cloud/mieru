@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.34] - 2026-08-02
+
+### 设置页保存按钮互不影响
+
+- 「保存」面板品牌 与 「保存 CF 配置」拆成独立请求状态
+- 点 CF 保存时，上方「保存」不再一起变灰/抖动
+- 改密 / 备份下载各自 loading，互不抢用
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.34 bash
+```
+
 ## [0.4.33] - 2026-08-02
 
 ### 侧栏视觉重设计
