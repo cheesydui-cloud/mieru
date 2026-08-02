@@ -20,7 +20,13 @@ const form = reactive({
   panel_url_set: false,
   version: '',
   admin_user: 'admin',
+  cf_zone_id: '',
+  cf_api_token: '',
+  cf_token_set: false,
+  cf_configured: false,
+  cf_proxied_default: false,
 })
+const cfTesting = ref(false)
 const pw = reactive({
   current_password: '',
   new_password: '',
@@ -60,6 +66,12 @@ async function load() {
     form.panel_url_set = !!s.panel_url_set
     form.version = s.version || ''
     form.admin_user = s.admin_user || 'admin'
+    form.cf_zone_id = s.cf_zone_id || ''
+    form.cf_token_set = !!s.cf_token_set
+    form.cf_configured = !!s.cf_configured
+    form.cf_proxied_default = !!s.cf_proxied_default
+    // never echo real token; placeholder if set
+    form.cf_api_token = s.cf_token_set ? '********' : ''
     pw.username = form.admin_user
     securityHints.value = Array.isArray(s.security_hints) ? s.security_hints : []
     jwtDefault.value = !!s.jwt_is_default
@@ -131,20 +143,35 @@ async function saveSettings() {
   loading.value = true
   error.value = ''
   try {
+    const body = {
+      panel_url: form.panel_url,
+      panel_name: form.panel_name,
+      panel_subtitle: form.panel_subtitle,
+      panel_favicon: form.panel_favicon,
+      cf_zone_id: form.cf_zone_id,
+      cf_proxied_default: !!form.cf_proxied_default,
+    }
+    // only send token when user typed a new one / clear (not placeholder)
+    const tok = (form.cf_api_token || '').trim()
+    if (tok === 'clear') {
+      body.cf_api_token = 'clear'
+    } else if (tok && tok !== '********') {
+      body.cf_api_token = tok
+    }
+    // empty + was set → keep existing (omit field)
     const res = await api('/api/admin/settings', {
       method: 'PUT',
-      body: JSON.stringify({
-        panel_url: form.panel_url,
-        panel_name: form.panel_name,
-        panel_subtitle: form.panel_subtitle,
-        panel_favicon: form.panel_favicon,
-      }),
+      body: JSON.stringify(body),
     })
     form.panel_url = res.panel_url
     form.panel_name = res.panel_name
     form.panel_subtitle = res.panel_subtitle || ''
     form.panel_favicon = res.panel_favicon || ''
     form.panel_url_set = true
+    form.cf_configured = !!res.cf_configured
+    form.cf_token_set = !!res.cf_token_set
+    form.cf_zone_id = res.cf_zone_id || form.cf_zone_id
+    form.cf_api_token = form.cf_token_set ? '********' : ''
     setBrandMeta({
       name: res.panel_name,
       subtitle: res.panel_subtitle,
@@ -157,6 +184,26 @@ async function saveSettings() {
   } finally {
     loading.value = false
   }
+}
+
+async function testCF() {
+  cfTesting.value = true
+  error.value = ''
+  try {
+    // save first if user typed new token
+    await saveSettings()
+    const res = await api('/api/admin/cloudflare/test', { method: 'POST', body: '{}' })
+    toast.value = res.zone_name ? `Cloudflare 正常 · Zone ${res.zone_name}` : 'Cloudflare 连接正常'
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    cfTesting.value = false
+  }
+}
+
+function clearCFToken() {
+  form.cf_api_token = 'clear'
+  form.cf_token_set = false
 }
 
 async function changePassword() {
@@ -302,6 +349,61 @@ onMounted(load)
         <p class="help-text">PNG/SVG/WebP，建议 ≤100KB。清空后恢复名称首字图标。</p>
       </div>
       <button class="btn btn-primary" :disabled="loading" @click="saveSettings">保存</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-hd">
+      <div>
+        <h2>Cloudflare</h2>
+        <div class="muted" style="font-size:12px;margin-top:3px">
+          新建/编辑节点时一键添加域名 A 记录 · API Token 需 Zone.DNS 编辑权限
+        </div>
+      </div>
+      <span class="badge" :class="form.cf_configured ? 'ok' : 'warn'">
+        {{ form.cf_configured ? '已配置' : '未配置' }}
+      </span>
+    </div>
+    <div class="panel-bd" style="padding:16px">
+      <div class="form-grid">
+        <div class="field">
+          <label>Zone ID</label>
+          <input v-model="form.cf_zone_id" class="mono" placeholder="Cloudflare 域名 Zone ID" />
+        </div>
+        <div class="field">
+          <label>API Token</label>
+          <input
+            v-model="form.cf_api_token"
+            type="password"
+            autocomplete="off"
+            :placeholder="form.cf_token_set ? '已保存（留空不改，输入新 Token 覆盖）' : 'Bearer Token'"
+          />
+        </div>
+      </div>
+      <label class="muted" style="display:flex;align-items:center;gap:8px;margin:12px 0;font-size:13px">
+        <input type="checkbox" v-model="form.cf_proxied_default" />
+        默认开启橙云代理（入口自定义端口请勿开，建议仅 DNS）
+      </label>
+      <p class="help-text" style="margin:0 0 12px">
+        Token 创建：Cloudflare → My Profile → API Tokens → Create Token →
+        权限 <code class="mono">Zone.DNS Edit</code> + 指定 Zone。
+        节点弹窗点「CF 添加/更新解析」即可把公网 IP 写到接入域名。
+      </p>
+      <div class="row-actions">
+        <button class="btn btn-primary" :disabled="loading" @click="saveSettings">保存 CF 配置</button>
+        <button class="btn btn-ghost" :disabled="loading || cfTesting" @click="testCF">
+          {{ cfTesting ? '测试中…' : '测试连接' }}
+        </button>
+        <button
+          v-if="form.cf_token_set"
+          class="btn btn-ghost"
+          type="button"
+          :disabled="loading"
+          @click="clearCFToken(); saveSettings()"
+        >
+          清除 Token
+        </button>
+      </div>
     </div>
   </div>
 

@@ -64,7 +64,7 @@ onUnmounted(() => clearInterval(timer))
             <span>{{ getUsername() }}</span>
           </div>
         </div>
-        <button class="btn btn-ghost btn-sm" @click="logout">退出</button>
+        <button class="btn btn-primary btn-sm" @click="logout">退出登录</button>
       </div>
 
       <div v-if="error" class="error">{{ error }}</div>

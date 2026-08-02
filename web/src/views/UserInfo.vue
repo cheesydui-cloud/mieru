@@ -35,6 +35,22 @@ const shareURL = computed(() => info.value?.share_url || '')
 const mihomoYAML = computed(() => info.value?.mihomo_yaml || '')
 const entries = computed(() => (Array.isArray(info.value?.entries) ? info.value.entries : []))
 
+/** Query page: host only, never show :port */
+function entryHostOnly(raw) {
+  const s = String(raw || '').trim()
+  if (!s) return ''
+  // [ipv6]:port
+  if (s.startsWith('[')) {
+    const m = s.match(/^\[([^\]]+)\](?::\d+)?$/)
+    return m ? m[1] : s
+  }
+  // host:port (single colon, not bare ipv6)
+  if (/^[^:]+:\d+$/.test(s)) return s.replace(/:\d+$/, '')
+  return s
+}
+
+const entryDisplay = computed(() => entryHostOnly(info.value?.entry))
+
 async function makeQR(text) {
   if (!text) return ''
   return QRCode.toDataURL(text, {
@@ -87,6 +103,22 @@ async function load() {
   } finally {
     loading.value = false
   }
+}
+
+function leavePage() {
+  // Public capability URL — no session. Close tab if possible, else blank.
+  try {
+    window.close()
+  } catch {
+    /* ignore */
+  }
+  setTimeout(() => {
+    try {
+      window.location.replace('about:blank')
+    } catch {
+      window.location.href = 'about:blank'
+    }
+  }, 120)
 }
 
 async function copy(text) {
@@ -161,7 +193,7 @@ onUnmounted(() => clearInterval(timer))
 <template>
   <div class="login-page user-info-page">
     <div class="user-info-wrap">
-      <div class="user-info-top">
+      <div class="user-info-top" style="display:flex;justify-content:space-between;align-items:center;gap:12px">
         <div class="brand" style="padding: 0">
           <div
             v-if="brand.faviconData"
@@ -174,6 +206,14 @@ onUnmounted(() => clearInterval(timer))
             <span>账号信息</span>
           </div>
         </div>
+        <button
+          type="button"
+          class="btn btn-ghost btn-sm"
+          title="关闭本页（查询页为公开链接，无登录态）"
+          @click="leavePage"
+        >
+          退出
+        </button>
       </div>
 
       <div v-if="toast" class="toast" @click="toast = ''">{{ toast }}</div>
@@ -214,8 +254,8 @@ onUnmounted(() => clearInterval(timer))
               </dd>
               <dt v-if="info.route_name">隧道</dt>
               <dd v-if="info.route_name">{{ info.route_name }}</dd>
-              <dt v-if="info.entry">入口</dt>
-              <dd v-if="info.entry" class="mono">{{ info.entry }}</dd>
+              <dt v-if="entryDisplay">入口</dt>
+              <dd v-if="entryDisplay" class="mono">{{ entryDisplay }}</dd>
               <dt v-if="info.note">备注</dt>
               <dd v-if="info.note">{{ info.note }}</dd>
             </dl>
@@ -245,7 +285,7 @@ onUnmounted(() => clearInterval(timer))
             <div v-if="entries.length > 1" class="field">
               <label>全部入口</label>
               <div v-for="(e, i) in entries" :key="i" class="mono entry-row">
-                <span>{{ e.name }} · {{ e.host }}:{{ e.port }}</span>
+                <span>{{ e.name }} · {{ e.host }}</span>
                 <button class="btn btn-link btn-sm" type="button" @click="copy(e.url)">复制</button>
               </div>
             </div>

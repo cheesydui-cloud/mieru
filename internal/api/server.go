@@ -17,12 +17,13 @@ import (
 		"sync"
 		"time"
 
-	"github.com/cheesydui-cloud/mieru/internal/auth"
-	"github.com/cheesydui-cloud/mieru/internal/config"
-	"github.com/cheesydui-cloud/mieru/internal/configgen"
-	"github.com/cheesydui-cloud/mieru/internal/model"
-	"github.com/cheesydui-cloud/mieru/internal/store"
-	"github.com/cheesydui-cloud/mieru/web"
+"github.com/cheesydui-cloud/mieru/internal/auth"
+		"github.com/cheesydui-cloud/mieru/internal/cloudflare"
+		"github.com/cheesydui-cloud/mieru/internal/config"
+		"github.com/cheesydui-cloud/mieru/internal/configgen"
+		"github.com/cheesydui-cloud/mieru/internal/model"
+		"github.com/cheesydui-cloud/mieru/internal/store"
+		"github.com/cheesydui-cloud/mieru/web"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -299,13 +300,15 @@ admin.POST("/users/:id/display-multiplier", s.setUserDisplayMultiplier)
 			admin.GET("/rebuild-status", s.getRebuildStatus)
 			admin.GET("/backup", s.exportBackup)
 
-			admin.GET("/settings", s.getSettings)
-			admin.PUT("/settings", s.putSettings)
-			admin.POST("/admin-password", s.changeAdminPassword)
-			admin.GET("/nodes/:id/install", s.nodeInstallCmd)
-			admin.GET("/diagnose", s.diagnose)
-			admin.GET("/nodes/:id/desired", s.nodeDesiredConfig)
-		}
+admin.GET("/settings", s.getSettings)
+				admin.PUT("/settings", s.putSettings)
+				admin.POST("/admin-password", s.changeAdminPassword)
+				admin.POST("/cloudflare/dns", s.cloudflareUpsertDNS)
+				admin.POST("/cloudflare/test", s.cloudflareTest)
+				admin.GET("/nodes/:id/install", s.nodeInstallCmd)
+				admin.GET("/diagnose", s.diagnose)
+				admin.GET("/nodes/:id/desired", s.nodeDesiredConfig)
+			}
 
 	portal := r.Group("/api/me")
 	portal.Use(s.requireUserOrAdmin())
@@ -2853,15 +2856,12 @@ sample, hasRate := s.store.GetRate(u.ID)
 			routeName = r.Name
 		}
 	}
-	if eps := s.resolveUserMitaEndpoints(u); len(eps) > 0 {
-		entryDisplay = fmt.Sprintf("%s:%d", eps[0].Host, eps[0].Port)
-	} else if strings.TrimSpace(u.EntryHost) != "" {
-		if u.EntryPort > 0 {
-			entryDisplay = fmt.Sprintf("%s:%d", u.EntryHost, u.EntryPort)
-		} else {
-			entryDisplay = u.EntryHost
+// Query page: show host only (no :port) — port stays in QR/YAML/share.
+		if eps := s.resolveUserMitaEndpoints(u); len(eps) > 0 {
+			entryDisplay = strings.TrimSpace(eps[0].Host)
+		} else if strings.TrimSpace(u.EntryHost) != "" {
+			entryDisplay = strings.TrimSpace(u.EntryHost)
 		}
-	}
 
 	base := s.publicBase(c)
 	var expireStr interface{}
@@ -3037,22 +3037,28 @@ func (s *Server) publicBrand(c *gin.Context) {
 }
 
 func (s *Server) getSettings(c *gin.Context) {
-	m, err := s.store.GetSettings("panel_url", "panel_name", "panel_subtitle", "panel_favicon", configgen.SettingBackboneUser)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	panelURL := m["panel_url"]
-	if panelURL == "" {
-		panelURL = s.publicBase(c)
-	}
-	name := m["panel_name"]
-	if name == "" {
-		name = "Mieru"
-	}
-	sub := strings.TrimSpace(m["panel_subtitle"])
-jwtDefault := s.cfg.JWTSecret == "change-me-in-production-please" || s.cfg.JWTSecret == "change-me-in-production"
+		m, err := s.store.GetSettings(
+			"panel_url", "panel_name", "panel_subtitle", "panel_favicon",
+			configgen.SettingBackboneUser,
+			"cf_api_token", "cf_zone_id", "cf_proxied_default",
+		)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		panelURL := m["panel_url"]
+		if panelURL == "" {
+			panelURL = s.publicBase(c)
+		}
+		name := m["panel_name"]
+		if name == "" {
+			name = "Mieru"
+		}
+		sub := strings.TrimSpace(m["panel_subtitle"])
+		jwtDefault := s.cfg.JWTSecret == "change-me-in-production-please" || s.cfg.JWTSecret == "change-me-in-production"
 		corsWide := len(s.cfg.CORSOrigins) == 1 && s.cfg.CORSOrigins[0] == "*"
+		cfTok := strings.TrimSpace(m["cf_api_token"])
+		cfZone := strings.TrimSpace(m["cf_zone_id"])
 		c.JSON(http.StatusOK, gin.H{
 			"panel_url":       panelURL,
 			"panel_name":      name,
@@ -3066,6 +3072,10 @@ jwtDefault := s.cfg.JWTSecret == "change-me-in-production-please" || s.cfg.JWTSe
 			"jwt_is_default":  jwtDefault,
 			"cors_wide_open":  corsWide,
 			"cors_origins":    s.cfg.CORSOrigins,
+			"cf_configured":   cfTok != "" && cfZone != "",
+			"cf_zone_id":      cfZone,
+			"cf_token_set":    cfTok != "",
+			"cf_proxied_default": m["cf_proxied_default"] == "1" || strings.EqualFold(m["cf_proxied_default"], "true"),
 			"security_hints": func() []string {
 				hints := []string{}
 				if jwtDefault {
@@ -3080,72 +3090,181 @@ jwtDefault := s.cfg.JWTSecret == "change-me-in-production-please" || s.cfg.JWTSe
 	}
 
 func (s *Server) putSettings(c *gin.Context) {
-	var req struct {
-		PanelURL      string `json:"panel_url"`
-		PanelName     string `json:"panel_name"`
-		PanelSubtitle string `json:"panel_subtitle"`
-		PanelFavicon  string `json:"panel_favicon"` // data URL or empty to clear
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
-		return
-	}
-	url := normalizePanelURL(req.PanelURL)
-	if url == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "panel_url required (e.g. http://IP:8080 or https://panel.example.com)"})
-		return
-	}
-	if err := s.store.SetSetting("panel_url", url); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	name := strings.TrimSpace(req.PanelName)
-	// Collapse internal whitespace runs for display consistency.
-	name = strings.Join(strings.Fields(name), " ")
-	if name == "" {
-		name = "Mieru"
-	}
-	// Avoid absurdly long sidebar titles (UTF-8 runes).
-	if rn := []rune(name); len(rn) > 32 {
-		name = string(rn[:32])
-	}
-	if err := s.store.SetSetting("panel_name", name); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	sub := strings.Join(strings.Fields(strings.TrimSpace(req.PanelSubtitle)), " ")
-	if rn := []rune(sub); len(rn) > 80 {
-		sub = string(rn[:80])
-	}
-	if err := s.store.SetSetting("panel_subtitle", sub); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	// favicon: allow empty (clear) or data:image/...; base64,... max ~200KB raw in settings
-	fav := strings.TrimSpace(req.PanelFavicon)
-	if fav != "" {
-		if !strings.HasPrefix(fav, "data:image/") {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "favicon 须为 data:image/... 格式"})
+		var req struct {
+			PanelURL      string `json:"panel_url"`
+			PanelName     string `json:"panel_name"`
+			PanelSubtitle string `json:"panel_subtitle"`
+			PanelFavicon  string `json:"panel_favicon"` // data URL or empty to clear
+			// Cloudflare (optional). Empty cf_api_token keeps existing; "clear" removes.
+			CFAPIToken       *string `json:"cf_api_token"`
+			CFZoneID         *string `json:"cf_zone_id"`
+			CFProxiedDefault *bool   `json:"cf_proxied_default"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
 			return
 		}
-		if len(fav) > 280000 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "图标过大（请用 ≤100KB 的 PNG/SVG）"})
+		url := normalizePanelURL(req.PanelURL)
+		if url == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "panel_url required (e.g. http://IP:8080 or https://panel.example.com)"})
 			return
 		}
+		if err := s.store.SetSetting("panel_url", url); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		name := strings.TrimSpace(req.PanelName)
+		// Collapse internal whitespace runs for display consistency.
+		name = strings.Join(strings.Fields(name), " ")
+		if name == "" {
+			name = "Mieru"
+		}
+		// Avoid absurdly long sidebar titles (UTF-8 runes).
+		if rn := []rune(name); len(rn) > 32 {
+			name = string(rn[:32])
+		}
+		if err := s.store.SetSetting("panel_name", name); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		sub := strings.Join(strings.Fields(strings.TrimSpace(req.PanelSubtitle)), " ")
+		if rn := []rune(sub); len(rn) > 80 {
+			sub = string(rn[:80])
+		}
+		if err := s.store.SetSetting("panel_subtitle", sub); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		// favicon: allow empty (clear) or data:image/...; base64,... max ~200KB raw in settings
+		fav := strings.TrimSpace(req.PanelFavicon)
+		if fav != "" {
+			if !strings.HasPrefix(fav, "data:image/") {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "favicon 须为 data:image/... 格式"})
+				return
+			}
+			if len(fav) > 280000 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "图标过大（请用 ≤100KB 的 PNG/SVG）"})
+				return
+			}
+		}
+		if err := s.store.SetSetting("panel_favicon", fav); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if req.CFZoneID != nil {
+			if err := s.store.SetSetting("cf_zone_id", strings.TrimSpace(*req.CFZoneID)); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		}
+		if req.CFAPIToken != nil {
+			tok := strings.TrimSpace(*req.CFAPIToken)
+			if tok == "" || strings.EqualFold(tok, "clear") {
+				_ = s.store.SetSetting("cf_api_token", "")
+			} else if tok != "********" && !strings.HasPrefix(tok, "••••") {
+				if err := s.store.SetSetting("cf_api_token", tok); err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					return
+				}
+			}
+		}
+		if req.CFProxiedDefault != nil {
+			v := "0"
+			if *req.CFProxiedDefault {
+				v = "1"
+			}
+			_ = s.store.SetSetting("cf_proxied_default", v)
+		}
+		s.store.Audit("admin", "update_settings", "panel", url)
+		cfTok, _ := s.store.GetSetting("cf_api_token")
+		cfZone, _ := s.store.GetSetting("cf_zone_id")
+		c.JSON(http.StatusOK, gin.H{
+			"ok":             true,
+			"panel_url":      url,
+			"panel_name":     name,
+			"panel_subtitle": sub,
+			"panel_favicon":  fav,
+			"cf_configured":  strings.TrimSpace(cfTok) != "" && strings.TrimSpace(cfZone) != "",
+			"cf_zone_id":     strings.TrimSpace(cfZone),
+			"cf_token_set":   strings.TrimSpace(cfTok) != "",
+		})
 	}
-	if err := s.store.SetSetting("panel_favicon", fav); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
+
+	func (s *Server) cfClient() (*cloudflare.Client, error) {
+		tok, _ := s.store.GetSetting("cf_api_token")
+		zone, _ := s.store.GetSetting("cf_zone_id")
+		if strings.TrimSpace(tok) == "" || strings.TrimSpace(zone) == "" {
+			return nil, fmt.Errorf("请先在设置页填写 Cloudflare API Token 与 Zone ID")
+		}
+		return cloudflare.New(tok, zone), nil
 	}
-	s.store.Audit("admin", "update_settings", "panel", url)
-	c.JSON(http.StatusOK, gin.H{
-		"ok":             true,
-		"panel_url":      url,
-		"panel_name":     name,
-		"panel_subtitle": sub,
-		"panel_favicon":  fav,
-	})
-}
+
+	// cloudflareUpsertDNS creates/updates A/AAAA for a node domain → IP.
+	// Body: { name, ip, proxied? }. Proxied defaults to false (DNS only) for custom ports.
+	func (s *Server) cloudflareUpsertDNS(c *gin.Context) {
+		var req struct {
+			Name    string `json:"name"`
+			IP      string `json:"ip"`
+			Proxied *bool  `json:"proxied"`
+		}
+		if err := c.BindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
+			return
+		}
+		cli, err := s.cfClient()
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		proxied := false
+		if req.Proxied != nil {
+			proxied = *req.Proxied
+		} else {
+			v, _ := s.store.GetSetting("cf_proxied_default")
+			proxied = v == "1" || strings.EqualFold(v, "true")
+		}
+		// Custom non-HTTP ports cannot go through orange-cloud proxy.
+		if proxied {
+			// still allow if user insists, but warn in response
+		}
+		rec, err := cli.UpsertA(req.Name, req.IP, proxied)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		s.store.Audit("admin", "cf_dns_upsert", req.Name, fmt.Sprintf("%s → %s proxied=%v", rec.Type, req.IP, proxied))
+		note := ""
+		if proxied {
+			note = "已开启 CF 代理（橙云）。自定义非 80/443 端口可能不可用，入口建议关闭代理（仅 DNS）。"
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"ok":      true,
+			"record":  rec,
+			"name":    rec.Name,
+			"type":    rec.Type,
+			"content": rec.Content,
+			"proxied": rec.Proxied,
+			"note":    note,
+		})
+	}
+
+	func (s *Server) cloudflareTest(c *gin.Context) {
+		cli, err := s.cfClient()
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if err := cli.VerifyToken(); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Token 无效: " + err.Error()})
+			return
+		}
+		zn, err := cli.ZoneName()
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Zone 无效: " + err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "zone_name": zn})
+	}
 
 func (s *Server) changeAdminPassword(c *gin.Context) {
 	var req struct {

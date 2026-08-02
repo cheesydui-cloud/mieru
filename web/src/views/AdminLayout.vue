@@ -114,7 +114,7 @@ onUnmounted(() => {
         </div>
         <div class="topbar-actions">
           <span v-if="version" class="badge mono">{{ version }}</span>
-          <button class="btn btn-ghost btn-sm" @click="logout">退出</button>
+          <button class="btn btn-ghost btn-sm" @click="logout" title="退出登录">退出登录</button>
         </div>
       </header>
       <main class="content">

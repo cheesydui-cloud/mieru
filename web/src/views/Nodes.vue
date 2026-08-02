@@ -34,6 +34,12 @@ const form = reactive({
   port_max: '',
 })
 
+// Cloudflare quick DNS from node modal
+const cfConfigured = ref(false)
+const cfBusy = ref(false)
+const cfProxied = ref(false)
+const cfMsg = ref('')
+
 function isFrontRole(role) {
   return role === 'relay' || role === 'entry'
 }
@@ -175,12 +181,60 @@ async function load() {
   }
 }
 
+async function loadCFStatus() {
+  try {
+    const s = await api('/api/admin/settings')
+    cfConfigured.value = !!s.cf_configured
+    cfProxied.value = !!s.cf_proxied_default
+  } catch {
+    cfConfigured.value = false
+  }
+}
+
+/** Cloudflare: create/update A record hostname → public_ip, then keep form.hostname */
+async function cfAddDomain() {
+  cfMsg.value = ''
+  const name = (form.hostname || '').trim()
+  const ip = (form.public_ip || '').trim()
+  if (!name) {
+    error.value = '请先填写接入域名'
+    return
+  }
+  if (!ip) {
+    error.value = '请先填写公网 IP（CF A 记录指向）'
+    return
+  }
+  if (!cfConfigured.value) {
+    error.value = '请先在「设置」配置 Cloudflare API Token 与 Zone ID'
+    return
+  }
+  cfBusy.value = true
+  try {
+    const res = await api('/api/admin/cloudflare/dns', {
+      method: 'POST',
+      body: JSON.stringify({ name, ip, proxied: !!cfProxied.value }),
+    })
+    form.hostname = res.name || name
+    cfMsg.value = `CF 已写入 ${res.type || 'A'} ${res.name || name} → ${res.content || ip}${
+      res.proxied ? '（橙云代理）' : '（仅 DNS）'
+    }`
+    if (res.note) cfMsg.value += ' · ' + res.note
+    toast.value = 'Cloudflare 域名已添加'
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    cfBusy.value = false
+  }
+}
+
 function openCreate() {
   blankForm()
   created.value = null
   editingId.value = ''
   mode.value = 'create'
+  cfMsg.value = ''
   show.value = true
+  loadCFStatus()
 }
 
 function openEdit(n) {
@@ -188,8 +242,10 @@ function openEdit(n) {
   created.value = null
   editingId.value = n.id
   mode.value = 'edit'
+  cfMsg.value = ''
   show.value = true
   error.value = ''
+  loadCFStatus()
 }
 
 function payload() {
@@ -695,7 +751,7 @@ onUnmounted(() => {
             </div>
             <div class="field">
               <label>接入域名（可选）</label>
-              <input v-model="form.hostname" placeholder="可选" />
+              <input v-model="form.hostname" placeholder="如 node.example.com" />
             </div>
             <div class="field">
               <label>区域</label>
@@ -706,6 +762,50 @@ onUnmounted(() => {
               <input v-model="form.tags" />
             </div>
           </div>
+
+          <div
+            class="field"
+            style="margin-top:12px;padding:12px;border:1px dashed var(--border-line);border-radius:8px;background:var(--bg-elevated)"
+          >
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+              <div>
+                <strong style="font-size:13px">Cloudflare 一键加域名</strong>
+                <div class="muted" style="font-size:12px;margin-top:2px">
+                  用公网 IP 写 A/AAAA 到接入域名
+                  <span v-if="!cfConfigured" style="color:var(--warning)"> · 未配置 Token，请先去设置</span>
+                  <span v-else style="color:var(--success)"> · 已配置</span>
+                </div>
+              </div>
+              <label class="muted" style="font-size:12px;display:flex;align-items:center;gap:6px">
+                <input type="checkbox" v-model="cfProxied" />
+                橙云代理（入口自定义端口请勿勾）
+              </label>
+            </div>
+            <div class="row-actions" style="margin-top:10px;flex-wrap:wrap">
+              <button
+                type="button"
+                class="btn btn-primary btn-sm"
+                :disabled="cfBusy || !form.hostname || !form.public_ip"
+                @click="cfAddDomain"
+              >
+                {{ cfBusy ? '写入 CF…' : 'CF 添加 / 更新解析' }}
+              </button>
+              <button
+                v-if="!cfConfigured"
+                type="button"
+                class="btn btn-ghost btn-sm"
+                @click="router.push('/settings')"
+              >
+                去设置 CF
+              </button>
+            </div>
+            <p v-if="cfMsg" class="help-text" style="margin-top:8px;color:var(--success)">{{ cfMsg }}</p>
+            <p class="help-text" style="margin-top:6px">
+              写入后域名会填入上方「接入域名」，客户端优先用域名。建议<strong>仅 DNS</strong>（灰云），
+              橙云只适合 80/443 HTTP。
+            </p>
+          </div>
+
           <p class="help-text">
             <template v-if="isFrontRole(form.role)">
               前置填<strong>端口池</strong>（如 10401–10499）：每条隧道自动占一个端口转发到对应落地；

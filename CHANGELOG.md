@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.4.31] - 2026-08-02
+
+### 查询页 / 退出 / Cloudflare 加域名
+
+- **查询页入口只显示主机名**，不再展示 `:端口`（扫码 / YAML 仍带完整端口）
+- 查询页右上角增加 **退出**（关闭页/空白页）；管理台与用户 Portal 按钮改为「退出登录」
+- **Cloudflare 一键加域名**
+  - 设置页配置 API Token + Zone ID
+  - 新建/编辑节点：填公网 IP + 接入域名 →「CF 添加/更新解析」写 A/AAAA
+  - 默认仅 DNS（灰云）；橙云可选但不建议用于自定义端口入口
+  - API：`POST /api/admin/cloudflare/dns`、`POST /api/admin/cloudflare/test`
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.31 bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | MIERU_VERSION=v0.4.31 bash
+```
+
 ## [0.4.30] - 2026-08-02
 
 ### 运营优化合集（P0–P3）
