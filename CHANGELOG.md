@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.27] - 2026-08-03
+
+### 填了域名就用域名当入口
+
+- 节点填了 **域名（hostname）** 时，查询页「入口」、扫码 `mierus://`、订阅/YAML 客户端地址优先用域名
+- **未填域名** 时仍显示公网 IP（与以前一致）
+- 占位域名（`*.example.com` 等）仍会回退到 IP，避免无效主机名
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.27 bash
+```
+
+升完强制刷新浏览器。改完节点域名后建议点一次「重建配置」让订阅/YAML 同步。
+
 ## [0.4.26] - 2026-08-02
 
 ### 查询页显示倍率

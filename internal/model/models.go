@@ -207,17 +207,11 @@ func (n *Node) PublicHost() string {
 	return strings.TrimSpace(n.PublicIP)
 }
 
-// ClientHost is what end-user mierus:// links should dial.
-// Prefer public IP (often the operator front/IPLC entry) over hostname —
-// hostnames are easy to leave as placeholders (e.g. e1.example.com).
-// Falls back to PublicHost. Never returns private_ip.
+// ClientHost is what end-user mierus:// links / query-page entry should dial.
+// Same priority as PublicHost: filled non-placeholder hostname (domain) first,
+// else public IP. Never returns private_ip.
+// (Operators who leave hostname empty keep IP-only behaviour.)
 func (n *Node) ClientHost() string {
-	if n == nil {
-		return ""
-	}
-	if ip := strings.TrimSpace(n.PublicIP); ip != "" {
-		return ip
-	}
 	return n.PublicHost()
 }
 
