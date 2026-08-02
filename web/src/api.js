@@ -66,7 +66,12 @@ export async function api(path, options = {}) {
       clearSession()
       if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
         const next = encodeURIComponent(window.location.pathname + window.location.search)
-        window.location.replace(`/login?next=${next}`)
+        try {
+          sessionStorage.setItem('mieru_session_msg', '登录已过期，请重新登录')
+        } catch {
+          /* ignore */
+        }
+        window.location.replace(`/login?next=${next}&reason=expired`)
       }
     }
     const msg = (data && data.error) || res.statusText || 'request failed'

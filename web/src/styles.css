@@ -859,6 +859,12 @@ code.mono {
   line-height: 1.55;
 }
 .issue-list li { margin: 2px 0; }
+.issue-click {
+  cursor: pointer;
+}
+.issue-click:hover {
+  text-decoration: underline;
+}
 
 .help-text {
   font-size: 12px;
@@ -866,3 +872,98 @@ code.mono {
   line-height: 1.55;
   margin: 0;
 }
+
+/* user status chips */
+.stat-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.stat-chip {
+  border: 1px solid var(--border-line);
+  background: var(--bg-surface);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.stat-chip strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.stat-chip:hover { background: var(--bg-hover); }
+.stat-chip.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.stat-chip.active strong { color: #fff; }
+.stat-chip.ok.active { background: #166534; border-color: #166534; }
+.stat-chip.warn.active { background: #b45309; border-color: #b45309; }
+.stat-chip.err.active { background: #b91c1c; border-color: #b91c1c; }
+
+/* routes path */
+.path-summary {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.route-row { cursor: pointer; }
+.route-row:hover td { background: var(--bg-hover); }
+
+/* advanced disclosure */
+.adv-block {
+  margin-top: 8px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  background: var(--bg-elevated);
+}
+.adv-block summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+/* dashboard tunnel edges */
+.topo-edges {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+}
+.topo-edge {
+  border: 1px solid var(--border-line);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  background: var(--bg-surface);
+  cursor: pointer;
+  display: grid;
+  gap: 6px;
+}
+.topo-edge:hover { background: var(--bg-hover); }
+.topo-edge.ok { border-color: #166534; background: #f0fdf4; }
+.topo-edge.warn { border-color: #b45309; background: #fffbeb; }
+.topo-edge.err { border-color: #b91c1c; background: #fef2f2; }
+.topo-edge .te-name { font-weight: 700; }
+.topo-edge .te-path {
+  font-size: 12.5px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.topo-edge .te-arrow { font-weight: 700; }
+.topo-edge .te-meta {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  font-size: 12px;
+}
+.card.clickable { cursor: pointer; }
+.card.clickable:hover { background: var(--bg-hover); }

@@ -1,14 +1,17 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
 import { api } from '../api'
-import { setBrandName } from '../brand'
+import { setBrandMeta } from '../brand'
 
 const error = ref('')
 const toast = ref('')
 const loading = ref(false)
+const audit = ref([])
 const form = reactive({
   panel_url: '',
   panel_name: '',
+  panel_subtitle: '',
+  panel_favicon: '',
   panel_url_set: false,
   version: '',
   admin_user: 'admin',
@@ -22,18 +25,46 @@ const pw = reactive({
 
 async function load() {
   try {
-    const s = await api('/api/admin/settings')
+    const [s, logs] = await Promise.all([
+      api('/api/admin/settings'),
+      api('/api/admin/audit').catch(() => []),
+    ])
     form.panel_url = s.panel_url || ''
     form.panel_name = s.panel_name || 'Mieru Panel'
-    if (s.panel_name) setBrandName(s.panel_name)
+    form.panel_subtitle = s.panel_subtitle || ''
+    form.panel_favicon = s.panel_favicon || ''
+    setBrandMeta({
+      name: s.panel_name,
+      subtitle: s.panel_subtitle,
+      faviconData: s.panel_favicon || '',
+    })
     form.panel_url_set = !!s.panel_url_set
     form.version = s.version || ''
     form.admin_user = s.admin_user || 'admin'
     pw.username = form.admin_user
+    audit.value = Array.isArray(logs) ? logs : []
     error.value = ''
   } catch (e) {
     error.value = e.message
   }
+}
+
+function onFaviconFile(ev) {
+  const f = ev.target.files && ev.target.files[0]
+  if (!f) return
+  if (f.size > 100 * 1024) {
+    error.value = '图标请 ≤100KB'
+    return
+  }
+  const reader = new FileReader()
+  reader.onload = () => {
+    form.panel_favicon = String(reader.result || '')
+  }
+  reader.readAsDataURL(f)
+}
+
+function clearFavicon() {
+  form.panel_favicon = ''
 }
 
 async function saveSettings() {
@@ -45,13 +76,22 @@ async function saveSettings() {
       body: JSON.stringify({
         panel_url: form.panel_url,
         panel_name: form.panel_name,
+        panel_subtitle: form.panel_subtitle,
+        panel_favicon: form.panel_favicon,
       }),
     })
     form.panel_url = res.panel_url
     form.panel_name = res.panel_name
+    form.panel_subtitle = res.panel_subtitle || ''
+    form.panel_favicon = res.panel_favicon || ''
     form.panel_url_set = true
-    setBrandName(res.panel_name)
-    toast.value = '设置已保存。侧栏名称与浏览器标题/图标已更新。'
+    setBrandMeta({
+      name: res.panel_name,
+      subtitle: res.panel_subtitle,
+      faviconData: res.panel_favicon || '',
+    })
+    toast.value = '设置已保存。侧栏名称、登录副标题与图标已更新。'
+    await load()
   } catch (e) {
     error.value = e.message
   } finally {
@@ -83,10 +123,22 @@ async function changePassword() {
     pw.current_password = ''
     pw.new_password = ''
     pw.new_password2 = ''
+    await load()
   } catch (e) {
     error.value = e.message
   } finally {
     loading.value = false
+  }
+}
+
+function fmtTime(t) {
+  if (!t) return '—'
+  try {
+    const d = new Date(t)
+    if (Number.isNaN(d.getTime())) return String(t).slice(0, 19)
+    return d.toLocaleString()
+  } catch {
+    return String(t)
   }
 }
 
@@ -105,27 +157,51 @@ onMounted(load)
     <div class="panel-hd">
       <div>
         <h2>面板</h2>
-        <div class="muted" style="font-size:12px;margin-top:3px">Agent 回连地址 · 安装命令基准</div>
+        <div class="muted" style="font-size:12px;margin-top:3px">Agent 回连地址 · 品牌 · 安装命令基准</div>
       </div>
       <span class="badge mono" v-if="form.version">{{ form.version }}</span>
     </div>
     <div class="panel-bd" style="padding:16px">
       <div class="field" style="margin-bottom:14px">
         <label>面板地址</label>
-        <input
-          v-model="form.panel_url"
-        />
+        <input v-model="form.panel_url" />
         <p class="help-text" style="margin-top:6px">
           带 http/https。只写 IP:端口 会自动补 http://。
           <span v-if="!form.panel_url_set" style="color:var(--warning)">尚未永久保存</span>
         </p>
       </div>
-      <div class="field" style="margin-bottom:16px">
+      <div class="field" style="margin-bottom:14px">
         <label>面板名称</label>
         <input v-model="form.panel_name" placeholder="例如：微动传媒" />
         <p class="help-text" style="margin-top:6px">
           显示在左侧栏、登录页、浏览器标签标题与图标首字。
         </p>
+      </div>
+      <div class="field" style="margin-bottom:14px">
+        <label>登录页副标题</label>
+        <input v-model="form.panel_subtitle" placeholder="管理节点、用户、隧道与落地计量" />
+      </div>
+      <div class="field" style="margin-bottom:16px">
+        <label>自定义图标（favicon / logo，可选）</label>
+        <div class="row-actions" style="align-items:center;gap:12px;margin-bottom:8px">
+          <div
+            class="brand-mark"
+            style="width:40px;height:40px;font-size:16px;overflow:hidden"
+          >
+            <img
+              v-if="form.panel_favicon"
+              :src="form.panel_favicon"
+              alt=""
+              style="width:100%;height:100%;object-fit:cover"
+            />
+            <span v-else>{{ (form.panel_name || 'M').slice(0, 1) }}</span>
+          </div>
+          <input type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp" @change="onFaviconFile" />
+          <button v-if="form.panel_favicon" type="button" class="btn btn-ghost btn-sm" @click="clearFavicon">
+            清除自定义
+          </button>
+        </div>
+        <p class="help-text">PNG/SVG/WebP，建议 ≤100KB。清空后恢复名称首字图标。</p>
       </div>
       <button class="btn btn-primary" :disabled="loading" @click="saveSettings">保存</button>
     </div>
@@ -161,6 +237,39 @@ onMounted(load)
         改密立即生效。勿开 <code class="mono">PANEL_ADMIN_FORCE_SYNC=1</code>，否则重启会用 env 覆盖。
       </p>
       <button class="btn btn-primary" :disabled="loading" @click="changePassword">修改密码</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-hd">
+      <div>
+        <h2>操作审计</h2>
+        <div class="muted" style="font-size:12px;margin-top:3px">最近 100 条 · 登录 / 改密 / 删节点用户等</div>
+      </div>
+      <button class="btn btn-ghost btn-sm" @click="load">刷新</button>
+    </div>
+    <div class="panel-bd">
+      <table class="data" v-if="audit.length">
+        <thead>
+          <tr>
+            <th>时间</th>
+            <th>操作者</th>
+            <th>动作</th>
+            <th>对象</th>
+            <th>详情</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="a in audit" :key="a.id">
+            <td class="mono" style="font-size:12px;white-space:nowrap">{{ fmtTime(a.created_at) }}</td>
+            <td>{{ a.actor }}</td>
+            <td class="mono">{{ a.action }}</td>
+            <td class="mono" style="font-size:12px">{{ a.target }}</td>
+            <td class="muted" style="font-size:12px">{{ a.detail || '—' }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div v-else class="empty">暂无审计记录</div>
     </div>
   </div>
 </template>

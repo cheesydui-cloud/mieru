@@ -52,7 +52,15 @@ onMounted(() => {
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand-mark">{{ mark }}</div>
+        <div class="brand-mark">
+          <img
+            v-if="brand.faviconData"
+            :src="brand.faviconData"
+            alt=""
+            style="width:100%;height:100%;object-fit:cover;border-radius:inherit"
+          />
+          <template v-else>{{ mark }}</template>
+        </div>
         <div class="brand-text">
           <strong :title="brand.name">{{ brand.name || 'Mieru' }}</strong>
           <span>控制台</span>

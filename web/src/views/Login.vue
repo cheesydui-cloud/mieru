@@ -10,10 +10,15 @@ const username = ref('admin')
 const password = ref('')
 const loading = ref(false)
 const error = ref('')
+const sessionNote = ref('')
 const mark = computed(() => brandMarkLetter(brand.name))
+const subtitle = computed(
+  () => brand.subtitle || '管理节点、用户、隧道与落地计量',
+)
 
 async function submit() {
   error.value = ''
+  sessionNote.value = ''
   loading.value = true
   try {
     const data = await api('/api/auth/login', {
@@ -36,6 +41,18 @@ async function submit() {
 
 onMounted(() => {
   loadBrand()
+  if (route.query.reason === 'expired') {
+    sessionNote.value = '登录已过期，请重新登录'
+  }
+  try {
+    const m = sessionStorage.getItem('mieru_session_msg')
+    if (m) {
+      sessionNote.value = m
+      sessionStorage.removeItem('mieru_session_msg')
+    }
+  } catch {
+    /* ignore */
+  }
 })
 </script>
 
@@ -43,13 +60,22 @@ onMounted(() => {
   <div class="login-page">
     <div class="login-card">
       <div class="brand" style="padding: 0 0 16px; border: none; min-height: auto">
-        <div class="brand-mark">{{ mark }}</div>
+        <div class="brand-mark">
+          <img
+            v-if="brand.faviconData"
+            :src="brand.faviconData"
+            alt=""
+            style="width:100%;height:100%;object-fit:cover;border-radius:inherit"
+          />
+          <template v-else>{{ mark }}</template>
+        </div>
         <div class="brand-text">
           <strong>{{ brand.name || 'Mieru' }} 控制台</strong>
         </div>
       </div>
       <h1>登录</h1>
-      <p>管理节点、用户、隧道与落地计量</p>
+      <p>{{ subtitle }}</p>
+      <div v-if="sessionNote" class="session-note">{{ sessionNote }}</div>
       <form class="stack" @submit.prevent="submit">
         <div class="field">
           <label>用户名</label>
@@ -67,3 +93,15 @@ onMounted(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+.session-note {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 13px;
+  border: 1px solid #f59e0b55;
+}
+</style>

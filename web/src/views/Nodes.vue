@@ -105,6 +105,27 @@ function roleLabel(role) {
   return m[role] || role
 }
 
+function heartbeatLabel(n) {
+  if (n.no_heartbeat || n.heartbeat_age_sec < 0 || n.heartbeat_age_sec == null) {
+    if (!n.last_seen) return '未心跳'
+    return '心跳超时'
+  }
+  const a = n.heartbeat_age_sec
+  if (a < 60) return `${a}s 前`
+  if (a < 3600) return `${Math.floor(a / 60)}m 前`
+  return `${Math.floor(a / 3600)}h 前`
+}
+
+function meteringLabel(n) {
+  if (!(n.role === 'exit' || n.role === 'hybrid')) return ''
+  if (n.traffic_reporting) {
+    const a = n.traffic_report_age_sec
+    if (a != null && a >= 0) return `计量开 · ${a}s 前`
+    return '计量开'
+  }
+  return n.metering_hint || '计量未上报'
+}
+
 function isFront(n) {
   return n.role === 'relay' || n.role === 'entry'
 }
@@ -314,8 +335,25 @@ function upgradeLabel(n) {
   if (st === 'pending' || n.upgrade_pending) return '排队中…'
   if (st === 'running') return '升级中…'
   if (upgrading.value[n.id]) return '推送中…'
+  if (st === 'error') return '重试升级'
   if (needsUpgrade(n)) return '升级'
   return '升级'
+}
+
+function upgradeRowHint(n) {
+  const st = n.upgrade_status || ''
+  if (st === 'error' && n.upgrade_error) return n.upgrade_error
+  if (st === 'pending' || n.upgrade_pending) {
+    return n.upgrade_target ? `排队 → v${n.upgrade_target}` : '升级排队中'
+  }
+  if (st === 'running') {
+    return n.upgrade_target ? `升级中 → v${n.upgrade_target}` : '升级中…'
+  }
+  if (st === 'ok' && n.upgrade_target) return `已升至 v${n.upgrade_target}`
+  if (n.config_stale) {
+    return `配置未生效 面板v${n.config_version}/Agent v${n.agent_config_version || '?'}`
+  }
+  return ''
 }
 
 function upgradeBusy(n) {
@@ -488,22 +526,43 @@ onUnmounted(() => {
         </tr>
       </thead>
       <tbody>
-        <tr v-for="n in tabNodes" :key="n.id">
+        <tr v-for="n in tabNodes" :key="n.id" :class="{ 'row-warn': n.no_heartbeat || n.config_stale }">
           <td>
             <div class="name-link">{{ n.name }}</div>
             <div class="muted mono" style="font-size:11px">{{ n.id }}</div>
             <div v-if="n.apply_error" class="apply-err" :title="n.apply_error">
               {{ n.apply_error }}
             </div>
+            <div v-if="upgradeRowHint(n)" class="apply-err" :title="upgradeRowHint(n)">
+              {{ upgradeRowHint(n) }}
+            </div>
           </td>
           <td>
             <span class="badge">{{ roleLabel(n.role) }}</span>
-            <div class="muted" style="font-size:11px;margin-top:2px">{{ n.role }}</div>
           </td>
           <td>
             <span class="badge" :class="statusBadge(n.status)">
               <span class="dot"></span>{{ statusLabel(n.status) }}
             </span>
+            <div
+              class="muted"
+              style="font-size:11px;margin-top:3px"
+              :style="n.no_heartbeat ? { color: 'var(--danger)', fontWeight: 600 } : {}"
+            >
+              {{ heartbeatLabel(n) }}
+            </div>
+            <div
+              v-if="n.role === 'exit' || n.role === 'hybrid'"
+              class="muted"
+              :title="n.metering_hint || ''"
+              :style="{
+                fontSize: '11px',
+                marginTop: '2px',
+                color: n.traffic_reporting ? 'var(--success)' : 'var(--warning)',
+              }"
+            >
+              {{ meteringLabel(n) }}
+            </div>
           </td>
           <td class="mono" style="font-size:12px">
             <div>{{ n.public_ip || '—' }}</div>
@@ -522,16 +581,8 @@ onUnmounted(() => {
                 title="面板版本更新"
               >可升</span>
             </div>
-            <div
-              v-if="n.upgrade_status === 'pending' || n.upgrade_status === 'running' || n.upgrade_pending"
-              class="muted"
-              style="font-size:11px;color:#b45309"
-            >
-              {{ n.upgrade_status === 'running' ? '升级中…' : '升级排队…' }}
-              <template v-if="n.upgrade_target"> → v{{ n.upgrade_target }}</template>
-            </div>
-            <div v-else-if="n.upgrade_status === 'error' && n.upgrade_error" class="apply-err" :title="n.upgrade_error">
-              升级失败
+            <div v-if="n.config_stale" class="muted" style="font-size:11px;color:var(--warning)">
+              配置未生效
             </div>
           </td>
           <td>
@@ -540,12 +591,15 @@ onUnmounted(() => {
               <button
                 class="btn btn-link btn-sm"
                 :disabled="upgradeBusy(n) || n.status === 'offline'"
-                :title="n.status === 'offline' ? '节点离线，无法推送' : '远程升级到面板同版本'"
+                :title="
+                  n.upgrade_error ||
+                  (n.status === 'offline' ? '节点离线，无法推送' : '远程升级到面板同版本')
+                "
                 @click="pushUpgrade(n)"
               >
                 {{ upgradeLabel(n) }}
               </button>
-              <button class="btn btn-link btn-sm" @click="showInstall(n.id)">安装</button>
+              <button class="btn btn-link btn-sm" @click="showInstall(n.id)">安装+防火墙</button>
               <button class="btn btn-link-danger btn-sm" @click="remove(n)">删除</button>
             </div>
           </td>
@@ -579,11 +633,18 @@ onUnmounted(() => {
             <div class="field">
               <label>类型</label>
               <select v-model="form.role">
-                <option value="relay">前置（relay）— 商家入口，转发到落地</option>
-                <option value="exit">落地（exit）— 家宽 mita 出口</option>
-                <option value="entry">前置·entry（同 relay）</option>
-                <option value="hybrid">混合 hybrid（单机自用）</option>
+                <option value="relay">前置 — 商家入口，转发到落地</option>
+                <option value="exit">落地 — 家宽 mita 出口</option>
               </select>
+              <details class="adv-block" style="margin-top:8px">
+                <summary>高级角色</summary>
+                <select v-model="form.role" style="margin-top:8px;width:100%">
+                  <option value="relay">前置 relay</option>
+                  <option value="exit">落地 exit</option>
+                  <option value="entry">前置 entry（同 relay）</option>
+                  <option value="hybrid">混合 hybrid（单机自用）</option>
+                </select>
+              </details>
             </div>
             <div class="field">
               <label>公网 IP</label>
@@ -716,19 +777,22 @@ onUnmounted(() => {
           <dd class="mono">{{ installInfo.panel_url }}</dd>
         </div>
         <div class="field">
-          <label>在目标机器执行</label>
+          <label>安装 + 防火墙（整段复制到目标机执行）</label>
           <textarea
             readonly
-            rows="4"
+            rows="8"
             class="mono"
             style="width:100%;resize:vertical;background:var(--bg-elevated);border:1px solid var(--border-line);border-radius:6px;padding:12px"
             :value="installInfo.install_cmd"
           />
+          <p class="help-text" style="margin-top:8px">
+            {{ installInfo.hint || '先放行端口，再装 Agent；装完回来看节点是否在线。' }}
+          </p>
         </div>
       </div>
       <div class="modal-ft">
         <button class="btn btn-ghost" @click="installShow = false">关闭</button>
-        <button class="btn btn-primary" @click="copy(installInfo.install_cmd)">复制命令</button>
+        <button class="btn btn-primary" @click="copy(installInfo.install_cmd)">复制安装+防火墙</button>
       </div>
     </div>
   </div>
@@ -749,5 +813,8 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   cursor: help;
+}
+.row-warn td {
+  background: #fffbeb33;
 }
 </style>

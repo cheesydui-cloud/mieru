@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { api } from '../api'
+import { api, copyText } from '../api'
 
 const routes = ref([])
 const nodes = ref([])
@@ -370,6 +370,51 @@ function healthClass(h) {
   return ''
 }
 
+function pathSummary(r) {
+  if (r.path_summary) return r.path_summary
+  const front = r.front_name || '前置'
+  const entry =
+    r.entry_endpoint ||
+    (r.front_host && r.front_port ? `${r.front_host}:${r.front_port}` : r.front_host || '')
+  const exit = r.exit_name || '落地'
+  const mita = r.exit_port ? ` mita:${r.exit_port}` : ''
+  return `${front}${entry ? ' ' + entry : ''} → ${exit}${mita}`
+}
+
+function entryEndpoint(r) {
+  return (
+    r.entry_endpoint ||
+    (r.front_host && r.front_port ? `${r.front_host}:${r.front_port}` : '') ||
+    ''
+  )
+}
+
+function formatProbeTime(iso) {
+  if (!iso) return ''
+  try {
+    const d = new Date(iso)
+    if (Number.isNaN(d.getTime())) return iso
+    const pad = (n) => String(n).padStart(2, '0')
+    return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  } catch {
+    return iso
+  }
+}
+
+async function copyEntry(r) {
+  const ep = entryEndpoint(r)
+  if (!ep) {
+    toast.value = '无入口 IP:端口'
+    return
+  }
+  try {
+    await copyText(ep)
+    toast.value = `已复制 ${ep}`
+  } catch {
+    toast.value = '复制失败'
+  }
+}
+
 function hopResultLabel(h) {
   if (!h) return '—'
   if (h.via === 'skip' || h.kind === 'external' || h.kind === 'info') return '不可测'
@@ -429,40 +474,41 @@ onMounted(load)
       <thead>
         <tr>
           <th>名称</th>
-          <th>路径</th>
-          <th>入口端口</th>
-          <th>落地端口</th>
-          <th>健康</th>
+          <th>路径（前置 IP:入口 → 落地 mita）</th>
+          <th>用户</th>
+          <th>健康 / 探测</th>
           <th>操作</th>
         </tr>
       </thead>
       <tbody>
-        <tr v-for="r in routes" :key="r.id">
-          <td>
+        <tr
+          v-for="r in routes"
+          :key="r.id"
+          class="route-row"
+          title="点击复制入口 IP:端口"
+          @click="copyEntry(r)"
+        >
+          <td @click.stop>
             <div class="name-link">{{ r.name }}</div>
-            <div class="muted mono" style="font-size:11px">#{{ r.id }} · {{ r.strategy }}</div>
+            <div class="muted mono" style="font-size:11px">#{{ r.id }}</div>
           </td>
           <td>
-            <div class="hops">
-              <template v-for="(h, i) in parseHops(r.hops_json)" :key="i">
-                <span v-if="i" class="hop-arrow">→</span>
-                <span class="hop">{{ hopLabel(h) }}</span>
-              </template>
-              <span v-if="!parseHops(r.hops_json).length" class="muted">无 hops</span>
+            <div class="path-summary">{{ pathSummary(r) }}</div>
+            <div v-if="entryEndpoint(r)" class="muted mono" style="font-size:11px;margin-top:2px">
+              入口 {{ entryEndpoint(r) }} · 点行复制
             </div>
           </td>
-          <td>
-            <div class="mono" style="font-weight:600">{{ frontPortLabel(r) }}</div>
-            <div v-if="r.front_host" class="muted mono" style="font-size:11px">{{ r.front_host }}</div>
+          <td class="num" @click.stop>{{ r.user_count || 0 }}</td>
+          <td @click.stop>
+            <span class="badge" :class="healthClass(r.last_probe_health || r.health)">
+              {{ healthLabel(r.last_probe_health || r.health) }}
+            </span>
+            <div v-if="r.last_probe_at" class="muted" style="font-size:11px;margin-top:3px">
+              上次：{{ healthLabel(r.last_probe_health || r.health) }} · {{ formatProbeTime(r.last_probe_at) }}
+            </div>
+            <div v-else class="muted" style="font-size:11px;margin-top:3px">未探测</div>
           </td>
-          <td>
-            <div class="mono">{{ exitPortLabel(r) }}</div>
-            <div v-if="r.exit_name" class="muted" style="font-size:11px">{{ r.exit_name }}</div>
-          </td>
-          <td>
-            <span class="badge" :class="healthClass(r.health)">{{ healthLabel(r.health) }}</span>
-          </td>
-          <td>
+          <td @click.stop>
             <div class="row-actions">
               <button class="btn btn-link btn-sm" @click="openEdit(r)">编辑</button>
               <button class="btn btn-link btn-sm" :disabled="!!probing[r.id]" @click="probe(r)">
@@ -557,15 +603,18 @@ onMounted(load)
               <template v-else>先选前置；系统会为每条落地分配不同入口端口。</template>
             </p>
           </div>
-          <div class="field">
+          </div>
+        <details class="adv-block">
+          <summary>高级 · 策略（默认 sticky）</summary>
+          <div class="field" style="margin-top:10px">
             <label>策略</label>
             <select v-model="form.strategy">
-              <option value="sticky">sticky</option>
+              <option value="sticky">sticky（推荐）</option>
               <option value="failover">failover</option>
               <option value="wrr">wrr</option>
             </select>
           </div>
-        </div>
+        </details>
         <p class="help-text">
           规则：<strong>同一前置 + 多落地 = 不同入口端口</strong>（例 10401→JP，10402→Rightlayer）。
           保存后自动重建并下发；手机扫码连的是「前置 IP:入口端口」。

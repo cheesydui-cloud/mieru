@@ -50,6 +50,8 @@ const renewDate = ref('')
 const trafficShow = ref(false)
 const trafficUser = ref(null)
 const trafficGB = ref(50)
+const resetShow = ref(false)
+const resetInfo = ref(null) // { username, proxy_password }
 
 let listTimer
 let rateTimer
@@ -94,9 +96,28 @@ function rateOf(u) {
   return { up: u.up_bps || 0, down: u.down_bps || 0 }
 }
 
+const statusCounts = computed(() => {
+  const list = users.value || []
+  let active = 0
+  let expiring = 0
+  let over = 0
+  let disabled = 0
+  let expired = 0
+  for (const u of list) {
+    if (u.status === 'active') active++
+    if (u.status === 'disabled') disabled++
+    if (u.status === 'expired') expired++
+    if (u.status === 'over_quota') over++
+    if (isExpiringSoon(u)) expiring++
+  }
+  return { all: list.length, active, expiring, over, disabled, expired }
+})
+
 const filtered = computed(() => {
   let list = users.value || []
-  if (statusFilter.value !== 'all') {
+  if (statusFilter.value === 'expiring') {
+    list = list.filter((u) => isExpiringSoon(u))
+  } else if (statusFilter.value !== 'all') {
     list = list.filter((u) => u.status === statusFilter.value)
   }
   const q = filter.value.trim().toLowerCase()
@@ -273,8 +294,16 @@ async function saveEdit() {
 
 async function resetPw(id) {
   moreId.value = null
-  const res = await api(`/api/admin/users/${id}/reset-password`, { method: 'POST' })
-  toast.value = `新密码：${res.proxy_password}`
+  try {
+    const res = await api(`/api/admin/users/${id}/reset-password`, { method: 'POST' })
+    resetInfo.value = {
+      username: res.username || '',
+      proxy_password: res.proxy_password || '',
+    }
+    resetShow.value = true
+  } catch (e) {
+    error.value = e.message
+  }
 }
 
 async function remove(u) {
@@ -355,15 +384,6 @@ async function doAddTraffic(unlimited = false) {
     error.value = e.message
   } finally {
     saving.value = false
-  }
-}
-
-async function copy(text) {
-  try {
-    await copyText(text)
-    toast.value = '已复制'
-  } catch {
-    toast.value = '复制失败，请手动选中'
   }
 }
 
@@ -472,23 +492,67 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div v-if="error && !show && !subShow && !renewShow && !trafficShow" class="error">{{ error }}</div>
+  <div v-if="error && !show && !subShow && !renewShow && !trafficShow && !resetShow" class="error">{{ error }}</div>
   <div v-if="toast" class="toast" @click="toast = ''">{{ toast }}</div>
 
   <div class="page-tabs">
     <div class="page-tab active">用户</div>
   </div>
 
+  <div class="stat-chips">
+    <button
+      type="button"
+      class="stat-chip"
+      :class="{ active: statusFilter === 'all' }"
+      @click="statusFilter = 'all'"
+    >
+      全部 <strong>{{ statusCounts.all }}</strong>
+    </button>
+    <button
+      type="button"
+      class="stat-chip ok"
+      :class="{ active: statusFilter === 'active' }"
+      @click="statusFilter = 'active'"
+    >
+      正常 <strong>{{ statusCounts.active }}</strong>
+    </button>
+    <button
+      type="button"
+      class="stat-chip warn"
+      :class="{ active: statusFilter === 'expiring' }"
+      @click="statusFilter = 'expiring'"
+    >
+      3天内到期 <strong>{{ statusCounts.expiring }}</strong>
+    </button>
+    <button
+      type="button"
+      class="stat-chip err"
+      :class="{ active: statusFilter === 'over_quota' }"
+      @click="statusFilter = 'over_quota'"
+    >
+      超流 <strong>{{ statusCounts.over }}</strong>
+    </button>
+    <button
+      type="button"
+      class="stat-chip"
+      :class="{ active: statusFilter === 'disabled' }"
+      @click="statusFilter = 'disabled'"
+    >
+      停用 <strong>{{ statusCounts.disabled }}</strong>
+    </button>
+    <button
+      type="button"
+      class="stat-chip"
+      :class="{ active: statusFilter === 'expired' }"
+      @click="statusFilter = 'expired'"
+    >
+      到期 <strong>{{ statusCounts.expired }}</strong>
+    </button>
+  </div>
+
   <div class="panel-toolbar users-toolbar">
     <div class="toolbar-left">
-      <input class="input-filter" v-model="filter" />
-      <select v-model="statusFilter" class="status-filter">
-        <option value="all">全部状态</option>
-        <option value="active">正常</option>
-        <option value="disabled">停用</option>
-        <option value="expired">到期</option>
-        <option value="over_quota">超流量</option>
-      </select>
+      <input class="input-filter" v-model="filter" placeholder="搜索用户 / 备注 / 隧道" />
     </div>
     <button class="btn btn-primary btn-sm" @click="openCreate">开户</button>
   </div>
@@ -677,6 +741,26 @@ onUnmounted(() => {
         <button v-else-if="mode === 'edit'" class="btn btn-primary" :disabled="saving" @click="saveEdit">
           {{ saving ? '保存中…' : '保存' }}
         </button>
+      </div>
+    </div>
+  </div>
+
+  <div v-if="resetShow && resetInfo" class="modal-mask" @click.self="resetShow = false">
+    <div class="modal" style="width:min(420px,100%)">
+      <div class="modal-hd">
+        <h3>新代理密码{{ resetInfo.username ? ' · ' + resetInfo.username : '' }}</h3>
+        <button class="btn btn-ghost btn-sm" @click="resetShow = false">关闭</button>
+      </div>
+      <div class="modal-bd">
+        <p class="help-text" style="margin:0 0 10px">请立即复制保存。关闭后无法再次查看（需再重置）。</p>
+        <div class="field">
+          <label>代理密码</label>
+          <input class="mono" readonly :value="resetInfo.proxy_password" />
+        </div>
+      </div>
+      <div class="modal-ft">
+        <button class="btn btn-ghost" @click="resetShow = false">关闭</button>
+        <button class="btn btn-primary" @click="copy(resetInfo.proxy_password)">复制密码</button>
       </div>
     </div>
   </div>
