@@ -90,7 +90,15 @@ onUnmounted(() => {
           <strong :title="brand.name">{{ brand.name || 'Mieru' }}</strong>
           <span>控制台</span>
         </div>
-        <button type="button" class="btn btn-ghost btn-sm nav-close" @click="closeNav">关闭</button>
+        <button
+          type="button"
+          class="btn btn-ghost btn-sm nav-close"
+          aria-label="收起菜单"
+          title="收起菜单"
+          @click="closeNav"
+        >
+          ×
+        </button>
       </div>
       <nav class="sidebar-nav" @click="closeNav">
         <router-link class="nav-item" :class="{ active: route.name === 'dashboard' }" to="/">总览</router-link>

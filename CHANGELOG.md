@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.32] - 2026-08-02
+
+### 桌面端侧栏
+
+- 汉堡菜单 / 侧栏「关闭」仅在 **≤768px**（手机/小平板）出现
+- 电脑端始终固定左侧导航，不再误进抽屉模式
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.32 bash
+```
+
 ## [0.4.31] - 2026-08-02
 
 ### 查询页 / 退出 / Cloudflare 加域名
