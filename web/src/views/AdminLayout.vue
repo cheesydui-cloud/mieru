@@ -23,6 +23,17 @@ const title = computed(() => {
 
 const mark = computed(() => brandMarkLetter(brand.name))
 
+const navMain = [
+  { name: 'dashboard', to: '/', label: '总览', hint: '拓扑与健康', icon: 'grid' },
+  { name: 'users', to: '/users', label: '用户', hint: '开户与配额', icon: 'users' },
+  { name: 'routes', to: '/routes', label: '隧道', hint: '前置 → 落地', icon: 'route' },
+  { name: 'nodes', to: '/nodes', label: '节点', hint: 'Agent 与端口', icon: 'server' },
+]
+
+const navSystem = [
+  { name: 'settings', to: '/settings', label: '设置', hint: '品牌 · CF · 安全', icon: 'settings' },
+]
+
 function logout() {
   clearSession()
   router.replace('/login')
@@ -88,7 +99,7 @@ onUnmounted(() => {
         </div>
         <div class="brand-text">
           <strong :title="brand.name">{{ brand.name || 'Mieru' }}</strong>
-          <span>控制台</span>
+          <span>管理控制台</span>
         </div>
         <button
           type="button"
@@ -100,25 +111,69 @@ onUnmounted(() => {
           ×
         </button>
       </div>
-      <nav class="sidebar-nav" @click="closeNav">
-        <router-link class="nav-item" :class="{ active: route.name === 'dashboard' }" to="/">总览</router-link>
-        <router-link class="nav-item" :class="{ active: route.name === 'users' }" to="/users">用户</router-link>
-        <router-link class="nav-item" :class="{ active: route.name === 'routes' }" to="/routes">隧道</router-link>
-        <router-link class="nav-item" :class="{ active: route.name === 'nodes' }" to="/nodes">节点</router-link>
-        <router-link class="nav-item" :class="{ active: route.name === 'settings' }" to="/settings">设置</router-link>
-      </nav>
+
+      <div class="sidebar-scroll">
+        <div class="nav-section">
+          <div class="nav-section-label">工作台</div>
+          <nav class="sidebar-nav">
+            <router-link
+              v-for="item in navMain"
+              :key="item.name"
+              class="nav-item"
+              :class="{ active: route.name === item.name }"
+              :to="item.to"
+              @click="closeNav"
+            >
+              <span class="nav-ico" :data-icon="item.icon" aria-hidden="true" />
+              <span class="nav-copy">
+                <span class="nav-label">{{ item.label }}</span>
+                <span class="nav-hint">{{ item.hint }}</span>
+              </span>
+            </router-link>
+          </nav>
+        </div>
+
+        <div class="nav-section">
+          <div class="nav-section-label">系统</div>
+          <nav class="sidebar-nav">
+            <router-link
+              v-for="item in navSystem"
+              :key="item.name"
+              class="nav-item"
+              :class="{ active: route.name === item.name }"
+              :to="item.to"
+              @click="closeNav"
+            >
+              <span class="nav-ico" :data-icon="item.icon" aria-hidden="true" />
+              <span class="nav-copy">
+                <span class="nav-label">{{ item.label }}</span>
+                <span class="nav-hint">{{ item.hint }}</span>
+              </span>
+            </router-link>
+          </nav>
+        </div>
+      </div>
+
       <div class="sidebar-foot">
-        <div>前置 → 家宽落地</div>
-        <div v-if="version" class="sidebar-ver mono">{{ version }}</div>
+        <div class="sidebar-foot-card">
+          <div class="sidebar-foot-kicker">链路</div>
+          <div class="sidebar-foot-title">手机 → 前置 → 家宽</div>
+          <div v-if="version" class="sidebar-ver mono">{{ version }}</div>
+        </div>
       </div>
     </aside>
+
     <div class="main">
       <header class="topbar">
         <div class="topbar-left">
           <button type="button" class="btn btn-ghost btn-sm nav-toggle" @click="toggleNav" aria-label="菜单">
             ☰
           </button>
-          <div class="topbar-user">{{ user || 'admin' }} · {{ title }}</div>
+          <div class="topbar-user">
+            <span class="topbar-name">{{ user || 'admin' }}</span>
+            <span class="topbar-sep">·</span>
+            <span class="topbar-page">{{ title }}</span>
+          </div>
         </div>
         <div class="topbar-actions">
           <span v-if="version" class="badge mono">{{ version }}</span>

@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.33] - 2026-08-02
+
+### 侧栏视觉重设计
+
+- 侧栏加宽至 **248px**，间距与圆角更松弛
+- 导航分组：**工作台** / **系统**，每项带图标 + 副标题
+- 品牌区展示「管理控制台」；底部链路卡片「手机 → 前置 → 家宽」
+- 当前项左侧强调条 + 白底浮起，桌面仍固定侧栏（抽屉仅 ≤768px）
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.33 bash
+```
+
 ## [0.4.32] - 2026-08-02
 
 ### 桌面端侧栏
