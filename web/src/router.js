@@ -8,11 +8,14 @@ import Users from './views/Users.vue'
 import Routes from './views/Routes.vue'
 import Settings from './views/Settings.vue'
 import Portal from './views/Portal.vue'
+import UserInfo from './views/UserInfo.vue'
 
 const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/login', component: Login },
+    // Public read-only user info (token link from admin「更多」)
+    { path: '/u/:token', name: 'user-info', component: UserInfo },
     {
       path: '/',
       component: AdminLayout,

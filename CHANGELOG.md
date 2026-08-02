@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.24] - 2026-08-02
+
+### 用户查询页（一键分享）
+
+- 用户列表「更多」→ **复制查询页**：生成可分享链接 `/u/{sub_token}`
+- 免登录只读页：用户名、状态、到期、已用/配额、今日流量、实时速率、隧道/入口（不展示代理密码）
+- 公开 API：`GET /api/u/:token`（与订阅 token 相同，无密码字段）
+- 用户列表接口附带 `info_url` 字段
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.24 bash
+```
+
+升完强制刷新浏览器。本功能以面板为主；节点 agent 可选同升。
+
 ## [0.4.23] - 2026-08-02
 
 ### 自动重建配置（不用再手动点）

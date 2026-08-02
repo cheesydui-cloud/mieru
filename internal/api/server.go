@@ -185,6 +185,8 @@ func (s *Server) Router() *gin.Engine {
 	// Mihomo / Clash Meta: import as remote config or download file
 	r.GET("/sub/:token/mihomo.yaml", s.subscriptionMihomo)
 	r.GET("/api/sub/:token/mihomo.yaml", s.subscriptionMihomo)
+	// Public user info page (read-only; no password) — shareable link from admin「更多」
+	r.GET("/api/u/:token", s.publicUserInfo)
 	r.POST("/api/auth/login", s.login)
 
 	agent := r.Group("/api/agent")
@@ -1965,12 +1967,17 @@ func (s *Server) listUsers(c *gin.Context) {
 		DownBps      int64  `json:"down_bps"`
 		RateTS       int64  `json:"rate_ts,omitempty"`
 		Subscription string `json:"subscription"`
+		InfoURL      string `json:"info_url,omitempty"` // shareable read-only page
 		RouteName    string `json:"route_name,omitempty"`
 		EntryDisplay string `json:"entry_display,omitempty"`
 	}
 	out := make([]row, 0, len(list))
 	for _, u := range list {
-		r := row{User: u, Subscription: base + "/sub/" + u.SubToken}
+		r := row{
+			User:         u,
+			Subscription: base + "/sub/" + u.SubToken,
+			InfoURL:      base + "/u/" + u.SubToken,
+		}
 		if u.RouteID != nil {
 			r.RouteName = routeName[*u.RouteID]
 		}
@@ -2404,6 +2411,82 @@ func (s *Server) myProfile(c *gin.Context) {
 		"today_down":   down,
 		"subscription": s.publicBase(c) + "/sub/" + u.SubToken,
 		"entries":      entries,
+	})
+}
+
+// publicUserInfo is a no-auth read-only snapshot for end users.
+// Uses the same sub_token as /sub/:token. Never returns proxy_password / password_hash.
+func (s *Server) publicUserInfo(c *gin.Context) {
+	tok := strings.TrimSpace(c.Param("token"))
+	if tok == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing token"})
+		return
+	}
+	u, err := s.store.GetUserBySubToken(tok)
+	if err != nil || u == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "链接无效或已失效"})
+		return
+	}
+	_ = s.store.RefreshUserStatuses()
+	if u2, err := s.store.GetUser(u.ID); err == nil && u2 != nil {
+		u = u2
+	}
+	// strip secrets
+	u.PasswordHash = ""
+	u.ProxyPassword = ""
+
+	sample, _ := s.store.GetRate(u.ID)
+	todayUp, todayDown := s.store.TodayTrafficByUser(u.ID)
+
+	routeName := ""
+	entryDisplay := ""
+	if u.RouteID != nil {
+		if r, err := s.store.GetRoute(*u.RouteID); err == nil && r != nil {
+			routeName = r.Name
+		}
+	}
+	if eps := s.resolveUserMitaEndpoints(u); len(eps) > 0 {
+		entryDisplay = fmt.Sprintf("%s:%d", eps[0].Host, eps[0].Port)
+	} else if strings.TrimSpace(u.EntryHost) != "" {
+		if u.EntryPort > 0 {
+			entryDisplay = fmt.Sprintf("%s:%d", u.EntryHost, u.EntryPort)
+		} else {
+			entryDisplay = u.EntryHost
+		}
+	}
+
+	base := s.publicBase(c)
+	var expireStr interface{}
+	if u.ExpireAt != nil {
+		expireStr = u.ExpireAt.UTC().Format("2006-01-02")
+	} else {
+		expireStr = nil
+	}
+
+	// panel brand for page header
+	brandName, _ := s.store.GetSetting("panel_name")
+	if strings.TrimSpace(brandName) == "" {
+		brandName = "Mieru"
+	}
+
+	c.Header("Cache-Control", "no-store, no-cache, must-revalidate")
+	c.JSON(http.StatusOK, gin.H{
+		"panel_name": brandName,
+		"username":   u.Username,
+		"status":     u.Status,
+		"expire_at":  expireStr,
+		"traffic_used_bytes":  u.TrafficUsedBytes,
+		"traffic_limit_bytes": u.TrafficLimitBytes,
+		"today_up":   todayUp,
+		"today_down": todayDown,
+		"rate":       sample,
+		"route_name": routeName,
+		"entry":      entryDisplay,
+		"note":       u.Note,
+		// convenience links (same token; not secrets by themselves beyond capability URL)
+		"info_url":     base + "/u/" + tok,
+		"subscription": base + "/sub/" + tok,
+		"mihomo_url":   base + "/sub/" + tok + "/mihomo.yaml",
 	})
 }
 

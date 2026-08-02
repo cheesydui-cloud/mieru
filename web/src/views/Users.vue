@@ -355,6 +355,25 @@ async function copy(text) {
   }
 }
 
+function userInfoURL(u) {
+  if (!u) return ''
+  if (u.info_url) return u.info_url
+  const tok = u.sub_token || ''
+  if (!tok) return ''
+  // fallback: same-origin path (works even if panel_url not set)
+  return `${window.location.origin}/u/${tok}`
+}
+
+async function copyUserInfo(u) {
+  const url = userInfoURL(u)
+  if (!url) {
+    toast.value = '该用户无查询链接（缺少 token）'
+    return
+  }
+  await copy(url)
+  toast.value = '已复制查询页链接'
+}
+
 function openEdit(u) {
   closeMore()
   Object.assign(form, {
@@ -651,6 +670,7 @@ onUnmounted(() => {
       :style="moreMenuStyle"
       @click.stop
     >
+      <button type="button" @click="copyUserInfo(moreUser); closeMore()">复制查询页</button>
       <button type="button" @click="openAddTraffic(moreUser); closeMore()">加流量</button>
       <button type="button" @click="resetPw(moreUser.id); closeMore()">重置密码</button>
     </div>
