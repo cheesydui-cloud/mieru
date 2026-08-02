@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { clearSession, getUsername } from '../api'
+import { brand, brandMarkLetter, loadBrand } from '../brand'
 
 const route = useRoute()
 const router = useRouter()
@@ -18,6 +19,8 @@ const title = computed(() => {
   }
   return map[route.name] || '控制台'
 })
+
+const mark = computed(() => brandMarkLetter(brand.name))
 
 function logout() {
   clearSession()
@@ -41,6 +44,7 @@ async function loadVersion() {
 
 onMounted(() => {
   loadVersion()
+  loadBrand()
 })
 </script>
 
@@ -48,9 +52,9 @@ onMounted(() => {
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand-mark">M</div>
+        <div class="brand-mark">{{ mark }}</div>
         <div class="brand-text">
-          <strong>Mieru</strong>
+          <strong :title="brand.name">{{ brand.name || 'Mieru' }}</strong>
           <span>控制台</span>
         </div>
       </div>

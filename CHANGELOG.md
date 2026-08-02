@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.4.18] - 2026-07-30
+
+### 面板名称 / 浏览器图标
+
+- **根因**：设置里的「面板名称」只写入数据库，侧栏/登录页/浏览器标签仍写死 `Mieru`，且没有 favicon
+- 新增公开接口 `GET /api/brand`（登录前可用）
+- 侧栏、登录页读取 `panel_name`；保存后即时刷新
+- 浏览器标题改为「{名称} 控制台」
+- 根据名称首字生成标签页图标（favicon），并提供默认 `/favicon.svg`
+
+### 升级（面板必升）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.18 bash
+```
+
+升完强制刷新页面（Ctrl/Cmd+Shift+R）。设置里名称保存后侧栏与标签应立即变化。
+
+
 ## [0.4.17] - 2026-07-30
 
 ### 流量 / 实时网速（根因修复）

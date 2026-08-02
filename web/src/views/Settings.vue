@@ -1,6 +1,7 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
 import { api } from '../api'
+import { setBrandName } from '../brand'
 
 const error = ref('')
 const toast = ref('')
@@ -24,6 +25,7 @@ async function load() {
     const s = await api('/api/admin/settings')
     form.panel_url = s.panel_url || ''
     form.panel_name = s.panel_name || 'Mieru Panel'
+    if (s.panel_name) setBrandName(s.panel_name)
     form.panel_url_set = !!s.panel_url_set
     form.version = s.version || ''
     form.admin_user = s.admin_user || 'admin'
@@ -48,7 +50,8 @@ async function saveSettings() {
     form.panel_url = res.panel_url
     form.panel_name = res.panel_name
     form.panel_url_set = true
-    toast.value = '设置已保存。节点安装命令将使用此面板地址。'
+    setBrandName(res.panel_name)
+    toast.value = '设置已保存。侧栏名称与浏览器标题/图标已更新。'
   } catch (e) {
     error.value = e.message
   } finally {
@@ -119,7 +122,10 @@ onMounted(load)
       </div>
       <div class="field" style="margin-bottom:16px">
         <label>面板名称</label>
-        <input v-model="form.panel_name" />
+        <input v-model="form.panel_name" placeholder="例如：微动传媒" />
+        <p class="help-text" style="margin-top:6px">
+          显示在左侧栏、登录页、浏览器标签标题与图标首字。
+        </p>
       </div>
       <button class="btn btn-primary" :disabled="loading" @click="saveSettings">保存</button>
     </div>

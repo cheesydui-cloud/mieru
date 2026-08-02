@@ -109,6 +109,8 @@ func (s *Server) Router() *gin.Engine {
 		c.Header("Pragma", "no-cache")
 		c.JSON(http.StatusOK, gin.H{"version": s.Version, "ui": "embedded"})
 	})
+	// Public brand (login page + tab title/favicon) — no auth.
+	r.GET("/api/brand", s.publicBrand)
 
 	r.GET("/sub/:token", s.subscription)
 	r.GET("/api/sub/:token", s.subscription)
@@ -1990,6 +1992,21 @@ func (s *Server) buildInstallCmd(c *gin.Context, n *model.Node) installInfo {
 	return installInfo{PanelURL: base, Cmd: cmd, Hint: hint}
 }
 
+// publicBrand returns panel display name for unauthenticated pages (login, title, favicon).
+func (s *Server) publicBrand(c *gin.Context) {
+	c.Header("Cache-Control", "no-store, no-cache, must-revalidate")
+	c.Header("Pragma", "no-cache")
+	name, _ := s.store.GetSetting("panel_name")
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "Mieru"
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"panel_name": name,
+		"version":    s.Version,
+	})
+}
+
 func (s *Server) getSettings(c *gin.Context) {
 	m, err := s.store.GetSettings("panel_url", "panel_name", configgen.SettingBackboneUser)
 	if err != nil {
@@ -2002,7 +2019,7 @@ func (s *Server) getSettings(c *gin.Context) {
 	}
 	name := m["panel_name"]
 	if name == "" {
-		name = "Mieru Panel"
+		name = "Mieru"
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"panel_url":      panelURL,
@@ -2034,8 +2051,14 @@ func (s *Server) putSettings(c *gin.Context) {
 		return
 	}
 	name := strings.TrimSpace(req.PanelName)
+	// Collapse internal whitespace runs for display consistency.
+	name = strings.Join(strings.Fields(name), " ")
 	if name == "" {
-		name = "Mieru Panel"
+		name = "Mieru"
+	}
+	// Avoid absurdly long sidebar titles (UTF-8 runes).
+	if rn := []rune(name); len(rn) > 32 {
+		name = string(rn[:32])
 	}
 	if err := s.store.SetSetting("panel_name", name); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

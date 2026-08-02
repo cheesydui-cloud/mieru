@@ -1,7 +1,8 @@
 <script setup>
-import { ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, setSession } from '../api'
+import { brand, brandMarkLetter, loadBrand } from '../brand'
 
 const router = useRouter()
 const route = useRoute()
@@ -9,6 +10,7 @@ const username = ref('admin')
 const password = ref('')
 const loading = ref(false)
 const error = ref('')
+const mark = computed(() => brandMarkLetter(brand.name))
 
 async function submit() {
   error.value = ''
@@ -31,15 +33,19 @@ async function submit() {
     loading.value = false
   }
 }
+
+onMounted(() => {
+  loadBrand()
+})
 </script>
 
 <template>
   <div class="login-page">
     <div class="login-card">
       <div class="brand" style="padding: 0 0 16px; border: none; min-height: auto">
-        <div class="brand-mark">M</div>
+        <div class="brand-mark">{{ mark }}</div>
         <div class="brand-text">
-          <strong>Mieru 控制台</strong>
+          <strong>{{ brand.name || 'Mieru' }} 控制台</strong>
         </div>
       </div>
       <h1>登录</h1>
