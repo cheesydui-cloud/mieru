@@ -32,7 +32,7 @@ var errUnauthorized = fmt.Errorf("unauthorized: node deleted or token invalid")
 
 // AgentVersion is the default when main does not inject a build version.
 // Prefer SetVersion() from cmd/agent so -version and heartbeat always match.
-var AgentVersion = "0.4.20"
+var AgentVersion = "0.4.21"
 
 // SetVersion overrides the version string reported in heartbeats (and logs).
 // Call from main with the same value as -ldflags -X main.Version.

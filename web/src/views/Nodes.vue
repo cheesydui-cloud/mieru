@@ -341,6 +341,8 @@ function upgradeLabel(n) {
 }
 
 function upgradeRowHint(n) {
+  // Only show actionable / in-progress states.
+  // "已升至 vX" is redundant with the Agent column version.
   const st = n.upgrade_status || ''
   if (st === 'error' && n.upgrade_error) return n.upgrade_error
   if (st === 'pending' || n.upgrade_pending) {
@@ -349,7 +351,6 @@ function upgradeRowHint(n) {
   if (st === 'running') {
     return n.upgrade_target ? `升级中 → v${n.upgrade_target}` : '升级中…'
   }
-  if (st === 'ok' && n.upgrade_target) return `已升至 v${n.upgrade_target}`
   if (n.config_stale) {
     return `配置未生效 面板v${n.config_version}/Agent v${n.agent_config_version || '?'}`
   }

@@ -134,6 +134,44 @@ const filtered = computed(() => {
   return list
 })
 
+/** 按隧道分组：同一 route_id 聚在一起，未绑隧道单独一组 */
+const groupedUsers = computed(() => {
+  const list = filtered.value || []
+  const map = new Map()
+  for (const u of list) {
+    const rid = u.route_id == null || u.route_id === '' || u.route_id === 0 ? 0 : Number(u.route_id)
+    const key = Number.isFinite(rid) ? rid : 0
+    if (!map.has(key)) {
+      const r = key
+        ? (routes.value || []).find((x) => x.id === key || String(x.id) === String(key))
+        : null
+      const sample = list.find((x) => {
+        const xr = x.route_id == null || x.route_id === '' || x.route_id === 0 ? 0 : Number(x.route_id)
+        return xr === key
+      })
+      map.set(key, {
+        route_id: key,
+        name: key ? routeName(sample || { route_id: key, route_name: r?.name }) : '未绑定隧道',
+        entry: key && sample ? entryOf(sample) : '',
+        path: r?.path_summary || '',
+        users: [],
+      })
+    }
+    map.get(key).users.push(u)
+  }
+  const groups = [...map.values()]
+  // 有隧道的按名称；未绑定置底
+  groups.sort((a, b) => {
+    if (a.route_id === 0) return 1
+    if (b.route_id === 0) return -1
+    return String(a.name).localeCompare(String(b.name), 'zh')
+  })
+  for (const g of groups) {
+    g.users.sort((a, b) => String(a.username || '').localeCompare(String(b.username || ''), 'zh'))
+  }
+  return groups
+})
+
 async function loadUsers() {
   try {
     const [us, rs] = await Promise.all([api('/api/admin/users'), api('/api/admin/routes')])
@@ -557,76 +595,92 @@ onUnmounted(() => {
     <button class="btn btn-primary btn-sm" @click="openCreate">开户</button>
   </div>
 
-  <div class="table-wrap">
-    <table class="data table-users" v-if="filtered.length">
-      <thead>
-        <tr>
-          <th class="col-user">用户</th>
-          <th class="col-status">状态</th>
-          <th class="col-date">到期</th>
-          <th class="col-traffic">流量</th>
-          <th class="col-speed">实时</th>
-          <th class="col-route">隧道</th>
-          <th class="col-entry">入口</th>
-          <th class="col-ops">操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="u in filtered" :key="u.id">
-          <td class="col-user">
-            <div class="name-link">{{ u.username }}</div>
-            <div v-if="u.note" class="muted note-line">{{ u.note }}</div>
-            <div class="muted mono" style="font-size:11px">#{{ u.id }}</div>
-          </td>
-          <td class="col-status">
-            <span class="badge" :class="statusBadge(u.status)">
-              <span class="dot"></span>{{ statusLabel(u.status) }}
-            </span>
-          </td>
-          <td class="col-date mono" :class="{ 'warn-text': isExpiringSoon(u) }">
-            {{ u.expire_at ? String(u.expire_at).slice(0, 10) : "永久" }}
-          </td>
-          <td class="col-traffic">
-            <div class="mono traffic-line">
-              {{ formatBytes(u.traffic_used_bytes) }}
-              <span class="muted">/</span>
-              {{ u.traffic_limit_bytes ? formatBytes(u.traffic_limit_bytes) : "∞" }}
-            </div>
-            <div v-if="u.traffic_limit_bytes" class="bar">
-              <div class="bar-fill" :style="barStyle(u)"></div>
-            </div>
-          </td>
-          <td class="col-speed mono">
-            <div class="speed-line">
-              <span class="speed-down">↓ {{ formatBps(rateOf(u).down) }}</span>
-              <span class="speed-up">↑ {{ formatBps(rateOf(u).up) }}</span>
-            </div>
-          </td>
-          <td class="col-route">{{ routeName(u) }}</td>
-          <td class="col-entry mono">{{ entryOf(u) }}</td>
-          <td class="col-ops">
-            <div class="row-actions user-ops">
-              <button class="btn btn-link btn-sm" @click="openSub(u)">扫码</button>
-              <button class="btn btn-link btn-sm" @click="openEdit(u)">编辑</button>
-              <button class="btn btn-link btn-sm" @click="openRenew(u)">续期</button>
-              <button class="btn btn-link btn-sm" @click="toggle(u)">
-                {{ u.status === 'disabled' ? '启用' : '停用' }}
-              </button>
-              <button class="btn btn-link-danger btn-sm" @click="remove(u)">删除</button>
-              <div class="more-wrap">
-                <button class="btn btn-link btn-sm" @click="moreId = moreId === u.id ? null : u.id">更多</button>
-                <div v-if="moreId === u.id" class="more-menu" @click.stop>
-                  <button @click="openAddTraffic(u); moreId = null">加流量</button>
-                  <button @click="resetPw(u.id)">重置密码</button>
+  <div v-if="groupedUsers.length" class="user-groups">
+    <section v-for="g in groupedUsers" :key="'rg-' + g.route_id" class="user-group">
+      <header class="user-group-hd">
+        <div class="user-group-title">
+          <span class="user-group-name">{{ g.name }}</span>
+          <span class="badge">{{ g.users.length }} 人</span>
+        </div>
+        <div class="user-group-meta muted mono">
+          <template v-if="g.route_id">
+            <span v-if="g.entry">入口 {{ g.entry }}</span>
+            <span v-if="g.path" class="user-group-path">{{ g.path }}</span>
+            <span class="muted">#{{ g.route_id }}</span>
+          </template>
+          <template v-else>未分配隧道，开户时请选择</template>
+        </div>
+      </header>
+      <div class="table-wrap user-group-table">
+        <table class="data table-users">
+          <thead>
+            <tr>
+              <th class="col-user">用户</th>
+              <th class="col-status">状态</th>
+              <th class="col-date">到期</th>
+              <th class="col-traffic">流量</th>
+              <th class="col-speed">实时</th>
+              <th class="col-entry">入口</th>
+              <th class="col-ops">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="u in g.users" :key="u.id">
+              <td class="col-user">
+                <div class="name-link">{{ u.username }}</div>
+                <div v-if="u.note" class="muted note-line">{{ u.note }}</div>
+                <div class="muted mono" style="font-size:11px">#{{ u.id }}</div>
+              </td>
+              <td class="col-status">
+                <span class="badge" :class="statusBadge(u.status)">
+                  <span class="dot"></span>{{ statusLabel(u.status) }}
+                </span>
+              </td>
+              <td class="col-date mono" :class="{ 'warn-text': isExpiringSoon(u) }">
+                {{ u.expire_at ? String(u.expire_at).slice(0, 10) : "永久" }}
+              </td>
+              <td class="col-traffic">
+                <div class="mono traffic-line">
+                  {{ formatBytes(u.traffic_used_bytes) }}
+                  <span class="muted">/</span>
+                  {{ u.traffic_limit_bytes ? formatBytes(u.traffic_limit_bytes) : "∞" }}
                 </div>
-              </div>
-            </div>
-          </td>
-        </tr>
-      </tbody>
-    </table>
-    <div v-else class="empty">{{ users.length ? '无匹配用户' : '暂无用户' }}</div>
+                <div v-if="u.traffic_limit_bytes" class="bar">
+                  <div class="bar-fill" :style="barStyle(u)"></div>
+                </div>
+              </td>
+              <td class="col-speed mono">
+                <div class="speed-line">
+                  <span class="speed-down">↓ {{ formatBps(rateOf(u).down) }}</span>
+                  <span class="speed-up">↑ {{ formatBps(rateOf(u).up) }}</span>
+                </div>
+              </td>
+              <td class="col-entry mono">{{ entryOf(u) }}</td>
+              <td class="col-ops">
+                <div class="row-actions user-ops">
+                  <button class="btn btn-link btn-sm" @click="openSub(u)">扫码</button>
+                  <button class="btn btn-link btn-sm" @click="openEdit(u)">编辑</button>
+                  <button class="btn btn-link btn-sm" @click="openRenew(u)">续期</button>
+                  <button class="btn btn-link btn-sm" @click="toggle(u)">
+                    {{ u.status === 'disabled' ? '启用' : '停用' }}
+                  </button>
+                  <button class="btn btn-link-danger btn-sm" @click="remove(u)">删除</button>
+                  <div class="more-wrap">
+                    <button class="btn btn-link btn-sm" @click="moreId = moreId === u.id ? null : u.id">更多</button>
+                    <div v-if="moreId === u.id" class="more-menu" @click.stop>
+                      <button @click="openAddTraffic(u); moreId = null">加流量</button>
+                      <button @click="resetPw(u.id)">重置密码</button>
+                    </div>
+                  </div>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
   </div>
+  <div v-else class="empty">{{ users.length ? '无匹配用户' : '暂无用户' }}</div>
 
   <div v-if="show" class="modal-mask" @click.self="show = false">
     <div class="modal" style="width:min(560px,100%)">

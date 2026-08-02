@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.21] - 2026-08-02
+
+### 用户按隧道分组 + 节点升级提示精简
+
+- **用户列表**：按隧道分组展示，每组显示人数、入口与路径摘要，一眼看出谁在哪条隧道
+- **节点**：去掉与 Agent 版本列重复的「已升至 vX」黄条，仅保留排队/升级中/失败/配置未生效
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.21 bash
+```
+
+升完强制刷新。
+
 ## [0.4.20] - 2026-08-02
 
 ### 面板体验大包
