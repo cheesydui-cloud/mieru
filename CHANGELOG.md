@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.38] - 2026-08-02
+
+### 侧栏账号区 + CF 域名落库可见 + 当日流量
+
+- 顶栏去掉版本号 / 退出登录；移到**左侧栏底部**（用户名 + 版本 + 退出）
+- CF「从 CF 同步域名 / 添加解析」在编辑节点时**自动保存 hostname**，列表「公网/接入」立刻显示域名
+- 列表无域名时显示「未设置域名」占位
+- 总览增加 **当日总流量**（上下行合计，UTC 自然日，来自 traffic_hourly）
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.38 bash
+```
+
 ## [0.4.37] - 2026-08-02
 
 ### CF 域名同步到接入域名

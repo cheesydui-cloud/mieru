@@ -158,7 +158,15 @@ onUnmounted(() => {
         <div class="sidebar-foot-card">
           <div class="sidebar-foot-kicker">链路</div>
           <div class="sidebar-foot-title">手机 → 前置 → 家宽</div>
-          <div v-if="version" class="sidebar-ver mono">{{ version }}</div>
+        </div>
+        <div class="sidebar-account">
+          <div class="sidebar-account-meta">
+            <span class="sidebar-account-name" :title="user || 'admin'">{{ user || 'admin' }}</span>
+            <span v-if="version" class="sidebar-ver mono">{{ version }}</span>
+          </div>
+          <button type="button" class="btn btn-ghost btn-sm sidebar-logout" @click="logout" title="退出登录">
+            退出登录
+          </button>
         </div>
       </div>
     </aside>
@@ -176,8 +184,7 @@ onUnmounted(() => {
           </div>
         </div>
         <div class="topbar-actions">
-          <span v-if="version" class="badge mono">{{ version }}</span>
-          <button class="btn btn-ghost btn-sm" @click="logout" title="退出登录">退出登录</button>
+          <!-- 版本号 / 退出登录已移至左侧栏底部 -->
         </div>
       </header>
       <main class="content">

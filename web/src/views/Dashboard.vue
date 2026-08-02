@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useFlash } from '../flash'
 import { useRouter } from 'vue-router'
-import { api, statusBadge } from '../api'
+import { api, formatBytes, statusBadge } from '../api'
 
 const router = useRouter()
 const diag = ref(null)
@@ -52,6 +52,9 @@ const exits = computed(() =>
 )
 const tunnelEdges = computed(() => diag.value?.tunnel_edges || [])
 const stats = computed(() => diag.value?.stats || {})
+const todayTotal = computed(() => Number(stats.value.today_total || 0))
+const todayUp = computed(() => Number(stats.value.today_up || 0))
+const todayDown = computed(() => Number(stats.value.today_down || 0))
 
 const onlineCount = computed(() => nodes.value.filter((n) => n.status === 'online').length)
 const issueCount = computed(() => {
@@ -179,7 +182,7 @@ onUnmounted(() => clearInterval(timer))
     <div class="page-tab active">拓扑健康</div>
   </div>
 
-  <div class="grid-stats" v-if="diag">
+  <div class="grid-stats grid-stats-5" v-if="diag">
     <div class="card" :class="onlineCount === nodes.length && nodes.length ? 'card-ok' : ''">
       <h3>节点在线</h3>
       <div class="value">{{ onlineCount }}<span class="slash"> / {{ nodes.length }}</span></div>
@@ -192,6 +195,11 @@ onUnmounted(() => clearInterval(timer))
     <div class="card">
       <h3>启用隧道</h3>
       <div class="value">{{ diag.enabled_routes || 0 }}</div>
+    </div>
+    <div class="card clickable" :class="todayTotal ? 'card-ok' : ''" @click="router.push('/users')">
+      <h3>当日总流量</h3>
+      <div class="value" style="font-size:20px">{{ formatBytes(todayTotal) }}</div>
+      <div class="sub">↓ {{ formatBytes(todayDown) }} · ↑ {{ formatBytes(todayUp) }}</div>
     </div>
     <div class="card" :class="issueCount ? 'card-warn' : 'card-ok'">
       <h3>待处理问题</h3>

@@ -1369,6 +1369,8 @@ if trafficSilent > 0 {
 			}
 		}
 
+		dash, _ := s.store.Dashboard()
+		todayTotal := dash.TodayUp + dash.TodayDown
 		c.JSON(http.StatusOK, gin.H{
 			"version":            s.Version,
 			"backbone_user":      bbUser,
@@ -1390,6 +1392,11 @@ if trafficSilent > 0 {
 				"expired_users":  expiredN,
 				"online_nodes":   onlineN,
 				"offline_nodes":  offlineN,
+				"today_up":       dash.TodayUp,
+				"today_down":     dash.TodayDown,
+				"today_total":    todayTotal,
+				"total_users":    dash.TotalUsers,
+				"active_users":   dash.ActiveUsers,
 			},
 			"topology_hint": "手机 ──mierus──► 前置(tcp_forward) ──TCP──► 落地 mita ──► 家宽出口",
 		})

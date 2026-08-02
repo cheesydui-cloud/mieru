@@ -217,12 +217,26 @@ async function cfAddDomain() {
       method: 'POST',
       body: JSON.stringify({ name, ip, proxied: !!cfProxied.value }),
     })
-    form.hostname = res.name || name
-    cfMsg.value = `CF 已写入 ${res.type || 'A'} ${res.name || name} → ${res.content || ip}${
+    const host = res.name || name
+    form.hostname = host
+    cfMsg.value = `CF 已写入 ${res.type || 'A'} ${host} → ${res.content || ip}${
       res.proxied ? '（橙云代理）' : '（仅 DNS）'
     }`
     if (res.note) cfMsg.value += ' · ' + res.note
-    formFlash.ok('Cloudflare 域名已添加')
+    if (mode.value === 'edit' && editingId.value && host) {
+      try {
+        await api(`/api/admin/nodes/${editingId.value}`, {
+          method: 'PUT',
+          body: JSON.stringify(payload()),
+        })
+        await load()
+        formFlash.ok(`CF 已写入并保存接入域名 ${host}`)
+      } catch (e) {
+        formFlash.err(`CF 已写入，但节点保存失败：${e.message}`)
+      }
+    } else {
+      formFlash.ok('Cloudflare 域名已添加（保存节点后列表可见）')
+    }
   } catch (e) {
     error.value = e.message
   } finally {
@@ -276,10 +290,33 @@ async function cfSyncFromCF() {
     if (cur && names.some((n) => n.toLowerCase() === cur)) {
       pick = names.find((n) => n.toLowerCase() === cur) || pick
     }
+    const prev = (form.hostname || '').trim()
     form.hostname = pick
     const extra = names.length > 1 ? `（共 ${names.length} 条：${names.join('、')}）` : ''
-    cfMsg.value = `已从 CF 同步接入域名：${pick}${extra}`
-    formFlash.ok(names.length > 1 ? `已同步 ${pick}（另有 ${names.length - 1} 条可选）` : `已同步 ${pick}`)
+    // 编辑已有节点时直接落库，列表「公网/接入」立刻显示域名
+    if (mode.value === 'edit' && editingId.value && pick && pick !== prev) {
+      try {
+        await api(`/api/admin/nodes/${editingId.value}`, {
+          method: 'PUT',
+          body: JSON.stringify(payload()),
+        })
+        await load()
+        cfMsg.value = `已从 CF 同步并保存接入域名：${pick}${extra}`
+        formFlash.ok(names.length > 1 ? `已保存 ${pick}（另有 ${names.length - 1} 条）` : `已保存接入域名 ${pick}`)
+      } catch (e) {
+        cfMsg.value = `已填入 ${pick}，但保存失败：${e.message}`
+        formFlash.err(`域名已填入，保存失败：${e.message}`)
+      }
+    } else {
+      cfMsg.value = `已从 CF 同步接入域名：${pick}${extra}`
+      formFlash.ok(
+        names.length > 1
+          ? `已同步 ${pick}（另有 ${names.length - 1} 条可选，保存后列表可见）`
+          : mode.value === 'edit'
+            ? `接入域名已是 ${pick}`
+            : `已同步 ${pick}（创建后保存生效）`,
+      )
+    }
   } catch (e) {
     error.value = e.message
     formFlash.err(e.message)
@@ -701,7 +738,8 @@ onUnmounted(() => {
           </td>
           <td class="mono" style="font-size:12px">
             <div>{{ n.public_ip || '—' }}</div>
-            <div class="muted" v-if="n.hostname">{{ n.hostname }}</div>
+            <div v-if="n.hostname" class="muted" style="word-break:break-all">{{ n.hostname }}</div>
+            <div v-else class="muted" style="opacity:0.45">未设置域名</div>
             <div class="muted" v-if="n.private_ip">内网 {{ n.private_ip }}</div>
           </td>
           <td class="mono">{{ portLabel(n) }}</td>
