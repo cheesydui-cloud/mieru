@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.35] - 2026-08-02
+
+### Cloudflare 三按钮互不联动
+
+- **保存 CF 配置**：只写 Zone ID / Token / 橙云默认
+- **测试连接**：验证 Token+Zone（表单有新 Token 时先静默落库再测），不再带动「保存」loading
+- **清除 Token**：只删 API Token，保留 Zone ID；独立 loading
+- 三个按钮各自 disabled，点一个不会三个一起变灰
+- Zone ID 提示改为「32 位 ID，不是域名」
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.35 bash
+```
+
 ## [0.4.34] - 2026-08-02
 
 ### 设置页保存按钮互不影响

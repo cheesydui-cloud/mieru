@@ -7,6 +7,7 @@ const error = ref('')
 const toast = ref('')
 const savingBrand = ref(false)
 const savingCF = ref(false)
+const clearingCF = ref(false)
 const savingPw = ref(false)
 const backupLoading = ref(false)
 const audit = ref([])
@@ -196,27 +197,45 @@ async function saveBrandSettings() {
   }
 }
 
-/** 仅保存 Cloudflare；仍带上当前面板字段以满足后端必填，但不改写用户未编辑的 Token 占位 */
+function cfPayload() {
+  const body = {
+    ...brandPayload(),
+    cf_zone_id: form.cf_zone_id,
+    cf_proxied_default: !!form.cf_proxied_default,
+  }
+  const tok = (form.cf_api_token || '').trim()
+  if (tok === 'clear') {
+    body.cf_api_token = 'clear'
+  } else if (tok && tok !== '********') {
+    body.cf_api_token = tok
+  }
+  return body
+}
+
+function hasUnsavedCFToken() {
+  const tok = (form.cf_api_token || '').trim()
+  return !!tok && tok !== '********' && tok !== 'clear'
+}
+
+/** 写入 CF 字段到后端（内部用）。showToast=false 时不弹成功提示 */
+async function persistCFSettings({ showToast = true } = {}) {
+  const res = await putSettingsBody(cfPayload())
+  applySettingsResponse(res, { touchBrand: true, touchCF: true })
+  if (showToast) {
+    toast.value = res.cf_configured
+      ? 'Cloudflare 配置已保存'
+      : '已保存（请填写 Token + Zone ID 后即可在节点页一键解析）'
+  }
+  return res
+}
+
+/** 保存 CF 配置：Zone ID / Token / 橙云默认 */
 async function saveCFSettings() {
+  if (savingCF.value || clearingCF.value || cfTesting.value) return
   savingCF.value = true
   error.value = ''
   try {
-    const body = {
-      ...brandPayload(),
-      cf_zone_id: form.cf_zone_id,
-      cf_proxied_default: !!form.cf_proxied_default,
-    }
-    const tok = (form.cf_api_token || '').trim()
-    if (tok === 'clear') {
-      body.cf_api_token = 'clear'
-    } else if (tok && tok !== '********') {
-      body.cf_api_token = tok
-    }
-    const res = await putSettingsBody(body)
-    applySettingsResponse(res, { touchBrand: true, touchCF: true })
-    toast.value = form.cf_configured || res.cf_configured
-      ? 'Cloudflare 配置已保存'
-      : '已保存（请填写 Token + Zone ID 后即可在节点页一键解析）'
+    await persistCFSettings({ showToast: true })
   } catch (e) {
     error.value = e.message
   } finally {
@@ -224,14 +243,27 @@ async function saveCFSettings() {
   }
 }
 
+/**
+ * 测试连接：只验证已保存（或表单里新输入）的 Token + Zone。
+ * 若输入框里有新 Token，会先静默写入再测；不会驱动「保存/清除」按钮 loading。
+ */
 async function testCF() {
+  if (cfTesting.value || savingCF.value || clearingCF.value) return
   cfTesting.value = true
   error.value = ''
   try {
-    await saveCFSettings()
-    if (error.value) return
+    // 新 Token / 改了 Zone 时先静默落库，否则后端只能测到旧值
+    const zone = (form.cf_zone_id || '').trim()
+    if (!zone) {
+      throw new Error('请先填写 Zone ID')
+    }
+    if (hasUnsavedCFToken() || zone) {
+      await persistCFSettings({ showToast: false })
+    }
     const res = await api('/api/admin/cloudflare/test', { method: 'POST', body: '{}' })
-    toast.value = res.zone_name ? `Cloudflare 正常 · Zone ${res.zone_name}` : 'Cloudflare 连接正常'
+    toast.value = res.zone_name
+      ? `连接正常 · Zone ${res.zone_name}`
+      : 'Cloudflare 连接正常'
   } catch (e) {
     error.value = e.message
   } finally {
@@ -239,10 +271,35 @@ async function testCF() {
   }
 }
 
+/** 清除 Token：只删 API Token，保留 Zone ID / 橙云选项 */
 async function clearCFTokenAndSave() {
-  form.cf_api_token = 'clear'
-  form.cf_token_set = false
-  await saveCFSettings()
+  if (clearingCF.value || savingCF.value || cfTesting.value) return
+  if (!form.cf_token_set && !(form.cf_api_token || '').trim()) {
+    toast.value = '当前没有已保存的 Token'
+    return
+  }
+  clearingCF.value = true
+  error.value = ''
+  try {
+    form.cf_api_token = 'clear'
+    form.cf_token_set = false
+    const body = {
+      ...brandPayload(),
+      cf_zone_id: form.cf_zone_id,
+      cf_proxied_default: !!form.cf_proxied_default,
+      cf_api_token: 'clear',
+    }
+    const res = await putSettingsBody(body)
+    applySettingsResponse(res, { touchBrand: true, touchCF: true })
+    form.cf_api_token = ''
+    form.cf_token_set = false
+    form.cf_configured = false
+    toast.value = 'Cloudflare Token 已清除（Zone ID 仍保留）'
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    clearingCF.value = false
+  }
 }
 
 async function changePassword() {
@@ -409,7 +466,11 @@ onMounted(load)
       <div class="form-grid">
         <div class="field">
           <label>Zone ID</label>
-          <input v-model="form.cf_zone_id" class="mono" placeholder="Cloudflare 域名 Zone ID" />
+          <input
+            v-model="form.cf_zone_id"
+            class="mono"
+            placeholder="32 位 Zone ID（不是域名）"
+          />
         </div>
         <div class="field">
           <label>API Token</label>
@@ -426,25 +487,38 @@ onMounted(load)
         默认开启橙云代理（入口自定义端口请勿开，建议仅 DNS）
       </label>
       <p class="help-text" style="margin:0 0 12px">
-        Token 创建：Cloudflare → My Profile → API Tokens → Create Token →
-        权限 <code class="mono">Zone.DNS Edit</code> + 指定 Zone。
-        节点弹窗点「CF 添加/更新解析」即可把公网 IP 写到接入域名。
+        Zone ID 在 Cloudflare 域名概览右侧（一串 32 位字符），不要填域名本身。
+        Token：My Profile → API Tokens → 权限 <code class="mono">Zone.DNS Edit</code>。
+        节点弹窗「CF 添加/更新解析」把公网 IP 写到接入域名。
       </p>
       <div class="row-actions">
-        <button type="button" class="btn btn-primary" :disabled="savingCF || cfTesting" @click="saveCFSettings">
+        <button
+          type="button"
+          class="btn btn-primary"
+          :disabled="savingCF"
+          :aria-busy="savingCF ? 'true' : 'false'"
+          @click="saveCFSettings"
+        >
           {{ savingCF ? '保存中…' : '保存 CF 配置' }}
         </button>
-        <button type="button" class="btn btn-ghost" :disabled="savingCF || cfTesting" @click="testCF">
+        <button
+          type="button"
+          class="btn btn-ghost"
+          :disabled="cfTesting"
+          :aria-busy="cfTesting ? 'true' : 'false'"
+          @click="testCF"
+        >
           {{ cfTesting ? '测试中…' : '测试连接' }}
         </button>
         <button
-          v-if="form.cf_token_set"
+          v-if="form.cf_token_set || (form.cf_api_token && form.cf_api_token !== '********')"
           class="btn btn-ghost"
           type="button"
-          :disabled="savingCF || cfTesting"
+          :disabled="clearingCF"
+          :aria-busy="clearingCF ? 'true' : 'false'"
           @click="clearCFTokenAndSave"
         >
-          清除 Token
+          {{ clearingCF ? '清除中…' : '清除 Token' }}
         </button>
       </div>
     </div>
