@@ -39,6 +39,7 @@ const form = reactive({
 // Cloudflare quick DNS from node modal
 const cfConfigured = ref(false)
 const cfBusy = ref(false)
+const cfSyncBusy = ref(false)
 const cfProxied = ref(false)
 const cfMsg = ref('')
 
@@ -229,6 +230,64 @@ async function cfAddDomain() {
   }
 }
 
+
+/** Suggest subdomain from node name, e.g. NB.JP + zone → nb-jp.example.com */
+function suggestHostname(zoneName) {
+  const zone = String(zoneName || '').replace(/\.$/, '').toLowerCase()
+  let base = String(form.name || form.region || 'node')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  if (!base) base = 'node'
+  if (base.length > 40) base = base.slice(0, 40)
+  return zone ? `${base}.${zone}` : base
+}
+
+/**
+ * Pull existing Cloudflare A/AAAA for this public IP into 接入域名.
+ * Prefer exact match already in form; else first record; else offer first.
+ */
+async function cfSyncFromCF() {
+  const ip = (form.public_ip || '').trim()
+  if (!ip) {
+    error.value = '请先填写公网 IP'
+    formFlash.err('请先填写公网 IP')
+    return
+  }
+  if (!cfConfigured.value) {
+    error.value = '请先在「设置」配置 Cloudflare'
+    formFlash.err('请先在「设置」配置 Cloudflare')
+    return
+  }
+  cfSyncBusy.value = true
+  cfMsg.value = ''
+  error.value = ''
+  try {
+    const res = await api('/api/admin/cloudflare/lookup?ip=' + encodeURIComponent(ip))
+    const names = Array.isArray(res.names) ? res.names.filter(Boolean) : []
+    if (!names.length) {
+      formFlash.err('CF 中未找到指向该 IP 的 A/AAAA 记录')
+      cfMsg.value = '未找到匹配记录。可先在上方填写域名再点「CF 添加 / 更新解析」。'
+      return
+    }
+    const cur = (form.hostname || '').trim().toLowerCase()
+    let pick = names[0]
+    if (cur && names.some((n) => n.toLowerCase() === cur)) {
+      pick = names.find((n) => n.toLowerCase() === cur) || pick
+    }
+    form.hostname = pick
+    const extra = names.length > 1 ? `（共 ${names.length} 条：${names.join('、')}）` : ''
+    cfMsg.value = `已从 CF 同步接入域名：${pick}${extra}`
+    formFlash.ok(names.length > 1 ? `已同步 ${pick}（另有 ${names.length - 1} 条可选）` : `已同步 ${pick}`)
+  } catch (e) {
+    error.value = e.message
+    formFlash.err(e.message)
+  } finally {
+    cfSyncBusy.value = false
+  }
+}
+
 function openCreate() {
   blankForm()
   created.value = null
@@ -245,9 +304,15 @@ function openEdit(n) {
   editingId.value = n.id
   mode.value = 'edit'
   cfMsg.value = ''
-  show.value = true
   error.value = ''
-  loadCFStatus()
+  formFlash.clear()
+  show.value = true
+  // 已有公网 IP、接入域名为空时，自动从 CF 按 IP 拉域名填入
+  loadCFStatus().then(() => {
+    if (!(form.hostname || '').trim() && (form.public_ip || '').trim() && cfConfigured.value) {
+      return cfSyncFromCF()
+    }
+  })
 }
 
 function payload() {
@@ -799,7 +864,15 @@ onUnmounted(() => {
               <button
                 type="button"
                 class="btn btn-primary btn-sm"
-                :disabled="cfBusy || !form.hostname || !form.public_ip"
+                :disabled="cfSyncBusy || !form.public_ip || !cfConfigured"
+                @click="cfSyncFromCF"
+              >
+                {{ cfSyncBusy ? '同步中…' : '从 CF 同步域名' }}
+              </button>
+              <button
+                type="button"
+                class="btn btn-ghost btn-sm"
+                :disabled="cfBusy || !form.hostname || !form.public_ip || !cfConfigured"
                 @click="cfAddDomain"
               >
                 {{ cfBusy ? '写入 CF…' : 'CF 添加 / 更新解析' }}
@@ -815,8 +888,9 @@ onUnmounted(() => {
             </div>
             <p v-if="cfMsg" class="help-text" style="margin-top:8px;color:var(--success)">{{ cfMsg }}</p>
             <p class="help-text" style="margin-top:6px">
-              写入后域名会填入上方「接入域名」，客户端优先用域名。建议<strong>仅 DNS</strong>（灰云），
-              橙云只适合 80/443 HTTP。
+              <strong>从 CF 同步域名</strong>：按公网 IP 在 Cloudflare 查已有 A/AAAA，填入上方「接入域名」。
+              <strong>CF 添加 / 更新解析</strong>：把当前接入域名写到 CF（指向公网 IP）。
+              客户端优先用域名。建议<strong>仅 DNS</strong>（灰云）。
             </p>
           </div>
 

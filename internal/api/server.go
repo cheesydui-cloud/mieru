@@ -304,6 +304,7 @@ admin.GET("/settings", s.getSettings)
 				admin.PUT("/settings", s.putSettings)
 				admin.POST("/admin-password", s.changeAdminPassword)
 				admin.POST("/cloudflare/dns", s.cloudflareUpsertDNS)
+				admin.GET("/cloudflare/lookup", s.cloudflareLookupDNS)
 				admin.POST("/cloudflare/test", s.cloudflareTest)
 				admin.GET("/nodes/:id/install", s.nodeInstallCmd)
 				admin.GET("/diagnose", s.diagnose)
@@ -3247,6 +3248,44 @@ func (s *Server) putSettings(c *gin.Context) {
 			"note":    note,
 		})
 	}
+
+
+// cloudflareLookupDNS finds A/AAAA names in the configured zone that point to ?ip=
+// so operators can fill 接入域名 from existing CF records.
+func (s *Server) cloudflareLookupDNS(c *gin.Context) {
+	ip := strings.TrimSpace(c.Query("ip"))
+	if ip == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 ip 参数"})
+		return
+	}
+	cli, err := s.cfClient()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	recs, err := cli.FindHostsByIP(ip)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	names := make([]string, 0, len(recs))
+	seen := map[string]bool{}
+	for _, r := range recs {
+		n := strings.TrimSpace(r.Name)
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		names = append(names, n)
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"ok":      true,
+		"ip":      ip,
+		"names":   names,
+		"records": recs,
+		"count":   len(names),
+	})
+}
 
 	func (s *Server) cloudflareTest(c *gin.Context) {
 		cli, err := s.cfClient()

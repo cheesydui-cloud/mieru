@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.37] - 2026-08-02
+
+### CF 域名同步到接入域名
+
+- 节点编辑：新增 **从 CF 同步域名**（按公网 IP 查 Cloudflare A/AAAA 并填入「接入域名」）
+- 打开编辑且接入域名为空、已有公网 IP 时自动尝试同步
+- API：`GET /api/admin/cloudflare/lookup?ip=`
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.37 bash
+```
+
 ## [0.4.36] - 2026-08-02
 
 ### 操作反馈贴按钮

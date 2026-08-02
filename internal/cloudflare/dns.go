@@ -144,6 +144,42 @@ func (c *Client) putRecord(id string, rec DNSRecord) (*DNSRecord, error) {
 	return &out.Result, nil
 }
 
+
+// FindHostsByIP lists A/AAAA record hostnames in the zone that point to ip.
+// Used to fill the node "接入域名" from existing Cloudflare DNS.
+func (c *Client) FindHostsByIP(ip string) ([]DNSRecord, error) {
+	if err := c.ok(); err != nil {
+		return nil, err
+	}
+	ip = strings.TrimSpace(ip)
+	if net.ParseIP(ip) == nil {
+		return nil, fmt.Errorf("无效 IP: %s", ip)
+	}
+	// Cloudflare allows filtering dns_records by content=
+	u := fmt.Sprintf("%s/zones/%s/dns_records?content=%s&per_page=100",
+		apiBase, c.ZoneID, ip)
+	var out struct {
+		apiResp
+		Result []DNSRecord `json:"result"`
+	}
+	if err := c.do("GET", u, nil, &out); err != nil {
+		return nil, err
+	}
+	if !out.Success {
+		return nil, apiErr(out.Errors)
+	}
+	// keep only A/AAAA
+	var recs []DNSRecord
+	for _, r := range out.Result {
+		if r.Type == "A" || r.Type == "AAAA" {
+			// normalize name (CF may return FQDN)
+			r.Name = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(r.Name)), ".")
+			recs = append(recs, r)
+		}
+	}
+	return recs, nil
+}
+
 // VerifyToken checks token validity (optional UX).
 func (c *Client) VerifyToken() error {
 	if c == nil || c.Token == "" {
