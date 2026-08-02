@@ -1,11 +1,13 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useFlash } from '../flash'
 import { api, copyText } from '../api'
 
 const routes = ref([])
 const nodes = ref([])
 const error = ref('')
-const toast = ref('')
+const flash = useFlash()
+const formFlash = useFlash()
 const show = ref(false)
 const saving = ref(false)
 const mode = ref('create')
@@ -326,20 +328,25 @@ async function save() {
         method: 'PUT',
         body: JSON.stringify(body),
       })
-      toast.value = res.front_port
-        ? `隧道已更新 · 入口 ${res.front_port}`
-        : '隧道已更新'
+      formFlash.ok(
+        res.front_port
+          ? `隧道已更新 · 入口 ${res.front_port}`
+          : '隧道已更新',
+      )
     } else {
       const res = await api('/api/admin/routes', {
         method: 'POST',
         body: JSON.stringify(body),
       })
-      toast.value = res.front_port
-        ? `隧道已创建 · 入口端口 ${res.front_port} → 落地 ${res.exit_name || ''}`
-        : '隧道已创建'
+      formFlash.ok(
+        res.front_port
+          ? `隧道已创建 · 入口端口 ${res.front_port} → 落地 ${res.exit_name || ''}`
+          : '隧道已创建',
+      )
     }
-    show.value = false
+    // 成功提示贴在弹窗按钮旁，稍后再关
     await load()
+    setTimeout(() => { show.value = false }, 900)
   } catch (e) {
     error.value = e.message
   } finally {
@@ -351,7 +358,7 @@ async function remove(id) {
   if (!confirm('删除隧道？')) return
   try {
     await api(`/api/admin/routes/${id}`, { method: 'DELETE' })
-    toast.value = '已删除'
+    flash.ok('已删除')
     await load()
   } catch (e) {
     error.value = e.message
@@ -404,14 +411,14 @@ function formatProbeTime(iso) {
 async function copyEntry(r) {
   const ep = entryEndpoint(r)
   if (!ep) {
-    toast.value = '无入口 IP:端口'
+    flash.err('无入口 IP:端口')
     return
   }
   try {
     await copyText(ep)
-    toast.value = `已复制 ${ep}`
+    flash.ok(`已复制 ${ep}`)
   } catch {
-    toast.value = '复制失败'
+    flash.err('复制失败')
   }
 }
 
@@ -442,7 +449,7 @@ async function probe(r) {
     probeDetail.value = res
     const ok = (res.hops || []).filter((x) => x.ok).length
     const total = (res.hops || []).length
-    toast.value = `探测：${ok}/${total} · ${healthLabel(res.health)}`
+    flash.ok(`探测：${ok}/${total} · ${healthLabel(res.health)}`)
     await load()
   } catch (e) {
     error.value = e.message
@@ -455,8 +462,13 @@ onMounted(load)
 </script>
 
 <template>
-  <div v-if="error && !show" class="error">{{ error }}</div>
-  <div v-if="toast" class="toast" @click="toast = ''">{{ toast }}</div>
+  <div v-if="error && !show" class="action-feedback err page-action-feedback" @click="error = ''">{{ error }}</div>
+  <div
+    v-if="flash.msg && !show"
+    class="action-feedback page-action-feedback"
+    :class="flash.kind"
+    @click="flash.clear()"
+  >{{ flash.msg }}</div>
 
   <div class="page-tabs">
     <div class="page-tab active">隧道</div>
@@ -535,7 +547,14 @@ onMounted(load)
         <button class="btn btn-ghost btn-sm" @click="show = false">关闭</button>
       </div>
       <div class="modal-bd">
-        <div v-if="error && show" class="error" style="margin:0">{{ error }}</div>
+        <div v-if="error && show" class="action-feedback err" style="margin:0" @click="error = ''">{{ error }}</div>
+        <div
+          v-if="formFlash.msg && show"
+          class="action-feedback"
+          :class="formFlash.kind"
+          style="margin:0"
+          @click="formFlash.clear()"
+        >{{ formFlash.msg }}</div>
         <div class="field">
           <label>名称</label>
           <input v-model="form.name" />
@@ -621,6 +640,12 @@ onMounted(load)
         </p>
       </div>
       <div class="modal-ft">
+        <div
+          v-if="formFlash.msg"
+          class="action-feedback"
+          :class="formFlash.kind"
+          @click="formFlash.clear()"
+        >{{ formFlash.msg }}</div>
         <button class="btn btn-ghost" @click="show = false">取消</button>
         <button class="btn btn-primary" :disabled="saving || !canSave" @click="save">
           {{ saving ? '保存中…' : '保存' }}

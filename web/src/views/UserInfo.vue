@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useFlash } from '../flash'
 import { useRoute } from 'vue-router'
 import QRCode from 'qrcode'
 import { copyText, formatBytes, formatBps, statusBadge } from '../api'
@@ -8,7 +9,7 @@ import { brand, brandMarkLetter, loadBrand } from '../brand'
 const route = useRoute()
 const info = ref(null)
 const error = ref('')
-const toast = ref('')
+const flash = useFlash()
 const loading = ref(true)
 const subQR = ref('')
 let timer
@@ -125,12 +126,12 @@ async function copy(text) {
   if (!text) return
   try {
     await copyText(text)
-    toast.value = '已复制'
+    flash.ok('已复制')
     setTimeout(() => {
-      if (toast.value === '已复制') toast.value = ''
+      /* flash auto-clears */
     }, 2000)
   } catch {
-    toast.value = '复制失败，请手动选中'
+    flash.err('复制失败，请手动选中')
   }
 }
 
@@ -142,7 +143,7 @@ function downloadYAML() {
       window.open(info.value.mihomo_url, '_blank')
       return
     }
-    toast.value = '暂无 YAML'
+    flash.err('暂无 YAML')
     return
   }
   const name = `mihomo-${info.value?.username || 'user'}.yaml`
@@ -154,7 +155,7 @@ function downloadYAML() {
   a.click()
   a.remove()
   URL.revokeObjectURL(a.href)
-  toast.value = `已下载 ${name}`
+  flash.ok(`已下载 ${name}`)
 }
 
 onMounted(async () => {
@@ -215,9 +216,14 @@ onUnmounted(() => clearInterval(timer))
           退出
         </button>
       </div>
-
-      <div v-if="toast" class="toast" @click="toast = ''">{{ toast }}</div>
-      <div v-if="error" class="error">{{ error }}</div>
+      <div v-if="error" class="action-feedback err" style="margin:0 0 10px" @click="error = ''">{{ error }}</div>
+      <div
+        v-if="flash.msg"
+        class="action-feedback"
+        :class="flash.kind"
+        style="margin:0 0 10px"
+        @click="flash.clear()"
+      >{{ flash.msg }}</div>
       <div v-else-if="loading" class="muted" style="text-align: center; padding: 40px">加载中…</div>
 
       <template v-else-if="info">

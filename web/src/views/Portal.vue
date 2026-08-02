@@ -1,12 +1,13 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useFlash } from '../flash'
 import { useRouter } from 'vue-router'
 import { api, clearSession, formatBytes, formatBps, getUsername, statusBadge } from '../api'
 
 const router = useRouter()
 const profile = ref(null)
 const error = ref('')
-const toast = ref('')
+const flash = useFlash()
 let timer
 
 const remainPct = computed(() => {
@@ -36,7 +37,7 @@ function logout() {
 
 async function copy(text) {
   await navigator.clipboard.writeText(text)
-  toast.value = '已复制'
+  flash.ok('已复制')
 }
 
 function subFull() {
@@ -67,8 +68,14 @@ onUnmounted(() => clearInterval(timer))
         <button class="btn btn-primary btn-sm" @click="logout">退出登录</button>
       </div>
 
-      <div v-if="error" class="error">{{ error }}</div>
-      <div v-if="toast" class="toast" @click="toast = ''">{{ toast }}</div>
+      <div v-if="error" class="action-feedback err" style="margin:0 0 10px" @click="error = ''">{{ error }}</div>
+      <div
+        v-if="flash.msg"
+        class="action-feedback"
+        :class="flash.kind"
+        style="margin:0 0 10px"
+        @click="flash.clear()"
+      >{{ flash.msg }}</div>
 
       <template v-if="profile?.user">
         <div class="card ring-wrap">

@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.36] - 2026-08-02
+
+### 操作反馈贴按钮
+
+- 取消右下角 / 页顶飘字 toast
+- 成功/失败提示改到**对应操作按钮附近**（设置各区块、弹窗创建/保存底栏、页面操作条）
+- 弹窗保存成功会短暂显示提示再关闭，避免一闪而过看不到
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.36 bash
+```
+
 ## [0.4.35] - 2026-08-02
 
 ### Cloudflare 三按钮互不联动

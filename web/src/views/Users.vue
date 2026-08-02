@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { useFlash } from '../flash'
 import QRCode from 'qrcode'
 import { api, copyText, formatBytes, formatBps, getToken, statusBadge } from '../api'
 
@@ -7,7 +8,8 @@ const users = ref([])
 const routes = ref([])
 const rates = ref({}) // id -> {up, down, ts}
 const error = ref('')
-const toast = ref('')
+const flash = useFlash()
+const formFlash = useFlash()
 const filter = ref('')
 const statusFilter = ref('all')
 const show = ref(false)
@@ -96,7 +98,7 @@ function selectVisible() {
 async function batchAction(action, extra = {}) {
   const ids = selectedIds.value
   if (!ids.length) {
-    toast.value = '请先勾选用户'
+    flash.err('请先勾选用户')
     return
   }
   const labels = {
@@ -118,7 +120,7 @@ async function batchAction(action, extra = {}) {
       method: 'POST',
       body: JSON.stringify({ ids, action, ...extra }),
     })
-    toast.value = `${label}完成：成功 ${res.success || 0}` + (res.failed ? `，失败 ${res.failed}` : '')
+    flash.ok(`${label}完成：成功 ${res.success || 0}` + (res.failed ? `，失败 ${res.failed}` : ''))
     clearSelection()
     await loadUsers()
   } catch (e) {
@@ -419,9 +421,9 @@ function onWinReposition() {
 async function copy(text) {
   try {
     await copyText(text)
-    toast.value = '已复制'
+    flash.ok('已复制')
   } catch {
-    toast.value = '复制失败，请手动选中'
+    flash.err('复制失败，请手动选中')
   }
 }
 
@@ -437,11 +439,11 @@ function userInfoURL(u) {
 async function copyUserInfo(u) {
   const url = userInfoURL(u)
   if (!url) {
-    toast.value = '该用户无查询链接（缺少 token）'
+    flash.err('该用户无查询链接（缺少 token）')
     return
   }
   await copy(url)
-  toast.value = '已复制查询页链接'
+  flash.ok('已复制查询页链接')
 }
 
 function openEdit(u) {
@@ -487,7 +489,7 @@ async function create() {
       body: JSON.stringify(body),
     })
     mode.value = 'created'
-    toast.value = '用户已创建'
+    formFlash.ok('用户已创建')
     await loadUsers()
   } catch (e) {
     error.value = e.message
@@ -514,9 +516,9 @@ async function saveEdit() {
       method: 'PUT',
       body: JSON.stringify(body),
     })
-    toast.value = '已保存'
-    show.value = false
+    formFlash.ok('已保存')
     await loadUsers()
+    setTimeout(() => { show.value = false }, 900)
   } catch (e) {
     error.value = e.message
   } finally {
@@ -550,14 +552,14 @@ async function resetSub(u) {
   }
   try {
     const res = await api(`/api/admin/users/${u.id}/reset-sub`, { method: 'POST' })
-    toast.value = '已重置订阅 token'
+    formFlash.ok('已重置订阅 token')
     await loadUsers()
     if (res?.sub_token || res?.info_url || res?.subscription) {
       const url = res.info_url || (res.sub_token ? `${window.location.origin}/u/${res.sub_token}` : '')
       if (url) {
         try {
           await copyText(url)
-          toast.value = '已重置并复制新查询页链接'
+          formFlash.ok('已重置并复制新查询页链接')
         } catch {
           /* keep toast */
         }
@@ -575,7 +577,7 @@ async function remove(u) {
   if (!confirm(`确认删除用户「${name}」？\n\n将从落地 mita 下发配置中移除，不可恢复。`)) return
   try {
     await api(`/api/admin/users/${id}`, { method: 'DELETE' })
-    toast.value = `已删除 ${name}`
+    flash.ok(`已删除 ${name}`)
     await loadUsers()
   } catch (e) {
     error.value = e.message
@@ -588,7 +590,7 @@ async function toggle(u) {
     method: 'POST',
     body: JSON.stringify({}),
   })
-  toast.value = res.status === 'disabled' ? '已停用' : '已启用'
+  flash.ok(res.status === 'disabled' ? '已停用' : '已启用')
   await loadUsers()
 }
 
@@ -611,7 +613,7 @@ async function doRenew() {
       method: 'POST',
       body: JSON.stringify(body),
     })
-    toast.value = '已续期'
+    flash.ok('已续期')
     renewShow.value = false
     await loadUsers()
   } catch (e) {
@@ -650,7 +652,7 @@ async function doSetMultiplier() {
       method: 'POST',
       body: JSON.stringify({ multiplier: m }),
     })
-    toast.value = m === 1 ? '已恢复真实显示（×1）' : `查询页已设为 ×${m}`
+    flash.ok(m === 1 ? '已恢复真实显示（×1）' : `查询页已设为 ×${m}`)
     multShow.value = false
     await loadUsers()
   } catch (e) {
@@ -671,7 +673,7 @@ async function doAddTraffic(unlimited = false) {
       method: 'POST',
       body: JSON.stringify(body),
     })
-    toast.value = unlimited ? '已改为不限流量' : `已加 ${trafficGB.value} GB`
+    flash.ok(unlimited ? '已改为不限流量' : `已加 ${trafficGB.value} GB`)
     trafficShow.value = false
     await loadUsers()
   } catch (e) {
@@ -735,7 +737,7 @@ async function openSub(u) {
 async function downloadMihomo(u) {
   const id = u?.id || subUser.value?.id
   if (!id) {
-    toast.value = '无用户 ID'
+    flash.ok('无用户 ID')
     return
   }
   try {
@@ -756,7 +758,7 @@ async function downloadMihomo(u) {
     a.click()
     a.remove()
     URL.revokeObjectURL(a.href)
-    toast.value = `已下载 ${name}`
+    flash.ok(`已下载 ${name}`)
   } catch (e) {
     if (mihomoYAML.value) {
       const blob = new Blob([mihomoYAML.value], { type: 'application/x-yaml' })
@@ -766,7 +768,7 @@ async function downloadMihomo(u) {
       document.body.appendChild(a)
       a.click()
       a.remove()
-      toast.value = '已下载 YAML'
+      flash.ok('已下载 YAML')
       return
     }
     error.value = e.message || '下载失败'
@@ -792,8 +794,13 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div v-if="error && !show && !subShow && !renewShow && !trafficShow && !multShow && !resetShow" class="error">{{ error }}</div>
-  <div v-if="toast" class="toast" @click="toast = ''">{{ toast }}</div>
+  <div v-if="error && !show && !subShow && !renewShow && !trafficShow && !multShow && !resetShow" class="action-feedback err page-action-feedback" @click="error = ''">{{ error }}</div>
+  <div
+    v-if="flash.msg && !show && !subShow && !renewShow && !trafficShow && !multShow && !resetShow"
+    class="action-feedback page-action-feedback"
+    :class="flash.kind"
+    @click="flash.clear()"
+  >{{ flash.msg }}</div>
 
   <Teleport to="body">
     <div
@@ -1035,7 +1042,14 @@ onUnmounted(() => {
         <button class="btn btn-ghost btn-sm" @click="show = false">关闭</button>
       </div>
       <div class="modal-bd">
-        <div v-if="error && show" class="error" style="margin:0">{{ error }}</div>
+        <div v-if="error && show" class="action-feedback err" style="margin:0" @click="error = ''">{{ error }}</div>
+        <div
+          v-if="formFlash.msg && show"
+          class="action-feedback"
+          :class="formFlash.kind"
+          style="margin:0"
+          @click="formFlash.clear()"
+        >{{ formFlash.msg }}</div>
         <template v-if="mode !== 'created'">
           <div v-if="mode === 'create'" class="pkg-row">
             <button
@@ -1139,6 +1153,12 @@ onUnmounted(() => {
         </template>
       </div>
       <div class="modal-ft">
+        <div
+          v-if="formFlash.msg"
+          class="action-feedback"
+          :class="formFlash.kind"
+          @click="formFlash.clear()"
+        >{{ formFlash.msg }}</div>
         <button class="btn btn-ghost" @click="show = false">
           {{ mode === 'created' ? '完成' : '取消' }}
         </button>

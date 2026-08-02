@@ -2,9 +2,13 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { api, getToken } from '../api'
 import { setBrandMeta } from '../brand'
+import { useFlash } from '../flash'
 
-const error = ref('')
-const toast = ref('')
+const pageFlash = useFlash()
+const brandFlash = useFlash()
+const cfFlash = useFlash()
+const backupFlash = useFlash()
+const pwFlash = useFlash()
 const savingBrand = ref(false)
 const savingCF = ref(false)
 const clearingCF = ref(false)
@@ -81,15 +85,15 @@ async function load() {
     jwtDefault.value = !!s.jwt_is_default
     corsWide.value = !!s.cors_wide_open
     audit.value = Array.isArray(logs) ? logs : []
-    error.value = ''
+    pageFlash.clear()
   } catch (e) {
-    error.value = e.message
+    pageFlash.err(e.message)
   }
 }
 
 async function downloadBackup() {
   backupLoading.value = true
-  error.value = ''
+  backupFlash.clear()
   try {
     const tok = getToken()
     const res = await fetch('/api/admin/backup', {
@@ -117,9 +121,9 @@ async function downloadBackup() {
     a.click()
     a.remove()
     URL.revokeObjectURL(a.href)
-    toast.value = '备份已下载（不含 agent_token / 管理员密码）'
+    backupFlash.ok('备份已下载（不含 agent_token / 管理员密码）')
   } catch (e) {
-    error.value = e.message
+    backupFlash.err(e.message)
   } finally {
     backupLoading.value = false
   }
@@ -129,7 +133,7 @@ function onFaviconFile(ev) {
   const f = ev.target.files && ev.target.files[0]
   if (!f) return
   if (f.size > 100 * 1024) {
-    error.value = '图标请 ≤100KB'
+    brandFlash.err('图标请 ≤100KB')
     return
   }
   const reader = new FileReader()
@@ -185,13 +189,13 @@ async function putSettingsBody(body) {
 /** 仅保存面板品牌 / 地址（不改动 CF Token） */
 async function saveBrandSettings() {
   savingBrand.value = true
-  error.value = ''
+  brandFlash.clear()
   try {
     const res = await putSettingsBody(brandPayload())
     applySettingsResponse(res, { touchBrand: true, touchCF: true })
-    toast.value = '面板设置已保存（名称 / 副标题 / 图标 / 地址）'
+    brandFlash.ok('面板设置已保存（名称 / 副标题 / 图标 / 地址）')
   } catch (e) {
-    error.value = e.message
+    brandFlash.err(e.message)
   } finally {
     savingBrand.value = false
   }
@@ -222,9 +226,11 @@ async function persistCFSettings({ showToast = true } = {}) {
   const res = await putSettingsBody(cfPayload())
   applySettingsResponse(res, { touchBrand: true, touchCF: true })
   if (showToast) {
-    toast.value = res.cf_configured
-      ? 'Cloudflare 配置已保存'
-      : '已保存（请填写 Token + Zone ID 后即可在节点页一键解析）'
+    cfFlash.ok(
+      res.cf_configured
+        ? 'Cloudflare 配置已保存'
+        : '已保存（请填写 Token + Zone ID 后即可在节点页一键解析）',
+    )
   }
   return res
 }
@@ -233,11 +239,11 @@ async function persistCFSettings({ showToast = true } = {}) {
 async function saveCFSettings() {
   if (savingCF.value || clearingCF.value || cfTesting.value) return
   savingCF.value = true
-  error.value = ''
+  cfFlash.clear()
   try {
     await persistCFSettings({ showToast: true })
   } catch (e) {
-    error.value = e.message
+    cfFlash.err(e.message)
   } finally {
     savingCF.value = false
   }
@@ -250,22 +256,24 @@ async function saveCFSettings() {
 async function testCF() {
   if (cfTesting.value || savingCF.value || clearingCF.value) return
   cfTesting.value = true
-  error.value = ''
+  cfFlash.clear()
   try {
     // 新 Token / 改了 Zone 时先静默落库，否则后端只能测到旧值
     const zone = (form.cf_zone_id || '').trim()
     if (!zone) {
-      throw new Error('请先填写 Zone ID')
+      throw new Error('请先填写 Zone ID（32 位，不是域名）')
     }
     if (hasUnsavedCFToken() || zone) {
       await persistCFSettings({ showToast: false })
     }
     const res = await api('/api/admin/cloudflare/test', { method: 'POST', body: '{}' })
-    toast.value = res.zone_name
-      ? `连接正常 · Zone ${res.zone_name}`
-      : 'Cloudflare 连接正常'
+    cfFlash.ok(
+      res.zone_name
+        ? `连接正常 · Zone ${res.zone_name}`
+        : 'Cloudflare 连接正常',
+    )
   } catch (e) {
-    error.value = e.message
+    cfFlash.err(e.message)
   } finally {
     cfTesting.value = false
   }
@@ -274,12 +282,12 @@ async function testCF() {
 /** 清除 Token：只删 API Token，保留 Zone ID / 橙云选项 */
 async function clearCFTokenAndSave() {
   if (clearingCF.value || savingCF.value || cfTesting.value) return
+  cfFlash.clear()
   if (!form.cf_token_set && !(form.cf_api_token || '').trim()) {
-    toast.value = '当前没有已保存的 Token'
+    cfFlash.err('当前没有已保存的 Token')
     return
   }
   clearingCF.value = true
-  error.value = ''
   try {
     form.cf_api_token = 'clear'
     form.cf_token_set = false
@@ -294,22 +302,22 @@ async function clearCFTokenAndSave() {
     form.cf_api_token = ''
     form.cf_token_set = false
     form.cf_configured = false
-    toast.value = 'Cloudflare Token 已清除（Zone ID 仍保留）'
+    cfFlash.ok('Cloudflare Token 已清除（Zone ID 仍保留）')
   } catch (e) {
-    error.value = e.message
+    cfFlash.err(e.message)
   } finally {
     clearingCF.value = false
   }
 }
 
 async function changePassword() {
-  error.value = ''
+  pwFlash.clear()
   if (pw.new_password !== pw.new_password2) {
-    error.value = '两次新密码不一致'
+    pwFlash.err('两次新密码不一致')
     return
   }
   if (pw.new_password.length < 6) {
-    error.value = '新密码至少 6 位'
+    pwFlash.err('新密码至少 6 位')
     return
   }
   savingPw.value = true
@@ -322,13 +330,13 @@ async function changePassword() {
         new_password: pw.new_password,
       }),
     })
-    toast.value = '管理员密码已修改，请牢记新密码'
+    pwFlash.ok('管理员密码已修改，请牢记新密码')
     pw.current_password = ''
     pw.new_password = ''
     pw.new_password2 = ''
     await load()
   } catch (e) {
-    error.value = e.message
+    pwFlash.err(e.message)
   } finally {
     savingPw.value = false
   }
@@ -349,8 +357,12 @@ onMounted(load)
 </script>
 
 <template>
-  <div v-if="error" class="error">{{ error }}</div>
-  <div v-if="toast" class="toast" @click="toast = ''">{{ toast }}</div>
+  <div
+    v-if="pageFlash.msg"
+    class="action-feedback page-action-feedback"
+    :class="pageFlash.kind"
+    @click="pageFlash.clear()"
+  >{{ pageFlash.msg }}</div>
 
   <div class="page-tabs">
     <div class="page-tab active">设置</div>
@@ -444,9 +456,17 @@ onMounted(load)
         </div>
         <p class="help-text">PNG/SVG/WebP，建议 ≤100KB。清空后恢复名称首字图标。</p>
       </div>
-      <button type="button" class="btn btn-primary" :disabled="savingBrand" @click="saveBrandSettings">
-        {{ savingBrand ? '保存中…' : '保存' }}
-      </button>
+      <div class="action-bar">
+        <button type="button" class="btn btn-primary" :disabled="savingBrand" @click="saveBrandSettings">
+          {{ savingBrand ? '保存中…' : '保存' }}
+        </button>
+        <div
+          v-if="brandFlash.msg"
+          class="action-feedback"
+          :class="brandFlash.kind"
+          @click="brandFlash.clear()"
+        >{{ brandFlash.msg }}</div>
+      </div>
     </div>
   </div>
 
@@ -521,6 +541,12 @@ onMounted(load)
           {{ clearingCF ? '清除中…' : '清除 Token' }}
         </button>
       </div>
+      <div
+        v-if="cfFlash.msg"
+        class="action-feedback"
+        :class="cfFlash.kind"
+        @click="cfFlash.clear()"
+      >{{ cfFlash.msg }}</div>
     </div>
   </div>
 
@@ -537,6 +563,13 @@ onMounted(load)
       </button>
     </div>
     <div class="panel-bd" style="padding:14px 16px">
+      <div
+        v-if="backupFlash.msg"
+        class="action-feedback"
+        :class="backupFlash.kind"
+        style="margin-top:0;margin-bottom:10px"
+        @click="backupFlash.clear()"
+      >{{ backupFlash.msg }}</div>
       <p class="help-text" style="margin:0">
         不含 agent_token、管理员密码哈希、用户代理密码。节点侧请继续保留
         <code class="mono">/etc/mieru-agent.env</code>。
@@ -573,9 +606,17 @@ onMounted(load)
       <p class="help-text" style="margin:12px 0 14px">
         改密立即生效。勿开 <code class="mono">PANEL_ADMIN_FORCE_SYNC=1</code>，否则重启会用 env 覆盖。
       </p>
-      <button type="button" class="btn btn-primary" :disabled="savingPw" @click="changePassword">
-        {{ savingPw ? '提交中…' : '修改密码' }}
-      </button>
+      <div class="action-bar">
+        <button type="button" class="btn btn-primary" :disabled="savingPw" @click="changePassword">
+          {{ savingPw ? '提交中…' : '修改密码' }}
+        </button>
+        <div
+          v-if="pwFlash.msg"
+          class="action-feedback"
+          :class="pwFlash.kind"
+          @click="pwFlash.clear()"
+        >{{ pwFlash.msg }}</div>
+      </div>
     </div>
   </div>
 

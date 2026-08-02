@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { useFlash } from '../flash'
 import { useRoute, useRouter } from 'vue-router'
 import { api, copyText, statusBadge } from '../api'
 
@@ -10,7 +11,8 @@ const nodes = ref([])
 const filter = ref('')
 const tab = ref('all') // all | front | exit
 const error = ref('')
-const toast = ref('')
+const flash = useFlash()
+const formFlash = useFlash()
 const show = ref(false)
 const mode = ref('create') // create | edit | created
 const installShow = ref(false)
@@ -219,7 +221,7 @@ async function cfAddDomain() {
       res.proxied ? '（橙云代理）' : '（仅 DNS）'
     }`
     if (res.note) cfMsg.value += ' · ' + res.note
-    toast.value = 'Cloudflare 域名已添加'
+    formFlash.ok('Cloudflare 域名已添加')
   } catch (e) {
     error.value = e.message
   } finally {
@@ -321,7 +323,7 @@ async function create() {
     })
     created.value = res
     mode.value = 'created'
-    toast.value = `已创建：${res.node.name}`
+    formFlash.ok(`已创建：${res.node.name}`)
     await load()
   } catch (e) {
     error.value = e.message
@@ -339,9 +341,9 @@ async function saveEdit() {
       method: 'PUT',
       body: JSON.stringify(payload()),
     })
-    toast.value = '已更新，配置已自动下发（Agent 心跳后生效）'
-    show.value = false
+    formFlash.ok('已更新，配置已自动下发（Agent 心跳后生效）')
     await load()
+    setTimeout(() => { show.value = false }, 900)
   } catch (e) {
     error.value = e.message
   } finally {
@@ -451,7 +453,7 @@ async function pushUpgrade(n) {
   upgrading.value = { ...upgrading.value, [n.id]: true }
   try {
     const res = await api(`/api/admin/nodes/${n.id}/upgrade`, { method: 'POST' })
-    toast.value = res.message || `已推送升级 → ${res.version || ''}`
+    flash.ok(res.message || `已推送升级 → ${res.version || ''}`)
     await load()
   } catch (e) {
     error.value = e.message
@@ -466,7 +468,7 @@ async function pushUpgradeAll() {
   if (!confirm('向所有在线节点推送 Agent 升级到面板版本？')) return
   try {
     const res = await api('/api/admin/nodes/upgrade-all', { method: 'POST' })
-    toast.value = res.message || '已推送'
+    flash.ok(res.message || '已推送')
     await load()
   } catch (e) {
     error.value = e.message
@@ -492,7 +494,7 @@ async function remove(n) {
     const parts = ['已删除']
     if (res.routes_deleted) parts.push(`隧道 ${res.routes_deleted}`)
     if (res.users_unbound) parts.push(`解绑用户 ${res.users_unbound}`)
-    toast.value = parts.join(' · ') + '；Agent 将停用'
+    flash.ok(parts.join(' · ') + '；Agent 将停用')
     await load()
   } catch (e) {
     error.value = e.message
@@ -501,16 +503,16 @@ async function remove(n) {
 
 async function rebuild() {
   await api('/api/admin/rebuild', { method: 'POST' })
-  toast.value = '已重建全部节点配置'
+  flash.ok('已重建全部节点配置')
   await load()
 }
 
 async function copy(text) {
   try {
     await copyText(text)
-    toast.value = '已复制'
+    flash.ok('已复制')
   } catch {
-    toast.value = '复制失败，请手动选中'
+    flash.err('复制失败，请手动选中')
   }
 }
 
@@ -539,8 +541,13 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div v-if="error && !show" class="error">{{ error }}</div>
-  <div v-if="toast" class="toast" @click="toast = ''">{{ toast }}</div>
+  <div v-if="error && !show" class="action-feedback err page-action-feedback" @click="error = ''">{{ error }}</div>
+  <div
+    v-if="flash.msg && !show"
+    class="action-feedback page-action-feedback"
+    :class="flash.kind"
+    @click="flash.clear()"
+  >{{ flash.msg }}</div>
 
   <div class="page-tabs">
     <button class="page-tab" :class="{ active: tab === 'all' }" type="button" @click="setTab('all')">
@@ -686,7 +693,14 @@ onUnmounted(() => {
         <button class="btn btn-ghost btn-sm" @click="show = false">关闭</button>
       </div>
       <div class="modal-bd">
-        <div v-if="error && show" class="error" style="margin:0">{{ error }}</div>
+        <div v-if="error && show" class="action-feedback err" style="margin:0" @click="error = ''">{{ error }}</div>
+        <div
+          v-if="formFlash.msg && show"
+          class="action-feedback"
+          :class="formFlash.kind"
+          style="margin:0"
+          @click="formFlash.clear()"
+        >{{ formFlash.msg }}</div>
         <template v-if="mode !== 'created'">
           <div class="form-grid">
             <div class="field">
@@ -853,6 +867,12 @@ onUnmounted(() => {
         </template>
       </div>
       <div class="modal-ft">
+        <div
+          v-if="formFlash.msg"
+          class="action-feedback"
+          :class="formFlash.kind"
+          @click="formFlash.clear()"
+        >{{ formFlash.msg }}</div>
         <button class="btn btn-ghost" @click="show = false">
           {{ mode === 'created' ? '完成' : '取消' }}
         </button>

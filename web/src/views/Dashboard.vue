@@ -1,13 +1,13 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useFlash } from '../flash'
 import { useRouter } from 'vue-router'
 import { api, statusBadge } from '../api'
 
 const router = useRouter()
 const diag = ref(null)
 const routes = ref([])
-const error = ref('')
-const toast = ref('')
+const flash = useFlash()
 const rebuilding = ref(false)
 const rebuildStatus = ref(null)
 let timer
@@ -22,9 +22,9 @@ async function load() {
     diag.value = d
     routes.value = Array.isArray(rs) ? rs : []
     rebuildStatus.value = d?.rebuild || rb || null
-    error.value = ''
+    flash.clear()
   } catch (e) {
-    error.value = e.message
+    flash.err(e.message)
   }
 }
 
@@ -157,10 +157,10 @@ async function rebuild() {
   try {
     const res = await api('/api/admin/rebuild', { method: 'POST' })
     rebuildStatus.value = res?.rebuild || rebuildStatus.value
-    toast.value = '已重建全部节点配置'
+    flash.ok('已重建全部节点配置')
     await load()
   } catch (e) {
-    error.value = e.message
+    flash.err(e.message)
   } finally {
     rebuilding.value = false
   }
@@ -174,8 +174,6 @@ onUnmounted(() => clearInterval(timer))
 </script>
 
 <template>
-  <div v-if="error" class="error">{{ error }}</div>
-  <div v-if="toast" class="toast" @click="toast = ''">{{ toast }}</div>
 
   <div class="page-tabs">
     <div class="page-tab active">拓扑健康</div>
@@ -278,6 +276,7 @@ onUnmounted(() => clearInterval(timer))
       </div>
       <div class="row-actions">
         <button class="btn btn-ghost btn-sm" @click="load">刷新</button>
+        <div class="action-bar">
         <button
           class="btn btn-ghost btn-sm"
           :disabled="rebuilding"
@@ -286,6 +285,13 @@ onUnmounted(() => clearInterval(timer))
         >
           {{ rebuilding ? '重建中…' : '重建配置' }}
         </button>
+        <div
+          v-if="flash.msg"
+          class="action-feedback"
+          :class="flash.kind"
+          @click="flash.clear()"
+        >{{ flash.msg }}</div>
+      </div>
       </div>
     </div>
 
