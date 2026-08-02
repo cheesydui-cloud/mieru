@@ -20,7 +20,7 @@ const moreId = ref(null)
 const form = reactive({
   username: '',
   expire_at: '',
-  traffic_limit_gb: 100,
+  traffic_limit_gb: 0, // 0=不限；套餐按钮可一键填
   route_id: null,
   entry_host: '',
   entry_port: null,
@@ -159,11 +159,12 @@ async function loadRates() {
 }
 
 function blankForm() {
+  // 新建全部留白，不预选隧道/流量/到期；需要时点套餐按钮
   Object.assign(form, {
     username: '',
     expire_at: '',
-    traffic_limit_gb: 100,
-    route_id: routes.value[0]?.id || null,
+    traffic_limit_gb: 0,
+    route_id: null,
     entry_host: '',
     entry_port: null,
     note: '',
@@ -600,12 +601,17 @@ onUnmounted(() => {
               </select>
             </div>
             <div class="field">
-              <label>到期日</label>
+              <label>到期日（可空=永不过期）</label>
               <input v-model="form.expire_at" type="date" />
             </div>
             <div class="field">
               <label>流量上限 (GB，0=不限)</label>
-              <input v-model.number="form.traffic_limit_gb" type="number" min="0" />
+              <input
+                v-model.number="form.traffic_limit_gb"
+                type="number"
+                min="0"
+                placeholder="0=不限"
+              />
             </div>
             <div class="field">
               <label>隧道</label>
@@ -615,12 +621,18 @@ onUnmounted(() => {
               </select>
             </div>
             <div class="field">
-              <label>公网入口 IP</label>
-              <input v-model="form.entry_host" />
+              <label>公网入口 IP（可空=用隧道前置）</label>
+              <input v-model="form.entry_host" placeholder="可选" />
             </div>
             <div class="field">
-              <label>入口端口</label>
-              <input v-model.number="form.entry_port" type="number" min="1" max="65535" />
+              <label>入口端口（可空=用隧道端口）</label>
+              <input
+                v-model.number="form.entry_port"
+                type="number"
+                min="1"
+                max="65535"
+                placeholder="可选"
+              />
             </div>
           </div>
           <div class="field">

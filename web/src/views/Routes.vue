@@ -174,25 +174,18 @@ const suggestedFrontPort = computed(() => {
 })
 
 function blankForm() {
+  // 新建全部留白：不预选前置/落地/端口（placeholder 仍提示建议空闲口）
   form.name = ''
   form.strategy = 'sticky'
-  form.front_id = fronts.value[0]?.id || ''
-  form.exit_id = exits.value[0]?.id || ''
+  form.front_id = ''
+  form.exit_id = ''
   form.front_port = null
-  // 新建时若已有占用，预填下一个空闲入口端口（仍可改/可清空自动）
-  if (form.front_id) {
-    // suggested 依赖 form.front_id；下一 tick 由 watch 填
-  }
 }
 
 function openCreate() {
   mode.value = 'create'
   editingId.value = null
   blankForm()
-  // 新建：预填同前置下一个空闲入口端口（强制多落地不同口）
-  if (form.front_id && suggestedFrontPort.value > 0) {
-    form.front_port = suggestedFrontPort.value
-  }
   error.value = ''
   show.value = true
 }
@@ -221,19 +214,18 @@ function openEdit(r) {
   show.value = true
 }
 
-// 切换前置：清掉不在新池内的端口；新建时预填下一个空闲口
+// 切换前置：清掉不在新池内的端口；不自动填端口（placeholder 显示建议）
 watch(
   () => form.front_id,
   () => {
     const n = selectedFront.value
-    if (!n) return
+    if (!n) {
+      form.front_port = null
+      return
+    }
     const { min, max } = frontPool(n)
     if (form.front_port && (form.front_port < min || form.front_port > max)) {
       form.front_port = null
-    }
-    // 新建且未指定端口 → 建议下一个空闲（强制不同落地入口）
-    if (mode.value === 'create' && !form.front_port && suggestedFrontPort.value > 0) {
-      form.front_port = suggestedFrontPort.value
     }
     // 若当前落地已在同前置上用过，清空落地让用户重选
     if (form.exit_id && usedExitIdsOnFront.value.has(form.exit_id)) {

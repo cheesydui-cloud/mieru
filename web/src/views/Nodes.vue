@@ -58,18 +58,12 @@ function blankForm(role) {
 function fillForm(n) {
   const role = n.role || 'relay'
   const front = isFrontRole(role)
-  let pmin =
-    n.port_min > 0
-      ? n.port_min
-      : n.listen_port > 0
-        ? n.listen_port
-        : front
-          ? 10401
-          : 10001
-  let pmax = n.port_max > 0 ? n.port_max : pmin
+  // 只回填真实数据；没有端口就留空，不伪造 10401/10001
+  let pmin = n.port_min > 0 ? n.port_min : n.listen_port > 0 ? n.listen_port : ''
+  let pmax = n.port_max > 0 ? n.port_max : pmin || ''
   // 前置若历史数据是单端口，编辑时展开为常用池（与后端 EffectivePortRange 一致）
-  if (front && pmin > 0 && pmax <= pmin) {
-    pmax = Math.min(65535, pmin + 98)
+  if (front && pmin && pmax && Number(pmax) <= Number(pmin)) {
+    pmax = Math.min(65535, Number(pmin) + 98)
   }
   Object.assign(form, {
     name: n.name || '',
@@ -80,9 +74,9 @@ function fillForm(n) {
     private_ip: n.private_ip || '',
     hostname: n.hostname || '',
     alt_hostnames: n.alt_hostnames || '',
-    listen_port: pmin,
-    port_min: pmin,
-    port_max: pmax,
+    listen_port: pmin === '' ? '' : pmin,
+    port_min: pmin === '' ? '' : pmin,
+    port_max: pmax === '' ? '' : pmax,
   })
 }
 
