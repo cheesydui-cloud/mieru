@@ -563,11 +563,12 @@ func exitUsers(users []model.User, exitID, linkUser, linkPass string, routes []m
 			continue
 		}
 		out = append(out, model.AgentUser{
-			UserID:   u.ID,
-			Username: u.Username,
-			Password: u.ProxyPassword,
-			Enabled:  u.Status == model.StatusActive,
-			MitaUser: u.Username,
+			UserID:        u.ID,
+			Username:      u.Username,
+			Password:      u.ProxyPassword,
+			Enabled:       u.Status == model.StatusActive,
+			MitaUser:      u.Username,
+			SpeedLimitBps: u.SpeedLimitBps,
 		})
 		seen[u.Username] = true
 	}

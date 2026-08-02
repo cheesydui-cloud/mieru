@@ -352,6 +352,9 @@ type AgentUser struct {
 	Enabled  bool   `json:"enabled"`
 	// Exit metering identity
 	MitaUser string `json:"mita_user,omitempty"`
+	// SpeedLimitBps is max total throughput (up+down) in bytes/sec; 0 = unlimited.
+	// Stored for agent / future shaping; mita has no native bandwidth field.
+	SpeedLimitBps int64 `json:"speed_limit_bps,omitempty"`
 }
 
 type ForwardRule struct {

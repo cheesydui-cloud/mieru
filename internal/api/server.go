@@ -295,6 +295,7 @@ admin.POST("/users/:id/renew", s.renewUser)
 			admin.POST("/users/:id/add-traffic", s.addUserTraffic)
 			admin.POST("/users/:id/toggle", s.toggleUser)
 admin.POST("/users/:id/display-multiplier", s.setUserDisplayMultiplier)
+admin.POST("/users/:id/speed-limit", s.setUserSpeedLimit)
 			admin.POST("/users/batch", s.batchUsers)
 
 			admin.GET("/metrics/rates", s.listRates)
@@ -2535,7 +2536,71 @@ _ = s.gen.RebuildAll()
 		c.JSON(http.StatusOK, u2)
 	}
 
-	func (s *Server) listRates(c *gin.Context) {
+	
+// setUserSpeedLimit sets per-user max rate (bytes/sec, 0=unlimited). Triggers rebuild.
+func (s *Server) setUserSpeedLimit(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	if id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad id"})
+		return
+	}
+	u, err := s.store.GetUser(id)
+	if err != nil || u == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	var req struct {
+		// Mbps is operator-friendly; speed_limit_bps wins if both sent.
+		Mbps          *float64 `json:"mbps"`
+		SpeedLimitBps *int64   `json:"speed_limit_bps"`
+	}
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
+		return
+	}
+	var bps int64
+	if req.SpeedLimitBps != nil {
+		bps = *req.SpeedLimitBps
+	} else if req.Mbps != nil {
+		if *req.Mbps < 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "mbps must be >= 0"})
+			return
+		}
+		// Mbps → bytes/sec (decimal megabit)
+		bps = int64(*req.Mbps * 1000 * 1000 / 8)
+	} else {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "mbps or speed_limit_bps required"})
+		return
+	}
+	if bps < 0 {
+		bps = 0
+	}
+	// Cap absurd values (~10 Gbps)
+	const maxBps = int64(10 * 1000 * 1000 * 1000 / 8)
+	if bps > maxBps {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "speed limit too high (max 10000 Mbps)"})
+		return
+	}
+	u.SpeedLimitBps = bps
+	if err := s.store.UpdateUser(u); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	_ = s.gen.RebuildAll()
+	u2, _ := s.store.GetUser(id)
+	mbps := float64(0)
+	if bps > 0 {
+		mbps = float64(bps) * 8 / 1e6
+	}
+	s.store.Audit("admin", "speed_limit", fmt.Sprintf("%d", id), fmt.Sprintf("%.3g Mbps (%d B/s)", mbps, bps))
+	c.JSON(http.StatusOK, gin.H{
+		"user":            u2,
+		"speed_limit_bps": bps,
+		"mbps":            mbps,
+	})
+}
+
+func (s *Server) listRates(c *gin.Context) {
 	// drop stale samples (>15s) so UI doesn't show frozen speeds
 	rates := s.store.AllRates()
 	now := time.Now().Unix()

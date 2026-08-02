@@ -554,12 +554,13 @@ func usersToMaps(users []model.AgentUser) []map[string]interface{} {
 	out := make([]map[string]interface{}, 0, len(users))
 	for _, u := range users {
 		out = append(out, map[string]interface{}{
-			"user_id":   u.UserID,
-			"username":  u.Username,
-			"name":      u.Username,
-			"password":  u.Password,
-			"enabled":   u.Enabled,
-			"mita_user": u.MitaUser,
+			"user_id":         u.UserID,
+			"username":        u.Username,
+			"name":            u.Username,
+			"password":        u.Password,
+			"enabled":         u.Enabled,
+			"mita_user":       u.MitaUser,
+			"speed_limit_bps": u.SpeedLimitBps,
 		})
 	}
 	return out

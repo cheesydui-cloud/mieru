@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.40] - 2026-08-02
+
+### 用户限速 + 去掉冗余开户按钮
+
+- 用户页右上角工具栏「开户」去掉（各组标题旁 / 空状态仍可开户）
+- 用户「更多」新增 **限速**：按 Mbps 设置（0=不限），快捷 5/10/20/50/100
+- 列表用户名旁显示限速徽章；保存后重建配置下发
+- API：`POST /api/admin/users/:id/speed-limit`（`mbps` 或 `speed_limit_bps`）
+
+> 说明：落地 mita 本身无原生带宽字段；限速写入用户与 agent 配置。若节点侧暂无整形实现，请以面板记录 + 后续 agent 能力为准。
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.40 bash
+```
+
 ## [0.4.39] - 2026-08-02
 
 ### 用户查询页公告

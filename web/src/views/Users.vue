@@ -57,6 +57,9 @@ const trafficGB = ref(50)
 const multShow = ref(false)
 const multUser = ref(null)
 const multValue = ref(1)
+const speedShow = ref(false)
+const speedUser = ref(null)
+const speedMbps = ref(0) // 0 = unlimited
 const resetShow = ref(false)
 const resetInfo = ref(null) // { username, proxy_password }
 const selected = ref({}) // id -> true
@@ -662,6 +665,54 @@ async function doSetMultiplier() {
   }
 }
 
+function formatMbps(bps) {
+  const n = Number(bps) || 0
+  if (n <= 0) return '不限'
+  const mbps = (n * 8) / 1e6
+  if (mbps >= 100) return `${Math.round(mbps)} Mbps`
+  if (mbps >= 10) return `${mbps.toFixed(1)} Mbps`
+  if (mbps >= 1) return `${mbps.toFixed(2)} Mbps`
+  return `${(mbps * 1000).toFixed(0)} Kbps`
+}
+
+function openSpeedLimit(u) {
+  closeMore()
+  speedUser.value = u
+  const bps = Number(u?.speed_limit_bps) || 0
+  if (bps > 0) {
+    // show 1 decimal when needed
+    const m = (bps * 8) / 1e6
+    speedMbps.value = Math.round(m * 100) / 100
+  } else {
+    speedMbps.value = 0
+  }
+  speedShow.value = true
+}
+
+async function doSetSpeedLimit(clear = false) {
+  if (!speedUser.value) return
+  let mbps = clear ? 0 : Number(speedMbps.value)
+  if (!Number.isFinite(mbps) || mbps < 0) mbps = 0
+  if (mbps > 10000) {
+    error.value = '限速最大 10000 Mbps'
+    return
+  }
+  saving.value = true
+  try {
+    await api(`/api/admin/users/${speedUser.value.id}/speed-limit`, {
+      method: 'POST',
+      body: JSON.stringify({ mbps }),
+    })
+    flash.ok(mbps > 0 ? `已限速 ${formatMbps(mbps * 1e6 / 8)}` : '已取消限速')
+    speedShow.value = false
+    await loadUsers()
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    saving.value = false
+  }
+}
+
 async function doAddTraffic(unlimited = false) {
   if (!trafficUser.value) return
   saving.value = true
@@ -794,9 +845,9 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div v-if="error && !show && !subShow && !renewShow && !trafficShow && !multShow && !resetShow" class="action-feedback err page-action-feedback" @click="error = ''">{{ error }}</div>
+  <div v-if="error && !show && !subShow && !renewShow && !trafficShow && !multShow && !speedShow && !resetShow" class="action-feedback err page-action-feedback" @click="error = ''">{{ error }}</div>
   <div
-    v-if="flash.msg && !show && !subShow && !renewShow && !trafficShow && !multShow && !resetShow"
+    v-if="flash.msg && !show && !subShow && !renewShow && !trafficShow && !multShow && !speedShow && !resetShow"
     class="action-feedback page-action-feedback"
     :class="flash.kind"
     @click="flash.clear()"
@@ -814,6 +865,9 @@ onUnmounted(() => {
         倍率设置{{ moreUser.display_multiplier && moreUser.display_multiplier !== 1 ? ` · ×${moreUser.display_multiplier}` : '' }}
       </button>
       <button type="button" @click="openAddTraffic(moreUser); closeMore()">加流量</button>
+      <button type="button" @click="openSpeedLimit(moreUser); closeMore()">
+        限速{{ moreUser.speed_limit_bps > 0 ? ` · ${formatMbps(moreUser.speed_limit_bps)}` : '' }}
+      </button>
       <button type="button" @click="resetPw(moreUser.id); closeMore()">重置密码</button>
       <button type="button" @click="resetSub(moreUser)">重置订阅</button>
     </div>
@@ -892,7 +946,6 @@ onUnmounted(() => {
       </template>
       <button v-else class="btn btn-ghost btn-sm" @click="selectVisible">全选当前</button>
     </div>
-    <button class="btn btn-primary btn-sm" @click="openCreate">开户</button>
   </div>
 
   <div v-if="groupedUsers.length" class="user-groups">
@@ -916,7 +969,7 @@ onUnmounted(() => {
             <span v-if="g.path" class="user-group-path">{{ g.path }}</span>
             <span class="muted">#{{ g.route_id }}</span>
           </template>
-          <template v-else>未分配隧道，可点右上角「开户」并选择隧道</template>
+          <template v-else>未分配隧道，可点隧道组标题旁「开户」或下方空状态开户</template>
         </div>
       </header>
       <div class="table-wrap user-group-table">
@@ -947,6 +1000,12 @@ onUnmounted(() => {
                     style="margin-left:6px;font-size:10px"
                     :title="'查询页显示倍率 ×' + u.display_multiplier"
                   >×{{ u.display_multiplier }}</span>
+                  <span
+                    v-if="u.speed_limit_bps > 0"
+                    class="badge mono"
+                    style="margin-left:6px;font-size:10px"
+                    :title="'限速 ' + formatMbps(u.speed_limit_bps)"
+                  >↓{{ formatMbps(u.speed_limit_bps) }}</span>
                 </div>
                 <div v-if="u.note" class="muted note-line">{{ u.note }}</div>
                 <div class="muted mono" style="font-size:11px">#{{ u.id }}</div>
@@ -1269,6 +1328,41 @@ onUnmounted(() => {
       <div class="modal-ft">
         <button class="btn btn-ghost" @click="multShow = false">取消</button>
         <button class="btn btn-primary" :disabled="saving" @click="doSetMultiplier">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div v-if="speedShow" class="modal-mask" @click.self="speedShow = false">
+    <div class="modal" style="width:min(420px,100%)">
+      <div class="modal-hd">
+        <h3>限速 · {{ speedUser?.username }}</h3>
+        <button class="btn btn-ghost btn-sm" @click="speedShow = false">关闭</button>
+      </div>
+      <div class="modal-bd">
+        <p class="muted" style="margin: 0 0 12px; font-size: 12.5px; line-height: 1.5">
+          设置该用户最大网速（Mbps）。填 <strong>0</strong> 表示不限速。
+          保存后会重建落地配置并下发。
+        </p>
+        <div class="pkg-row">
+          <button class="btn btn-ghost btn-sm" type="button" @click="speedMbps = 0">不限</button>
+          <button class="btn btn-ghost btn-sm" type="button" @click="speedMbps = 5">5M</button>
+          <button class="btn btn-ghost btn-sm" type="button" @click="speedMbps = 10">10M</button>
+          <button class="btn btn-ghost btn-sm" type="button" @click="speedMbps = 20">20M</button>
+          <button class="btn btn-ghost btn-sm" type="button" @click="speedMbps = 50">50M</button>
+          <button class="btn btn-ghost btn-sm" type="button" @click="speedMbps = 100">100M</button>
+        </div>
+        <div class="field">
+          <label>限速 (Mbps，0=不限)</label>
+          <input v-model.number="speedMbps" type="number" min="0" max="10000" step="0.1" />
+        </div>
+        <p class="help-text" style="margin:0">
+          当前：{{ speedUser?.speed_limit_bps > 0 ? formatMbps(speedUser.speed_limit_bps) : '不限' }}
+        </p>
+      </div>
+      <div class="modal-ft">
+        <button class="btn btn-ghost" @click="speedShow = false">取消</button>
+        <button class="btn btn-ghost" :disabled="saving" @click="doSetSpeedLimit(true)">取消限速</button>
+        <button class="btn btn-primary" :disabled="saving" @click="doSetSpeedLimit(false)">保存</button>
       </div>
     </div>
   </div>
