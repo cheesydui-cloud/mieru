@@ -16,6 +16,8 @@ const editingId = ref(null)
 const created = ref(null)
 const saving = ref(false)
 const moreId = ref(null)
+const moreMenuStyle = ref({})
+const moreUser = computed(() => (users.value || []).find((u) => u.id === moreId.value) || null)
 
 const form = reactive({
   username: '',
@@ -280,6 +282,7 @@ function applyPackage(p) {
 }
 
 function openCreate(routeId) {
+  closeMore()
   blankForm()
   if (routeId != null && routeId !== '' && Number(routeId) > 0) {
     form.route_id = Number(routeId)
@@ -289,6 +292,58 @@ function openCreate(routeId) {
   mode.value = 'create'
   show.value = true
   error.value = ''
+}
+
+function closeMore() {
+  moreId.value = null
+  moreMenuStyle.value = {}
+}
+
+function toggleMore(u, e) {
+  e?.stopPropagation?.()
+  if (moreId.value === u.id) {
+    closeMore()
+    return
+  }
+  moreId.value = u.id
+  const el = e?.currentTarget
+  if (!el?.getBoundingClientRect) {
+    moreMenuStyle.value = { position: 'fixed', right: '16px', top: '80px', zIndex: 1200 }
+    return
+  }
+  const rect = el.getBoundingClientRect()
+  const menuH = 96
+  const menuW = 128
+  const pad = 8
+  const openUp = rect.bottom + menuH + pad > window.innerHeight && rect.top > menuH + pad
+  let left = rect.right - menuW
+  if (left < pad) left = pad
+  if (left + menuW > window.innerWidth - pad) left = window.innerWidth - menuW - pad
+  const style = {
+    position: 'fixed',
+    left: `${Math.round(left)}px`,
+    zIndex: 1200,
+    minWidth: `${menuW}px`,
+  }
+  if (openUp) {
+    style.top = 'auto'
+    style.bottom = `${Math.round(window.innerHeight - rect.top + 4)}px`
+  } else {
+    style.top = `${Math.round(rect.bottom + 4)}px`
+    style.bottom = 'auto'
+  }
+  moreMenuStyle.value = style
+}
+
+function onDocPointerDown(e) {
+  if (moreId.value == null) return
+  const t = e.target
+  if (t?.closest?.('.more-menu-float') || t?.closest?.('.more-trigger')) return
+  closeMore()
+}
+
+function onWinReposition() {
+  if (moreId.value != null) closeMore()
 }
 
 async function copy(text) {
@@ -301,6 +356,7 @@ async function copy(text) {
 }
 
 function openEdit(u) {
+  closeMore()
   Object.assign(form, {
     username: u.username || '',
     expire_at: u.expire_at ? String(u.expire_at).slice(0, 10) : '',
@@ -380,7 +436,7 @@ async function saveEdit() {
 }
 
 async function resetPw(id) {
-  moreId.value = null
+  closeMore()
   try {
     const res = await api(`/api/admin/users/${id}/reset-password`, { method: 'POST' })
     resetInfo.value = {
@@ -394,7 +450,7 @@ async function resetPw(id) {
 }
 
 async function remove(u) {
-  moreId.value = null
+  closeMore()
   const id = typeof u === 'object' && u ? u.id : u
   const name = typeof u === 'object' && u ? u.username || `#${id}` : `#${id}`
   if (!confirm(`确认删除用户「${name}」？\n\n将从落地 mita 下发配置中移除，不可恢复。`)) return
@@ -408,7 +464,7 @@ async function remove(u) {
 }
 
 async function toggle(u) {
-  moreId.value = null
+  closeMore()
   const res = await api(`/api/admin/users/${u.id}/toggle`, {
     method: 'POST',
     body: JSON.stringify({}),
@@ -418,7 +474,7 @@ async function toggle(u) {
 }
 
 function openRenew(u) {
-  moreId.value = null
+  closeMore()
   renewUser.value = u
   renewDays.value = 30
   renewDate.value = ''
@@ -447,7 +503,7 @@ async function doRenew() {
 }
 
 function openAddTraffic(u) {
-  moreId.value = null
+  closeMore()
   trafficUser.value = u
   trafficGB.value = 50
   trafficShow.value = true
@@ -485,7 +541,7 @@ async function makeQR(text) {
 }
 
 async function openSub(u) {
-  moreId.value = null
+  closeMore()
   subUser.value = u
   shareURL.value = ''
   shareURLs.value = ''
@@ -571,16 +627,34 @@ onMounted(() => {
   loadRates()
   listTimer = setInterval(loadUsers, 10000)
   rateTimer = setInterval(loadRates, 1000)
+  document.addEventListener('pointerdown', onDocPointerDown, true)
+  window.addEventListener('resize', onWinReposition)
+  window.addEventListener('scroll', onWinReposition, true)
 })
 onUnmounted(() => {
   clearInterval(listTimer)
   clearInterval(rateTimer)
+  document.removeEventListener('pointerdown', onDocPointerDown, true)
+  window.removeEventListener('resize', onWinReposition)
+  window.removeEventListener('scroll', onWinReposition, true)
 })
 </script>
 
 <template>
   <div v-if="error && !show && !subShow && !renewShow && !trafficShow && !resetShow" class="error">{{ error }}</div>
   <div v-if="toast" class="toast" @click="toast = ''">{{ toast }}</div>
+
+  <Teleport to="body">
+    <div
+      v-if="moreId != null && moreUser"
+      class="more-menu more-menu-float"
+      :style="moreMenuStyle"
+      @click.stop
+    >
+      <button type="button" @click="openAddTraffic(moreUser); closeMore()">加流量</button>
+      <button type="button" @click="resetPw(moreUser.id); closeMore()">重置密码</button>
+    </div>
+  </Teleport>
 
   <div class="page-tabs">
     <div class="page-tab active">用户</div>
@@ -722,13 +796,14 @@ onUnmounted(() => {
                     {{ u.status === 'disabled' ? '启用' : '停用' }}
                   </button>
                   <button class="btn btn-link-danger btn-sm" @click="remove(u)">删除</button>
-                  <div class="more-wrap">
-                    <button class="btn btn-link btn-sm" @click="moreId = moreId === u.id ? null : u.id">更多</button>
-                    <div v-if="moreId === u.id" class="more-menu" @click.stop>
-                      <button @click="openAddTraffic(u); moreId = null">加流量</button>
-                      <button @click="resetPw(u.id)">重置密码</button>
-                    </div>
-                  </div>
+                  <button
+                    type="button"
+                    class="btn btn-link btn-sm more-trigger"
+                    :class="{ active: moreId === u.id }"
+                    @click="toggleMore(u, $event)"
+                  >
+                    更多
+                  </button>
                 </div>
               </td>
             </tr>
@@ -1070,31 +1145,7 @@ onUnmounted(() => {
 }
 .speed-down { color: var(--success); }
 .speed-up { color: var(--link); }
-.more-wrap { position: relative; display: inline-block; }
-.more-menu {
-  position: absolute;
-  right: 0;
-  top: 100%;
-  z-index: 20;
-  background: #fff;
-  border: 1px solid var(--border-line);
-  border-radius: 6px;
-  min-width: 110px;
-  box-shadow: var(--shadow-md);
-  padding: 4px 0;
-}
-.more-menu button {
-  display: block;
-  width: 100%;
-  text-align: left;
-  border: 0;
-  background: transparent;
-  padding: 8px 12px;
-  cursor: pointer;
-  font-size: 13px;
-}
-.more-menu button:hover { background: var(--bg-hover); }
-.more-menu button.danger { color: var(--danger); }
+.more-trigger.active { font-weight: 700; }
 .pkg-row {
   display: flex;
   flex-wrap: wrap;

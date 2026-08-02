@@ -714,16 +714,33 @@ func (s *Store) SetUserStatus(id int64, status string) error {
 }
 
 func (s *Store) RefreshUserStatuses() error {
+	_, err := s.RefreshUserStatusesChanged()
+	return err
+}
+
+// RefreshUserStatusesChanged applies expire/over-quota transitions and returns
+// how many active users flipped (so callers can trigger config rebuild).
+func (s *Store) RefreshUserStatusesChanged() (int64, error) {
+	var changed int64
 	// expire
-	_, err := s.db.Exec(`UPDATE users SET status=?, updated_at=? WHERE status=? AND expire_at IS NOT NULL AND expire_at < ?`,
+	res, err := s.db.Exec(`UPDATE users SET status=?, updated_at=? WHERE status=? AND expire_at IS NOT NULL AND expire_at < ?`,
 		model.StatusExpired, now(), model.StatusActive, now())
 	if err != nil {
-		return err
+		return 0, err
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		changed += n
 	}
 	// over quota (limit > 0)
-	_, err = s.db.Exec(`UPDATE users SET status=?, updated_at=? WHERE status=? AND traffic_limit_bytes > 0 AND traffic_used_bytes >= traffic_limit_bytes`,
+	res, err = s.db.Exec(`UPDATE users SET status=?, updated_at=? WHERE status=? AND traffic_limit_bytes > 0 AND traffic_used_bytes >= traffic_limit_bytes`,
 		model.StatusOverQuota, now(), model.StatusActive)
-	return err
+	if err != nil {
+		return changed, err
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		changed += n
+	}
+	return changed, nil
 }
 
 func (s *Store) ListActiveProxyUsers() ([]model.User, error) {

@@ -223,7 +223,12 @@ onUnmounted(() => clearInterval(timer))
       </div>
       <div class="row-actions">
         <button class="btn btn-ghost btn-sm" @click="load">刷新</button>
-        <button class="btn btn-primary btn-sm" :disabled="rebuilding" @click="rebuild">
+        <button
+          class="btn btn-ghost btn-sm"
+          :disabled="rebuilding"
+          @click="rebuild"
+          title="应急手动重建；平时改配置/升级已自动下发"
+        >
           {{ rebuilding ? '重建中…' : '重建配置' }}
         </button>
       </div>

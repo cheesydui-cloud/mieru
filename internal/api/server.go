@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -75,6 +76,10 @@ type Server struct {
 	// last probe result per route (for list UI)
 	probeMu   sync.Mutex
 	lastProbe map[int64]probeSnap // routeID
+
+	// serialize background auto-rebuilds (startup / quota flip)
+	rebuildMu   sync.Mutex
+	rebuildBusy bool
 }
 
 type loginAttempt struct {
@@ -102,6 +107,43 @@ func New(cfg config.PanelConfig, st *store.Store) *Server {
 		lastTraffic: map[string]time.Time{},
 		lastProbe:   map[int64]probeSnap{},
 	}
+}
+
+// EnsureDesiredConfigs rebuilds all node desired configs once at panel boot so
+// agents get a fresh version after panel upgrade without manual「重建配置」.
+// Safe to call concurrent with HTTP — uses single-flight.
+func (s *Server) EnsureDesiredConfigs() {
+	s.scheduleRebuild("startup")
+}
+
+// scheduleRebuild runs RebuildAll in the background (single-flight).
+// reason is only for logs/audit detail.
+func (s *Server) scheduleRebuild(reason string) {
+	s.rebuildMu.Lock()
+	if s.rebuildBusy {
+		s.rebuildMu.Unlock()
+		return
+	}
+	s.rebuildBusy = true
+	s.rebuildMu.Unlock()
+	go func() {
+		defer func() {
+			s.rebuildMu.Lock()
+			s.rebuildBusy = false
+			s.rebuildMu.Unlock()
+		}()
+		if err := s.gen.RebuildAll(); err != nil {
+			log.Printf("auto-rebuild (%s) failed: %v", reason, err)
+			return
+		}
+		log.Printf("auto-rebuild (%s) ok", reason)
+		s.store.Audit("system", "auto_rebuild", "*", reason)
+	}()
+}
+
+// rebuildNow runs RebuildAll synchronously and returns the error (for admin API).
+func (s *Server) rebuildNow() error {
+	return s.gen.RebuildAll()
 }
 
 func (s *Server) Router() *gin.Engine {
@@ -880,7 +922,7 @@ func (s *Server) upgradeAllNodes(c *gin.Context) {
 }
 
 func (s *Server) rebuildAll(c *gin.Context) {
-	if err := s.gen.RebuildAll(); err != nil {
+	if err := s.rebuildNow(); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -3382,9 +3424,12 @@ func (s *Server) agentTraffic(c *gin.Context) {
 		sumUp += sample.UpDelta
 		sumDown += sample.DownDelta
 	}
-_ = s.store.RefreshUserStatuses()
-		s.trafficMu.Lock()
-		s.lastTraffic[n.ID] = time.Now()
-		s.trafficMu.Unlock()
-		c.JSON(http.StatusOK, gin.H{"ok": true, "applied": applied, "skipped": skipped, "up": sumUp, "down": sumDown})
+	// If any user flipped to expired/over_quota, rebuild so exit mita drops them ASAP.
+	if nChanged, err := s.store.RefreshUserStatusesChanged(); err == nil && nChanged > 0 {
+		s.scheduleRebuild(fmt.Sprintf("quota_or_expire flipped=%d", nChanged))
 	}
+	s.trafficMu.Lock()
+	s.lastTraffic[n.ID] = time.Now()
+	s.trafficMu.Unlock()
+	c.JSON(http.StatusOK, gin.H{"ok": true, "applied": applied, "skipped": skipped, "up": sumUp, "down": sumDown})
+}

@@ -15,8 +15,8 @@ import (
 	"github.com/cheesydui-cloud/mieru/internal/store"
 )
 
-// set by -ldflags "-X main.Version=v0.4.22"
-var Version = "v0.4.22"
+// set by -ldflags "-X main.Version=v0.4.23"
+var Version = "v0.4.23"
 
 func main() {
 	resetAdmin := flag.Bool("reset-admin", false, "reset admin password from PANEL_ADMIN_* env and exit")
@@ -71,6 +71,9 @@ func main() {
 
 	srv := api.New(cfg, st)
 	srv.Version = Version
+	// After every panel upgrade/restart: rebuild desired configs so agents pull
+	// without requiring the operator to click「重建配置」.
+	srv.EnsureDesiredConfigs()
 	r := srv.Router()
 
 	go func() {

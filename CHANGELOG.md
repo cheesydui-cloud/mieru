@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.4.23] - 2026-08-02
+
+### 自动重建配置（不用再手动点）
+
+- **面板启动/升级后**自动 RebuildAll，节点下次心跳拉新配置
+- **Agent 启动/自升级后**强制 apply 一次（版本号不变也会重新拉起插件）
+- **用户到期/超流**翻转时自动重建，尽快从落地 mita 踢掉
+- 开户/改隧道仍同步重建；「重建配置」按钮保留应急
+
+### 修复用户「更多」菜单被裁切
+
+- 「更多」下拉改为 Teleport 到 body 的 fixed 浮层，不再被隧道分组 / 表格 overflow 裁掉
+- 点击外部、滚动、缩放自动关闭；空间不够时向上展开
+- 表格容器改为 overflow:auto，窄屏可横滑操作列
+
+> 版本说明：当前线已是 0.4.x，本次发 **v0.4.23**（不能回退到 0.2.3）。
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.23 bash
+```
+
+升完强制刷新。节点建议同步升 agent（启动强制 apply 依赖新 agent）。
+
 ## [0.4.22] - 2026-08-02
 
 ### 用户页：每条隧道分组 + 组内开户
