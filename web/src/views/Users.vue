@@ -134,40 +134,77 @@ const filtered = computed(() => {
   return list
 })
 
-/** 按隧道分组：同一 route_id 聚在一起，未绑隧道单独一组 */
+function routeEntry(r) {
+  if (!r) return ''
+  return (
+    r.entry_endpoint ||
+    (r.front_host && r.front_port ? `${r.front_host}:${r.front_port}` : r.front_host || '') ||
+    ''
+  )
+}
+
+function userRouteKey(u) {
+  const rid = u?.route_id
+  if (rid == null || rid === '' || rid === 0) return 0
+  const n = Number(rid)
+  return Number.isFinite(n) ? n : 0
+}
+
+/** 所有已创建隧道都成组（含 0 人）；过滤后的用户落入对应组；未绑定置底 */
 const groupedUsers = computed(() => {
   const list = filtered.value || []
-  const map = new Map()
+  const byRoute = new Map()
   for (const u of list) {
-    const rid = u.route_id == null || u.route_id === '' || u.route_id === 0 ? 0 : Number(u.route_id)
-    const key = Number.isFinite(rid) ? rid : 0
-    if (!map.has(key)) {
-      const r = key
-        ? (routes.value || []).find((x) => x.id === key || String(x.id) === String(key))
-        : null
-      const sample = list.find((x) => {
-        const xr = x.route_id == null || x.route_id === '' || x.route_id === 0 ? 0 : Number(x.route_id)
-        return xr === key
-      })
-      map.set(key, {
-        route_id: key,
-        name: key ? routeName(sample || { route_id: key, route_name: r?.name }) : '未绑定隧道',
-        entry: key && sample ? entryOf(sample) : '',
-        path: r?.path_summary || '',
-        users: [],
-      })
-    }
-    map.get(key).users.push(u)
+    const key = userRouteKey(u)
+    if (!byRoute.has(key)) byRoute.set(key, [])
+    byRoute.get(key).push(u)
   }
-  const groups = [...map.values()]
-  // 有隧道的按名称；未绑定置底
-  groups.sort((a, b) => {
-    if (a.route_id === 0) return 1
-    if (b.route_id === 0) return -1
-    return String(a.name).localeCompare(String(b.name), 'zh')
-  })
-  for (const g of groups) {
-    g.users.sort((a, b) => String(a.username || '').localeCompare(String(b.username || ''), 'zh'))
+
+  const groups = []
+  for (const r of routes.value || []) {
+    const id = Number(r.id)
+    if (!Number.isFinite(id) || id <= 0) continue
+    const usersIn = byRoute.get(id) || []
+    usersIn.sort((a, b) => String(a.username || '').localeCompare(String(b.username || ''), 'zh'))
+    groups.push({
+      route_id: id,
+      name: r.name || `隧道 #${id}`,
+      entry: routeEntry(r),
+      path: r.path_summary || '',
+      users: usersIn,
+      canOpen: true,
+    })
+  }
+  groups.sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh'))
+
+  // 用户绑了已删除隧道 / 未绑定
+  const known = new Set(groups.map((g) => g.route_id))
+  const orphanKeys = [...byRoute.keys()].filter((k) => k !== 0 && !known.has(k))
+  for (const key of orphanKeys.sort((a, b) => a - b)) {
+    const usersIn = byRoute.get(key) || []
+    usersIn.sort((a, b) => String(a.username || '').localeCompare(String(b.username || ''), 'zh'))
+    const sample = usersIn[0]
+    groups.push({
+      route_id: key,
+      name: routeName(sample || { route_id: key }),
+      entry: sample ? entryOf(sample) : '',
+      path: '',
+      users: usersIn,
+      canOpen: false,
+    })
+  }
+
+  const unbound = byRoute.get(0) || []
+  if (unbound.length) {
+    unbound.sort((a, b) => String(a.username || '').localeCompare(String(b.username || ''), 'zh'))
+    groups.push({
+      route_id: 0,
+      name: '未绑定隧道',
+      entry: '',
+      path: '',
+      users: unbound,
+      canOpen: false,
+    })
   }
   return groups
 })
@@ -242,13 +279,25 @@ function applyPackage(p) {
   }
 }
 
-function openCreate() {
+function openCreate(routeId) {
   blankForm()
+  if (routeId != null && routeId !== '' && Number(routeId) > 0) {
+    form.route_id = Number(routeId)
+  }
   created.value = null
   editingId.value = null
   mode.value = 'create'
   show.value = true
   error.value = ''
+}
+
+async function copy(text) {
+  try {
+    await copyText(text)
+    toast.value = '已复制'
+  } catch {
+    toast.value = '复制失败，请手动选中'
+  }
 }
 
 function openEdit(u) {
@@ -601,6 +650,14 @@ onUnmounted(() => {
         <div class="user-group-title">
           <span class="user-group-name">{{ g.name }}</span>
           <span class="badge">{{ g.users.length }} 人</span>
+          <button
+            v-if="g.canOpen"
+            type="button"
+            class="btn btn-primary btn-sm user-group-open"
+            @click="openCreate(g.route_id)"
+          >
+            开户
+          </button>
         </div>
         <div class="user-group-meta muted mono">
           <template v-if="g.route_id">
@@ -608,7 +665,7 @@ onUnmounted(() => {
             <span v-if="g.path" class="user-group-path">{{ g.path }}</span>
             <span class="muted">#{{ g.route_id }}</span>
           </template>
-          <template v-else>未分配隧道，开户时请选择</template>
+          <template v-else>未分配隧道，可点右上角「开户」并选择隧道</template>
         </div>
       </header>
       <div class="table-wrap user-group-table">
@@ -675,12 +732,29 @@ onUnmounted(() => {
                 </div>
               </td>
             </tr>
+            <tr v-if="!g.users.length">
+              <td colspan="7" class="user-group-empty">
+                暂无用户
+                <button
+                  v-if="g.canOpen"
+                  type="button"
+                  class="btn btn-link btn-sm"
+                  @click="openCreate(g.route_id)"
+                >
+                  在此隧道开户
+                </button>
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>
     </section>
   </div>
-  <div v-else class="empty">{{ users.length ? '无匹配用户' : '暂无用户' }}</div>
+  <div v-else class="empty">
+    <template v-if="users.length">无匹配用户</template>
+    <template v-else-if="!(routes || []).length">请先在「隧道」创建隧道，再回来开户</template>
+    <template v-else>暂无用户</template>
+  </div>
 
   <div v-if="show" class="modal-mask" @click.self="show = false">
     <div class="modal" style="width:min(560px,100%)">
@@ -688,6 +762,9 @@ onUnmounted(() => {
         <h3>
           <template v-if="mode === 'created'">用户已创建</template>
           <template v-else-if="mode === 'edit'">编辑用户</template>
+          <template v-else-if="form.route_id">
+            开户 · {{ routeName({ route_id: form.route_id }) }}
+          </template>
           <template v-else>开户</template>
         </h3>
         <button class="btn btn-ghost btn-sm" @click="show = false">关闭</button>

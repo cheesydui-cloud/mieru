@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.22] - 2026-08-02
+
+### 用户页：每条隧道分组 + 组内开户
+
+- 所有已创建隧道都会出现在用户页（含 0 人空组），不再只显示「已有用户」的隧道
+- 组头隧道名旁增加 **开户**，点开自动绑定该隧道
+- 空组内也有「在此隧道开户」快捷入口
+- 修复用户页复制密码/链接（恢复 copy 封装）
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.22 bash
+```
+
+升完强制刷新。
+
 ## [0.4.21] - 2026-08-02
 
 ### 用户按隧道分组 + 节点升级提示精简

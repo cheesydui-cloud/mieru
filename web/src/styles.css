@@ -900,10 +900,26 @@ code.mono {
   align-items: center;
   gap: 10px;
   min-width: 0;
+  flex-wrap: wrap;
 }
 .user-group-name {
   font-weight: 700;
   font-size: 14px;
+}
+.user-group-open {
+  margin-left: 2px;
+  padding: 4px 12px;
+  font-size: 12px;
+}
+.user-group-empty {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 18px 12px !important;
+  font-size: 13px;
+}
+.user-group-empty .btn {
+  margin-left: 8px;
+  vertical-align: baseline;
 }
 .user-group-meta {
   display: inline-flex;
