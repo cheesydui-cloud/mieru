@@ -7,6 +7,7 @@ import Nodes from './views/Nodes.vue'
 import Users from './views/Users.vue'
 import Routes from './views/Routes.vue'
 import Settings from './views/Settings.vue'
+import Announcements from './views/Announcements.vue'
 import Portal from './views/Portal.vue'
 import UserInfo from './views/UserInfo.vue'
 
@@ -28,6 +29,7 @@ const router = createRouter({
         { path: 'users', name: 'users', component: Users },
         { path: 'routes', name: 'routes', component: Routes },
         { path: 'settings', name: 'settings', component: Settings },
+        { path: 'announcements', name: 'announcements', component: Announcements },
       ],
     },
     { path: '/portal', component: Portal, meta: { auth: true, role: 'user' } },

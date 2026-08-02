@@ -402,3 +402,15 @@ type DashboardStats struct {
 	TodayDown      int64 `json:"today_down"`
 	UnhealthyNodes int   `json:"unhealthy_nodes"`
 }
+
+// Announcement is a panel notice shown on the public user query page.
+type Announcement struct {
+	ID        int64     `json:"id"`
+	Title     string    `json:"title"`
+	Body      string    `json:"body"`
+	Enabled   bool      `json:"enabled"`
+	// Popup: at most one enabled announcement should be popup; admin chooses which.
+	Popup     bool      `json:"popup"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}

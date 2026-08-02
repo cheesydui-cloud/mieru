@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.39] - 2026-08-02
+
+### 用户查询页公告
+
+- 侧栏 **系统 → 公告**：新建 / 编辑 / 启用停用 / 删除
+- 可指定 **一条弹窗公告**：用户每次打开查询页自动弹出，**60 秒**后关闭（可手动关闭）
+- 查询页右上角 **公告** 按钮（退出前）：查看全部已启用公告列表
+- 公开 API：`GET /api/announcements`；管理 API：`/api/admin/announcements`
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.39 bash
+```
+
 ## [0.4.38] - 2026-08-02
 
 ### 侧栏账号区 + CF 域名落库可见 + 当日流量

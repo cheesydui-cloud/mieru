@@ -249,6 +249,8 @@ func (s *Server) Router() *gin.Engine {
 	r.GET("/api/sub/:token/mihomo.yaml", s.subscriptionMihomo)
 	// Public user info page (read-only; no password) — shareable link from admin「更多」
 	r.GET("/api/u/:token", s.publicUserInfo)
+	// Public announcements for user query page (no auth)
+	r.GET("/api/announcements", s.publicAnnouncements)
 	r.POST("/api/auth/login", s.login)
 
 	agent := r.Group("/api/agent")
@@ -309,6 +311,11 @@ admin.GET("/settings", s.getSettings)
 				admin.GET("/nodes/:id/install", s.nodeInstallCmd)
 				admin.GET("/diagnose", s.diagnose)
 				admin.GET("/nodes/:id/desired", s.nodeDesiredConfig)
+				admin.GET("/announcements", s.listAnnouncements)
+				admin.POST("/announcements", s.createAnnouncement)
+				admin.PUT("/announcements/:id", s.updateAnnouncement)
+				admin.DELETE("/announcements/:id", s.deleteAnnouncement)
+				admin.POST("/announcements/:id/popup", s.setAnnouncementPopup)
 			}
 
 	portal := r.Group("/api/me")
@@ -4112,3 +4119,191 @@ func (s *Server) agentTraffic(c *gin.Context) {
 	s.trafficMu.Unlock()
 	c.JSON(http.StatusOK, gin.H{"ok": true, "applied": applied, "skipped": skipped, "up": sumUp, "down": sumDown})
 }
+
+
+// ---------- Announcements ----------
+
+func (s *Server) publicAnnouncements(c *gin.Context) {
+	list, err := s.store.ListPublicAnnouncements()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	popup, err := s.store.PopupAnnouncement()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	// strip internal flags noise is fine; still return enabled/popup for client
+	items := make([]gin.H, 0, len(list))
+	for _, a := range list {
+		items = append(items, gin.H{
+			"id":         a.ID,
+			"title":      a.Title,
+			"body":       a.Body,
+			"popup":      a.Popup,
+			"created_at": a.CreatedAt,
+			"updated_at": a.UpdatedAt,
+		})
+	}
+	var popupObj any
+	if popup != nil {
+		popupObj = gin.H{
+			"id":         popup.ID,
+			"title":      popup.Title,
+			"body":       popup.Body,
+			"popup":      true,
+			"created_at": popup.CreatedAt,
+			"updated_at": popup.UpdatedAt,
+		}
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, gin.H{
+		"items": items,
+		"popup": popupObj,
+	})
+}
+
+func (s *Server) listAnnouncements(c *gin.Context) {
+	list, err := s.store.ListAnnouncements()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, list)
+}
+
+func (s *Server) createAnnouncement(c *gin.Context) {
+	var req struct {
+		Title   string `json:"title"`
+		Body    string `json:"body"`
+		Enabled *bool  `json:"enabled"`
+		Popup   bool   `json:"popup"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
+		return
+	}
+	en := true
+	if req.Enabled != nil {
+		en = *req.Enabled
+	}
+	a := &model.Announcement{
+		Title:   req.Title,
+		Body:    req.Body,
+		Enabled: en,
+		Popup:   req.Popup,
+	}
+	if err := s.store.CreateAnnouncement(a); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	s.store.Audit("admin", "create_announcement", fmt.Sprintf("%d", a.ID), a.Title)
+	c.JSON(http.StatusOK, a)
+}
+
+func (s *Server) updateAnnouncement(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	var req struct {
+		Title   string `json:"title"`
+		Body    string `json:"body"`
+		Enabled *bool  `json:"enabled"`
+		Popup   *bool  `json:"popup"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
+		return
+	}
+	cur, err := s.store.GetAnnouncement(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if cur == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "公告不存在"})
+		return
+	}
+	cur.Title = req.Title
+	cur.Body = req.Body
+	if req.Enabled != nil {
+		cur.Enabled = *req.Enabled
+	}
+	if req.Popup != nil {
+		cur.Popup = *req.Popup
+	}
+	if err := s.store.UpdateAnnouncement(cur); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	s.store.Audit("admin", "update_announcement", fmt.Sprintf("%d", id), cur.Title)
+	c.JSON(http.StatusOK, cur)
+}
+
+func (s *Server) deleteAnnouncement(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	if err := s.store.DeleteAnnouncement(id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	s.store.Audit("admin", "delete_announcement", fmt.Sprintf("%d", id), "")
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (s *Server) setAnnouncementPopup(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	var req struct {
+		Popup *bool `json:"popup"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	popup := true
+	if req.Popup != nil {
+		popup = *req.Popup
+	}
+	// enabling popup implies enabled=1 so query page can show it
+	if popup {
+		cur, err := s.store.GetAnnouncement(id)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if cur == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "公告不存在"})
+			return
+		}
+		if !cur.Enabled {
+			cur.Enabled = true
+			cur.Popup = true
+			if err := s.store.UpdateAnnouncement(cur); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+			s.store.Audit("admin", "set_announcement_popup", fmt.Sprintf("%d", id), "on+enable")
+			c.JSON(http.StatusOK, cur)
+			return
+		}
+	}
+	if err := s.store.SetAnnouncementPopup(id, popup); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	cur, _ := s.store.GetAnnouncement(id)
+	s.store.Audit("admin", "set_announcement_popup", fmt.Sprintf("%d", id), map[bool]string{true: "on", false: "off"}[popup])
+	if cur == nil {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+		return
+	}
+	c.JSON(http.StatusOK, cur)
+}
+

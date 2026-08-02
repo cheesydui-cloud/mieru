@@ -14,6 +14,90 @@ const loading = ref(true)
 const subQR = ref('')
 let timer
 
+// Announcements (public query page)
+const announcements = ref([])
+const popupAnn = ref(null)
+const showPopup = ref(false)
+const showList = ref(false)
+const popupLeft = ref(60)
+let popupTimer = null
+let popupTick = null
+
+function clearPopupTimers() {
+  if (popupTimer) {
+    clearTimeout(popupTimer)
+    popupTimer = null
+  }
+  if (popupTick) {
+    clearInterval(popupTick)
+    popupTick = null
+  }
+}
+
+function closePopup() {
+  clearPopupTimers()
+  showPopup.value = false
+}
+
+function openPopup(a, autoCloseSec = 0) {
+  if (!a) return
+  popupAnn.value = a
+  showPopup.value = true
+  clearPopupTimers()
+  if (autoCloseSec > 0) {
+    popupLeft.value = autoCloseSec
+    popupTick = setInterval(() => {
+      popupLeft.value = Math.max(0, popupLeft.value - 1)
+    }, 1000)
+    popupTimer = setTimeout(() => {
+      closePopup()
+    }, autoCloseSec * 1000)
+  } else {
+    popupLeft.value = 0
+  }
+}
+
+function openList() {
+  showList.value = true
+}
+
+function closeList() {
+  showList.value = false
+}
+
+function openFromList(a) {
+  openPopup(a, 0)
+}
+
+function fmtAnnTime(t) {
+  if (!t) return ''
+  try {
+    const d = new Date(t)
+    if (Number.isNaN(d.getTime())) return String(t).slice(0, 16)
+    return d.toLocaleString()
+  } catch {
+    return String(t).slice(0, 16)
+  }
+}
+
+async function loadAnnouncements({ autoPopup = false } = {}) {
+  try {
+    const res = await fetch('/api/announcements', {
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+    })
+    if (!res.ok) return
+    const data = await res.json()
+    announcements.value = Array.isArray(data?.items) ? data.items : []
+    if (autoPopup && data?.popup) {
+      // Every open of query page: auto show popup for 60s
+      openPopup(data.popup, 60)
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 function statusLabel(s) {
   const m = { active: '正常', disabled: '停用', expired: '到期', over_quota: '超流量' }
   return m[s] || s || '—'
@@ -165,7 +249,7 @@ onMounted(async () => {
     /* ignore */
   }
   document.title = `${panelTitle.value} · 账号信息`
-  await load()
+  await Promise.all([load(), loadAnnouncements({ autoPopup: true })])
   // status/rate refresh; share/QR stable so no need every tick
   timer = setInterval(async () => {
     try {
@@ -188,7 +272,10 @@ onMounted(async () => {
     }
   }, 15000)
 })
-onUnmounted(() => clearInterval(timer))
+onUnmounted(() => {
+  clearInterval(timer)
+  clearPopupTimers()
+})
 </script>
 
 <template>
@@ -207,14 +294,25 @@ onUnmounted(() => clearInterval(timer))
             <span>账号信息</span>
           </div>
         </div>
-        <button
-          type="button"
-          class="btn btn-ghost btn-sm"
-          title="关闭本页（查询页为公开链接，无登录态）"
-          @click="leavePage"
-        >
-          退出
-        </button>
+        <div class="row-actions" style="align-items:center;gap:8px">
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm ann-btn"
+            title="公告"
+            @click="openList"
+          >
+            公告
+            <span v-if="announcements.length" class="ann-btn-dot" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm"
+            title="关闭本页（查询页为公开链接，无登录态）"
+            @click="leavePage"
+          >
+            退出
+          </button>
+        </div>
       </div>
       <div v-if="error" class="action-feedback err" style="margin:0 0 10px" @click="error = ''">{{ error }}</div>
       <div
@@ -336,6 +434,49 @@ onUnmounted(() => clearInterval(timer))
           </div>
         </div>
       </template>
+    </div>
+
+    <!-- Auto popup announcement (60s) -->
+    <div v-if="showPopup && popupAnn" class="ann-popup-mask" @click.self="closePopup">
+      <div class="ann-popup" role="dialog" aria-modal="true">
+        <div class="ann-popup-hd">
+          <h3>{{ popupAnn.title }}</h3>
+          <button type="button" class="btn btn-ghost btn-sm" @click="closePopup">关闭</button>
+        </div>
+        <div class="ann-popup-bd">{{ popupAnn.body }}</div>
+        <div class="ann-popup-ft">
+          <span v-if="popupLeft > 0" class="ann-popup-timer">{{ popupLeft }}s 后自动关闭</span>
+          <span v-else class="ann-popup-timer" />
+          <button type="button" class="btn btn-primary btn-sm" @click="closePopup">我知道了</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Announcement list -->
+    <div v-if="showList" class="ann-list-mask" @click.self="closeList">
+      <div class="ann-list" role="dialog" aria-modal="true">
+        <div class="ann-list-hd">
+          <h3>公告列表</h3>
+          <button type="button" class="btn btn-ghost btn-sm" @click="closeList">关闭</button>
+        </div>
+        <div class="ann-list-bd">
+          <div v-if="!announcements.length" class="empty" style="padding:28px 16px">暂无公告</div>
+          <div
+            v-for="a in announcements"
+            :key="a.id"
+            class="ann-item"
+            style="cursor:pointer"
+            @click="openFromList(a)"
+          >
+            <div class="ann-item-title">
+              <span>{{ a.title }}</span>
+              <span v-if="a.popup" class="badge ok" style="font-size:11px">弹窗</span>
+            </div>
+            <div class="ann-item-body">{{ a.body }}</div>
+            <div class="ann-item-meta">{{ fmtAnnTime(a.updated_at || a.created_at) }}</div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>

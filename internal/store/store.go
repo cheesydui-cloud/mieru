@@ -145,6 +145,16 @@ CREATE TABLE IF NOT EXISTS node_desired_config (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS announcements (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL DEFAULT '',
+  body TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  popup INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -159,9 +169,18 @@ CREATE TABLE IF NOT EXISTS settings (
 		`ALTER TABLE nodes ADD COLUMN port_min INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE nodes ADD COLUMN port_max INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE nodes ADD COLUMN private_ip TEXT DEFAULT ''`,
-`ALTER TABLE users ADD COLUMN entry_host TEXT DEFAULT ''`,
-			`ALTER TABLE users ADD COLUMN entry_port INTEGER NOT NULL DEFAULT 0`,
-			`ALTER TABLE users ADD COLUMN display_multiplier REAL NOT NULL DEFAULT 1`,
+		`ALTER TABLE users ADD COLUMN entry_host TEXT DEFAULT ''`,
+		`ALTER TABLE users ADD COLUMN entry_port INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE users ADD COLUMN display_multiplier REAL NOT NULL DEFAULT 1`,
+		`CREATE TABLE IF NOT EXISTS announcements (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL DEFAULT '',
+  body TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  popup INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+)`,
 		} {
 			_, _ = s.db.Exec(q) // ignore "duplicate column" on fresh DBs
 		}
@@ -863,6 +882,174 @@ func (s *Store) SaveDesiredConfig(nodeID string, version int64, configJSON strin
 func (s *Store) GetDesiredConfig(nodeID string) (version int64, configJSON string, err error) {
 	err = s.db.QueryRow(`SELECT version, config_json FROM node_desired_config WHERE node_id=?`, nodeID).Scan(&version, &configJSON)
 	return
+}
+
+// ---------- Announcements ----------
+
+func scanAnnouncement(sc interface {
+	Scan(dest ...any) error
+}) (model.Announcement, error) {
+	var a model.Announcement
+	var en, pop int
+	var c, u string
+	if err := sc.Scan(&a.ID, &a.Title, &a.Body, &en, &pop, &c, &u); err != nil {
+		return a, err
+	}
+	a.Enabled = en != 0
+	a.Popup = pop != 0
+	if t := parseTime(c); t != nil {
+		a.CreatedAt = *t
+	}
+	if t := parseTime(u); t != nil {
+		a.UpdatedAt = *t
+	}
+	return a, nil
+}
+
+func (s *Store) ListAnnouncements() ([]model.Announcement, error) {
+	rows, err := s.db.Query(`SELECT id, title, body, enabled, popup, created_at, updated_at FROM announcements ORDER BY id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]model.Announcement, 0)
+	for rows.Next() {
+		a, err := scanAnnouncement(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// ListPublicAnnouncements returns enabled announcements for the query page (newest first).
+func (s *Store) ListPublicAnnouncements() ([]model.Announcement, error) {
+	rows, err := s.db.Query(`SELECT id, title, body, enabled, popup, created_at, updated_at FROM announcements WHERE enabled=1 ORDER BY id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]model.Announcement, 0)
+	for rows.Next() {
+		a, err := scanAnnouncement(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// PopupAnnouncement returns the single enabled popup announcement, if any.
+func (s *Store) PopupAnnouncement() (*model.Announcement, error) {
+	row := s.db.QueryRow(`SELECT id, title, body, enabled, popup, created_at, updated_at FROM announcements WHERE enabled=1 AND popup=1 ORDER BY id DESC LIMIT 1`)
+	a, err := scanAnnouncement(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+func (s *Store) GetAnnouncement(id int64) (*model.Announcement, error) {
+	row := s.db.QueryRow(`SELECT id, title, body, enabled, popup, created_at, updated_at FROM announcements WHERE id=?`, id)
+	a, err := scanAnnouncement(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+func (s *Store) CreateAnnouncement(a *model.Announcement) error {
+	ts := now()
+	a.Title = strings.TrimSpace(a.Title)
+	a.Body = strings.TrimSpace(a.Body)
+	if a.Title == "" {
+		return fmt.Errorf("标题不能为空")
+	}
+	if a.Body == "" {
+		return fmt.Errorf("内容不能为空")
+	}
+	if a.Popup {
+		if _, err := s.db.Exec(`UPDATE announcements SET popup=0 WHERE popup=1`); err != nil {
+			return err
+		}
+	}
+	res, err := s.db.Exec(
+		`INSERT INTO announcements(title, body, enabled, popup, created_at, updated_at) VALUES(?,?,?,?,?,?)`,
+		a.Title, a.Body, boolToInt(a.Enabled), boolToInt(a.Popup), ts, ts,
+	)
+	if err != nil {
+		return err
+	}
+	id, _ := res.LastInsertId()
+	a.ID = id
+	if t := parseTime(ts); t != nil {
+		a.CreatedAt = *t
+		a.UpdatedAt = *t
+	}
+	return nil
+}
+
+func (s *Store) UpdateAnnouncement(a *model.Announcement) error {
+	a.Title = strings.TrimSpace(a.Title)
+	a.Body = strings.TrimSpace(a.Body)
+	if a.Title == "" {
+		return fmt.Errorf("标题不能为空")
+	}
+	if a.Body == "" {
+		return fmt.Errorf("内容不能为空")
+	}
+	ts := now()
+	if a.Popup {
+		if _, err := s.db.Exec(`UPDATE announcements SET popup=0 WHERE popup=1 AND id<>?`, a.ID); err != nil {
+			return err
+		}
+	}
+	res, err := s.db.Exec(
+		`UPDATE announcements SET title=?, body=?, enabled=?, popup=?, updated_at=? WHERE id=?`,
+		a.Title, a.Body, boolToInt(a.Enabled), boolToInt(a.Popup), ts, a.ID,
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("公告不存在")
+	}
+	if t := parseTime(ts); t != nil {
+		a.UpdatedAt = *t
+	}
+	return nil
+}
+
+func (s *Store) DeleteAnnouncement(id int64) error {
+	_, err := s.db.Exec(`DELETE FROM announcements WHERE id=?`, id)
+	return err
+}
+
+func (s *Store) SetAnnouncementPopup(id int64, popup bool) error {
+	if popup {
+		if _, err := s.db.Exec(`UPDATE announcements SET popup=0 WHERE popup=1`); err != nil {
+			return err
+		}
+	}
+	ts := now()
+	res, err := s.db.Exec(`UPDATE announcements SET popup=?, updated_at=? WHERE id=?`, boolToInt(popup), ts, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("公告不存在")
+	}
+	return nil
 }
 
 // ---------- Audit & dashboard ----------
