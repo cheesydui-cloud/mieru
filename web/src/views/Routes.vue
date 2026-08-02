@@ -474,7 +474,7 @@ onMounted(load)
       <thead>
         <tr>
           <th>名称</th>
-          <th>路径（前置 IP:入口 → 落地 mita）</th>
+          <th>路径（前置 域名/IP:入口 → 落地 mita）</th>
           <th>用户</th>
           <th>健康 / 探测</th>
           <th>操作</th>
@@ -485,7 +485,7 @@ onMounted(load)
           v-for="r in routes"
           :key="r.id"
           class="route-row"
-          title="点击复制入口 IP:端口"
+          title="点击复制入口 域名/IP:端口"
           @click="copyEntry(r)"
         >
           <td @click.stop>

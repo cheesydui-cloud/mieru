@@ -9,20 +9,38 @@ const routes = ref([])
 const error = ref('')
 const toast = ref('')
 const rebuilding = ref(false)
+const rebuildStatus = ref(null)
 let timer
 
 async function load() {
   try {
-    const [d, rs] = await Promise.all([
+    const [d, rs, rb] = await Promise.all([
       api('/api/admin/diagnose'),
       api('/api/admin/routes'),
+      api('/api/admin/rebuild-status').catch(() => null),
     ])
     diag.value = d
     routes.value = Array.isArray(rs) ? rs : []
+    rebuildStatus.value = d?.rebuild || rb || null
     error.value = ''
   } catch (e) {
     error.value = e.message
   }
+}
+
+function fmtRebuild(rb) {
+  if (!rb || !rb.at) return '尚未记录'
+  const age = typeof rb.age_sec === 'number' ? rb.age_sec : null
+  let when = rb.at
+  try {
+    when = new Date(rb.at).toLocaleString()
+  } catch {
+    /* keep */
+  }
+  const ageTxt = age != null ? (age < 60 ? `${age}s 前` : `${Math.round(age / 60)} 分前`) : ''
+  const st = rb.ok === false ? '失败' : '成功'
+  const reason = rb.reason ? ` · ${rb.reason}` : ''
+  return `${st} · ${when}${ageTxt ? ' · ' + ageTxt : ''}${reason}`
 }
 
 const nodes = computed(() => diag.value?.nodes || [])
@@ -137,7 +155,8 @@ function goRoute(id) {
 async function rebuild() {
   rebuilding.value = true
   try {
-    await api('/api/admin/rebuild', { method: 'POST' })
+    const res = await api('/api/admin/rebuild', { method: 'POST' })
+    rebuildStatus.value = res?.rebuild || rebuildStatus.value
     toast.value = '已重建全部节点配置'
     await load()
   } catch (e) {
@@ -209,6 +228,42 @@ onUnmounted(() => clearInterval(timer))
       <h3>流量上报沉默落地</h3>
       <div class="value">{{ stats.traffic_silent || 0 }}</div>
       <div class="sub">exit 近期无 /api/agent/traffic</div>
+    </div>
+  </div>
+
+  <div class="grid-stats" v-if="diag" style="grid-template-columns: repeat(4, 1fr)">
+    <div
+      class="card clickable"
+      :class="stats.expiring_soon ? 'card-warn' : ''"
+      @click="router.push('/users')"
+    >
+      <h3>3 天内到期</h3>
+      <div class="value">{{ stats.expiring_soon || 0 }}</div>
+      <div class="sub">点此去用户续期</div>
+    </div>
+    <div
+      class="card clickable"
+      :class="stats.over_quota ? 'card-warn' : ''"
+      @click="router.push('/users')"
+    >
+      <h3>已超流量</h3>
+      <div class="value">{{ stats.over_quota || 0 }}</div>
+      <div class="sub">需加流量或停用</div>
+    </div>
+    <div class="card clickable" @click="router.push('/users')">
+      <h3>已到期用户</h3>
+      <div class="value">{{ stats.expired_users || 0 }}</div>
+      <div class="sub">状态 expired</div>
+    </div>
+    <div
+      class="card"
+      :class="rebuildStatus && rebuildStatus.ok === false ? 'card-warn' : rebuildStatus?.at ? 'card-ok' : ''"
+    >
+      <h3>最近重建</h3>
+      <div class="value" style="font-size:14px;line-height:1.35;margin-top:4px">
+        {{ fmtRebuild(rebuildStatus) }}
+      </div>
+      <div class="sub" v-if="rebuildStatus?.error" style="color:var(--danger)">{{ rebuildStatus.error }}</div>
     </div>
   </div>
 

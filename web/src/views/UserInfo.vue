@@ -285,6 +285,7 @@ onUnmounted(() => clearInterval(timer))
             </div>
             <p class="muted" style="margin: 10px 0 0; font-size: 12px; line-height: 1.5">
               本链接可直接扫码导入或下载 YAML，请勿公开转发给无关人员。
+              若怀疑泄露，请联系管理员在后台「重置订阅」以作废旧链接。
             </p>
           </div>
         </div>

@@ -57,9 +57,76 @@ const multUser = ref(null)
 const multValue = ref(1)
 const resetShow = ref(false)
 const resetInfo = ref(null) // { username, proxy_password }
+const selected = ref({}) // id -> true
+const batchBusy = ref(false)
 
 let listTimer
 let rateTimer
+
+const selectedIds = computed(() =>
+  Object.keys(selected.value)
+    .filter((k) => selected.value[k])
+    .map((k) => Number(k))
+    .filter((n) => Number.isFinite(n) && n > 0),
+)
+const selectedCount = computed(() => selectedIds.value.length)
+
+function isSelected(id) {
+  return !!selected.value[id]
+}
+
+function toggleSelect(id) {
+  selected.value = { ...selected.value, [id]: !selected.value[id] }
+}
+
+function clearSelection() {
+  selected.value = {}
+}
+
+function selectVisible() {
+  const next = { ...selected.value }
+  for (const g of groupedUsers.value || []) {
+    for (const u of g.users || []) {
+      next[u.id] = true
+    }
+  }
+  selected.value = next
+}
+
+async function batchAction(action, extra = {}) {
+  const ids = selectedIds.value
+  if (!ids.length) {
+    toast.value = '请先勾选用户'
+    return
+  }
+  const labels = {
+    enable: '批量启用',
+    disable: '批量停用',
+    delete: '批量删除',
+    renew: '批量续期',
+    add_traffic: '批量加流量',
+  }
+  const label = labels[action] || action
+  if (action === 'delete') {
+    if (!confirm(`确认删除选中的 ${ids.length} 个用户？不可恢复。`)) return
+  } else if (!confirm(`确认对 ${ids.length} 个用户执行「${label}」？`)) {
+    return
+  }
+  batchBusy.value = true
+  try {
+    const res = await api('/api/admin/users/batch', {
+      method: 'POST',
+      body: JSON.stringify({ ids, action, ...extra }),
+    })
+    toast.value = `${label}完成：成功 ${res.success || 0}` + (res.failed ? `，失败 ${res.failed}` : '')
+    clearSelection()
+    await loadUsers()
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    batchBusy.value = false
+  }
+}
 
 function routeName(u) {
   if (u.route_name) return u.route_name
@@ -471,6 +538,36 @@ async function resetPw(id) {
   }
 }
 
+async function resetSub(u) {
+  closeMore()
+  const name = u?.username || `#${u?.id}`
+  if (
+    !confirm(
+      `确认重置「${name}」的订阅 / 查询页 token？\n\n旧查询页链接与订阅 URL 将立即失效，需重新复制分享。`,
+    )
+  ) {
+    return
+  }
+  try {
+    const res = await api(`/api/admin/users/${u.id}/reset-sub`, { method: 'POST' })
+    toast.value = '已重置订阅 token'
+    await loadUsers()
+    if (res?.sub_token || res?.info_url || res?.subscription) {
+      const url = res.info_url || (res.sub_token ? `${window.location.origin}/u/${res.sub_token}` : '')
+      if (url) {
+        try {
+          await copyText(url)
+          toast.value = '已重置并复制新查询页链接'
+        } catch {
+          /* keep toast */
+        }
+      }
+    }
+  } catch (e) {
+    error.value = e.message
+  }
+}
+
 async function remove(u) {
   closeMore()
   const id = typeof u === 'object' && u ? u.id : u
@@ -711,6 +808,7 @@ onUnmounted(() => {
       </button>
       <button type="button" @click="openAddTraffic(moreUser); closeMore()">加流量</button>
       <button type="button" @click="resetPw(moreUser.id); closeMore()">重置密码</button>
+      <button type="button" @click="resetSub(moreUser)">重置订阅</button>
     </div>
   </Teleport>
 
@@ -770,8 +868,22 @@ onUnmounted(() => {
   </div>
 
   <div class="panel-toolbar users-toolbar">
-    <div class="toolbar-left">
+    <div class="toolbar-left" style="flex-wrap:wrap;gap:8px">
       <input class="input-filter" v-model="filter" placeholder="搜索用户 / 备注 / 隧道" />
+      <template v-if="selectedCount">
+        <span class="badge">已选 {{ selectedCount }}</span>
+        <button class="btn btn-ghost btn-sm" :disabled="batchBusy" @click="batchAction('enable')">启用</button>
+        <button class="btn btn-ghost btn-sm" :disabled="batchBusy" @click="batchAction('disable')">停用</button>
+        <button class="btn btn-ghost btn-sm" :disabled="batchBusy" @click="batchAction('renew', { days: 30 })">
+          +30天
+        </button>
+        <button class="btn btn-ghost btn-sm" :disabled="batchBusy" @click="batchAction('add_traffic', { add_gb: 50 })">
+          +50G
+        </button>
+        <button class="btn btn-ghost btn-sm" :disabled="batchBusy" @click="batchAction('delete')">删除</button>
+        <button class="btn btn-link btn-sm" @click="clearSelection">清空</button>
+      </template>
+      <button v-else class="btn btn-ghost btn-sm" @click="selectVisible">全选当前</button>
     </div>
     <button class="btn btn-primary btn-sm" @click="openCreate">开户</button>
   </div>
@@ -804,6 +916,7 @@ onUnmounted(() => {
         <table class="data table-users">
           <thead>
             <tr>
+              <th class="col-check" style="width:36px"></th>
               <th class="col-user">用户</th>
               <th class="col-status">状态</th>
               <th class="col-date">到期</th>
@@ -815,6 +928,9 @@ onUnmounted(() => {
           </thead>
           <tbody>
             <tr v-for="u in g.users" :key="u.id">
+              <td class="col-check" @click.stop>
+                <input type="checkbox" :checked="isSelected(u.id)" @change="toggleSelect(u.id)" />
+              </td>
               <td class="col-user">
                 <div class="name-link">
                   {{ u.username }}
@@ -841,6 +957,14 @@ onUnmounted(() => {
                   {{ formatBytes(u.traffic_used_bytes) }}
                   <span class="muted">/</span>
                   {{ u.traffic_limit_bytes ? formatBytes(u.traffic_limit_bytes) : "∞" }}
+                  <span
+                    v-if="u.display_multiplier && Number(u.display_multiplier) !== 1"
+                    class="muted"
+                    style="font-size:11px;margin-left:4px"
+                    :title="'查询页按 ×' + u.display_multiplier + ' 显示已用'"
+                  >
+                    · 页显 {{ formatBytes(Math.round((u.traffic_used_bytes || 0) * Number(u.display_multiplier))) }}
+                  </span>
                 </div>
                 <div v-if="u.traffic_limit_bytes" class="bar">
                   <div class="bar-fill" :style="barStyle(u)"></div>
@@ -874,7 +998,7 @@ onUnmounted(() => {
               </td>
             </tr>
             <tr v-if="!g.users.length">
-              <td colspan="7" class="user-group-empty">
+              <td colspan="8" class="user-group-empty">
                 暂无用户
                 <button
                   v-if="g.canOpen"
@@ -980,16 +1104,27 @@ onUnmounted(() => {
           <div class="kv">
             <dt>代理密码</dt>
             <dd>{{ created.proxy_password }}</dd>
+            <dt>查询页</dt>
+            <dd style="word-break:break-all" class="mono">
+              {{ created.info_url || userInfoURL(created.user) || '—' }}
+            </dd>
             <dt>节点链接</dt>
             <dd style="word-break:break-all" class="mono">{{ created.share_url || '（无可用入口）' }}</dd>
           </div>
-          <div class="row-actions" style="margin-top:4px">
+          <div class="row-actions" style="margin-top:4px;flex-wrap:wrap">
             <button class="btn btn-ghost btn-sm" @click="copy(created.proxy_password)">复制密码</button>
+            <button
+              class="btn btn-primary btn-sm"
+              :disabled="!(created.info_url || userInfoURL(created.user))"
+              @click="copy(created.info_url || userInfoURL(created.user))"
+            >
+              复制查询页
+            </button>
             <button class="btn btn-ghost btn-sm" :disabled="!created.share_url" @click="copy(created.share_url)">
               复制节点链接
             </button>
             <button
-              class="btn btn-primary btn-sm"
+              class="btn btn-ghost btn-sm"
               @click="
                 openSub({
                   id: created.user?.id,

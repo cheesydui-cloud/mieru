@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { clearSession, getUsername } from '../api'
 import { brand, brandMarkLetter, loadBrand } from '../brand'
@@ -8,6 +8,7 @@ const route = useRoute()
 const router = useRouter()
 const user = getUsername()
 const version = ref('')
+const navOpen = ref(false)
 
 const title = computed(() => {
   const map = {
@@ -27,6 +28,14 @@ function logout() {
   router.replace('/login')
 }
 
+function closeNav() {
+  navOpen.value = false
+}
+
+function toggleNav() {
+  navOpen.value = !navOpen.value
+}
+
 async function loadVersion() {
   try {
     const r = await fetch('/api/version?t=' + Date.now(), {
@@ -42,15 +51,31 @@ async function loadVersion() {
   }
 }
 
+watch(
+  () => route.fullPath,
+  () => {
+    navOpen.value = false
+  },
+)
+
+function onKey(e) {
+  if (e.key === 'Escape') navOpen.value = false
+}
+
 onMounted(() => {
   loadVersion()
   loadBrand()
+  window.addEventListener('keydown', onKey)
+})
+onUnmounted(() => {
+  window.removeEventListener('keydown', onKey)
 })
 </script>
 
 <template>
-  <div class="app-shell">
-    <aside class="sidebar">
+  <div class="app-shell" :class="{ 'nav-open': navOpen }">
+    <div v-if="navOpen" class="nav-backdrop" @click="closeNav" />
+    <aside class="sidebar" :class="{ open: navOpen }">
       <div class="brand">
         <div class="brand-mark">
           <img
@@ -65,8 +90,9 @@ onMounted(() => {
           <strong :title="brand.name">{{ brand.name || 'Mieru' }}</strong>
           <span>控制台</span>
         </div>
+        <button type="button" class="btn btn-ghost btn-sm nav-close" @click="closeNav">关闭</button>
       </div>
-      <nav class="sidebar-nav">
+      <nav class="sidebar-nav" @click="closeNav">
         <router-link class="nav-item" :class="{ active: route.name === 'dashboard' }" to="/">总览</router-link>
         <router-link class="nav-item" :class="{ active: route.name === 'users' }" to="/users">用户</router-link>
         <router-link class="nav-item" :class="{ active: route.name === 'routes' }" to="/routes">隧道</router-link>
@@ -80,7 +106,12 @@ onMounted(() => {
     </aside>
     <div class="main">
       <header class="topbar">
-        <div class="topbar-user">{{ user || 'admin' }} · {{ title }}</div>
+        <div class="topbar-left">
+          <button type="button" class="btn btn-ghost btn-sm nav-toggle" @click="toggleNav" aria-label="菜单">
+            ☰
+          </button>
+          <div class="topbar-user">{{ user || 'admin' }} · {{ title }}</div>
+        </div>
         <div class="topbar-actions">
           <span v-if="version" class="badge mono">{{ version }}</span>
           <button class="btn btn-ghost btn-sm" @click="logout">退出</button>

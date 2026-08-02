@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.4.30] - 2026-08-02
+
+### 运营优化合集（P0–P3）
+
+**P0 可见性 / 安全**
+- 总览展示最近一次「重建配置」状态（成功/失败、时间、原因）
+- 心跳超时阈值统一为 **60 秒**，超时节点在列表/诊断中视为离线
+- 设置页强调 **面板地址（panel_url）** 对查询页/订阅外链的影响
+- 查询页提示订阅泄露可找管理员重置；后台「更多」增加 **重置订阅**
+
+**P1 体验**
+- 手机端侧栏抽屉导航（☰）
+- 用户批量：启用 / 停用 / 删除 / +30 天 / +50G
+- 开户成功可一键复制查询页；列表在倍率时显示「页显」已用
+- 隧道入口展示与分享一致：**填域名用域名，否则 IP**
+
+**P2 运维**
+- 总览卡片：3 天内到期 / 超流 / 已到期
+- 落地计量提示（Agent 版本 / 上报沉默）
+- 审计日志搜索与动作过滤
+
+**P3 加固**
+- 设置页提示默认 JWT / 宽松 CORS
+- `GET /api/admin/backup` 导出 JSON 快照（不含 agent_token / 密码）
+- `POST /api/admin/users/batch`、`GET /api/admin/rebuild-status`
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.30 bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | MIERU_VERSION=v0.4.30 bash
+```
+
+升完强制刷新浏览器；配置/插件有变时在面板点「重建配置」。
+
 ## [0.4.27] - 2026-08-03
 
 ### 填了域名就用域名当入口
