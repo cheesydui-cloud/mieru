@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.4.25] - 2026-08-02
+
+### 查询页：扫码 + YAML
+
+- 公开查询页 `/u/{token}` 增加与管理端「扫码/配置」相同内容：
+  - mierus:// 节点二维码与链接
+  - Mihomo/Clash Meta YAML 预览、复制、下载
+  - 多入口时列出全部入口
+- `GET /api/u/:token` 返回 `share_url` / `entries` / `mihomo_yaml`（不单独返回 `proxy_password` 字段）
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.25 bash
+```
+
+升完强制刷新浏览器。
+
 ## [0.4.24] - 2026-08-02
 
 ### 用户查询页（一键分享）

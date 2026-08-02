@@ -1,6 +1,7 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import QRCode from 'qrcode'
 import { copyText, formatBytes, formatBps, statusBadge } from '../api'
 import { brand, brandMarkLetter, loadBrand } from '../brand'
 
@@ -9,6 +10,7 @@ const info = ref(null)
 const error = ref('')
 const toast = ref('')
 const loading = ref(true)
+const subQR = ref('')
 let timer
 
 function statusLabel(s) {
@@ -28,6 +30,32 @@ const remainPct = computed(() => {
 const ringStyle = computed(() => ({ '--p': `${remainPct.value}%` }))
 
 const panelTitle = computed(() => info.value?.panel_name || brand.name || 'Mieru')
+
+const shareURL = computed(() => info.value?.share_url || '')
+const mihomoYAML = computed(() => info.value?.mihomo_yaml || '')
+const entries = computed(() => (Array.isArray(info.value?.entries) ? info.value.entries : []))
+
+async function makeQR(text) {
+  if (!text) return ''
+  return QRCode.toDataURL(text, {
+    width: 260,
+    margin: 2,
+    color: { dark: '#0f172a', light: '#ffffff' },
+    errorCorrectionLevel: 'M',
+  })
+}
+
+async function refreshQR(url) {
+  try {
+    subQR.value = url ? await makeQR(url) : ''
+  } catch {
+    subQR.value = ''
+  }
+}
+
+watch(shareURL, (url) => {
+  refreshQR(url)
+})
 
 async function load() {
   const tok = route.params.token
@@ -53,6 +81,7 @@ async function load() {
     }
     info.value = data
     error.value = ''
+    await refreshQR(data?.share_url || '')
   } catch (e) {
     error.value = e.message || '加载失败'
   } finally {
@@ -73,6 +102,29 @@ async function copy(text) {
   }
 }
 
+function downloadYAML() {
+  const body = mihomoYAML.value
+  if (!body) {
+    // fallback: open public mihomo url
+    if (info.value?.mihomo_url) {
+      window.open(info.value.mihomo_url, '_blank')
+      return
+    }
+    toast.value = '暂无 YAML'
+    return
+  }
+  const name = `mihomo-${info.value?.username || 'user'}.yaml`
+  const blob = new Blob([body], { type: 'application/x-yaml' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = name
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(a.href)
+  toast.value = `已下载 ${name}`
+}
+
 onMounted(async () => {
   try {
     await loadBrand()
@@ -81,7 +133,27 @@ onMounted(async () => {
   }
   document.title = `${panelTitle.value} · 账号信息`
   await load()
-  timer = setInterval(load, 15000)
+  // status/rate refresh; share/QR stable so no need every tick
+  timer = setInterval(async () => {
+    try {
+      const tok = route.params.token
+      if (!tok) return
+      const res = await fetch(`/api/u/${encodeURIComponent(tok)}`, {
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+      })
+      if (!res.ok) return
+      const data = await res.json()
+      // preserve QR if share_url unchanged
+      const prevShare = info.value?.share_url
+      info.value = data
+      if ((data?.share_url || '') !== (prevShare || '')) {
+        await refreshQR(data?.share_url || '')
+      }
+    } catch {
+      /* ignore poll errors */
+    }
+  }, 15000)
 })
 onUnmounted(() => clearInterval(timer))
 </script>
@@ -99,7 +171,7 @@ onUnmounted(() => clearInterval(timer))
           <div v-else class="brand-mark">{{ brandMarkLetter(panelTitle) }}</div>
           <div class="brand-text">
             <strong>{{ panelTitle }}</strong>
-            <span>账号信息（只读）</span>
+            <span>账号信息</span>
           </div>
         </div>
       </div>
@@ -152,13 +224,58 @@ onUnmounted(() => clearInterval(timer))
 
         <div class="panel">
           <div class="panel-hd">
+            <h2>扫码 / 节点</h2>
+            <div class="row-actions">
+              <button class="btn btn-ghost btn-sm" :disabled="!shareURL" @click="copy(shareURL)">复制链接</button>
+            </div>
+          </div>
+          <div class="panel-bd share-block">
+            <div class="qr-center">
+              <div v-if="subQR" class="qr-box">
+                <img :src="subQR" alt="节点二维码" width="260" height="260" />
+              </div>
+              <div v-else class="muted" style="padding: 16px; text-align: center">
+                无法生成二维码（未绑定隧道 / 无前置地址）
+              </div>
+            </div>
+            <div class="field" style="margin-top: 14px">
+              <label>节点链接（扫码内容 · mierus://）</label>
+              <textarea readonly rows="3" class="mono share-ta" :value="shareURL" />
+            </div>
+            <div v-if="entries.length > 1" class="field">
+              <label>全部入口</label>
+              <div v-for="(e, i) in entries" :key="i" class="mono entry-row">
+                <span>{{ e.name }} · {{ e.host }}:{{ e.port }}</span>
+                <button class="btn btn-link btn-sm" type="button" @click="copy(e.url)">复制</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-hd">
+            <h2>Mihomo / Clash Meta YAML</h2>
+            <div class="row-actions">
+              <button class="btn btn-ghost btn-sm" :disabled="!mihomoYAML" @click="copy(mihomoYAML)">复制 YAML</button>
+              <button class="btn btn-primary btn-sm" :disabled="!mihomoYAML && !info.mihomo_url" @click="downloadYAML">
+                下载 YAML
+              </button>
+            </div>
+          </div>
+          <div class="panel-bd" style="padding: 14px 18px">
+            <textarea readonly rows="12" class="mono share-ta" :value="mihomoYAML" />
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-hd">
             <h2>订阅链接</h2>
             <div class="row-actions">
               <button class="btn btn-ghost btn-sm" :disabled="!info.subscription" @click="copy(info.subscription)">
                 复制订阅
               </button>
-              <button class="btn btn-primary btn-sm" :disabled="!info.mihomo_url" @click="copy(info.mihomo_url)">
-                复制 Mihomo
+              <button class="btn btn-ghost btn-sm" :disabled="!info.mihomo_url" @click="copy(info.mihomo_url)">
+                复制 Mihomo URL
               </button>
             </div>
           </div>
@@ -167,7 +284,7 @@ onUnmounted(() => clearInterval(timer))
               {{ info.subscription || '—' }}
             </div>
             <p class="muted" style="margin: 10px 0 0; font-size: 12px; line-height: 1.5">
-              本页仅展示用量与状态，不含代理密码。如需节点扫码或密码，请联系管理员。
+              本链接可直接扫码导入或下载 YAML，请勿公开转发给无关人员。
             </p>
           </div>
         </div>
@@ -197,5 +314,42 @@ onUnmounted(() => clearInterval(timer))
   background-size: cover;
   background-position: center;
   color: transparent !important;
+}
+.share-block {
+  padding: 16px 18px 18px;
+}
+.qr-center {
+  display: flex;
+  justify-content: center;
+}
+.qr-box {
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 12px;
+  padding: 12px;
+  background: #fff;
+}
+.share-ta {
+  width: 100%;
+  resize: vertical;
+  min-height: 72px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border, #e2e8f0);
+  background: var(--bg-muted, #f8fafc);
+  color: var(--text, #0f172a);
+}
+.entry-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 12.5px;
+  border-bottom: 1px dashed var(--border, #e2e8f0);
+}
+.entry-row:last-child {
+  border-bottom: 0;
 }
 </style>

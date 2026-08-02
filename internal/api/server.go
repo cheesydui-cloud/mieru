@@ -2431,63 +2431,70 @@ func (s *Server) publicUserInfo(c *gin.Context) {
 	if u2, err := s.store.GetUser(u.ID); err == nil && u2 != nil {
 		u = u2
 	}
-	// strip secrets
-	u.PasswordHash = ""
-	u.ProxyPassword = ""
+	// Keep proxy password only for building share/YAML (same capability as /sub/:token).
+// Never return password_hash or a standalone proxy_password field.
+share := s.userSharePayload(u)
+u.PasswordHash = ""
+u.ProxyPassword = ""
 
-	sample, _ := s.store.GetRate(u.ID)
-	todayUp, todayDown := s.store.TodayTrafficByUser(u.ID)
+sample, _ := s.store.GetRate(u.ID)
+todayUp, todayDown := s.store.TodayTrafficByUser(u.ID)
 
-	routeName := ""
-	entryDisplay := ""
-	if u.RouteID != nil {
-		if r, err := s.store.GetRoute(*u.RouteID); err == nil && r != nil {
-			routeName = r.Name
-		}
+routeName := ""
+entryDisplay := ""
+if u.RouteID != nil {
+	if r, err := s.store.GetRoute(*u.RouteID); err == nil && r != nil {
+		routeName = r.Name
 	}
-	if eps := s.resolveUserMitaEndpoints(u); len(eps) > 0 {
-		entryDisplay = fmt.Sprintf("%s:%d", eps[0].Host, eps[0].Port)
-	} else if strings.TrimSpace(u.EntryHost) != "" {
-		if u.EntryPort > 0 {
-			entryDisplay = fmt.Sprintf("%s:%d", u.EntryHost, u.EntryPort)
-		} else {
-			entryDisplay = u.EntryHost
-		}
-	}
-
-	base := s.publicBase(c)
-	var expireStr interface{}
-	if u.ExpireAt != nil {
-		expireStr = u.ExpireAt.UTC().Format("2006-01-02")
+}
+if eps := s.resolveUserMitaEndpoints(u); len(eps) > 0 {
+	entryDisplay = fmt.Sprintf("%s:%d", eps[0].Host, eps[0].Port)
+} else if strings.TrimSpace(u.EntryHost) != "" {
+	if u.EntryPort > 0 {
+		entryDisplay = fmt.Sprintf("%s:%d", u.EntryHost, u.EntryPort)
 	} else {
-		expireStr = nil
+		entryDisplay = u.EntryHost
 	}
+}
 
-	// panel brand for page header
-	brandName, _ := s.store.GetSetting("panel_name")
-	if strings.TrimSpace(brandName) == "" {
-		brandName = "Mieru"
-	}
+base := s.publicBase(c)
+var expireStr interface{}
+if u.ExpireAt != nil {
+	expireStr = u.ExpireAt.UTC().Format("2006-01-02")
+} else {
+	expireStr = nil
+}
 
-	c.Header("Cache-Control", "no-store, no-cache, must-revalidate")
-	c.JSON(http.StatusOK, gin.H{
-		"panel_name": brandName,
-		"username":   u.Username,
-		"status":     u.Status,
-		"expire_at":  expireStr,
-		"traffic_used_bytes":  u.TrafficUsedBytes,
-		"traffic_limit_bytes": u.TrafficLimitBytes,
-		"today_up":   todayUp,
-		"today_down": todayDown,
-		"rate":       sample,
-		"route_name": routeName,
-		"entry":      entryDisplay,
-		"note":       u.Note,
-		// convenience links (same token; not secrets by themselves beyond capability URL)
-		"info_url":     base + "/u/" + tok,
-		"subscription": base + "/sub/" + tok,
-		"mihomo_url":   base + "/sub/" + tok + "/mihomo.yaml",
-	})
+// panel brand for page header
+brandName, _ := s.store.GetSetting("panel_name")
+if strings.TrimSpace(brandName) == "" {
+	brandName = "Mieru"
+}
+
+c.Header("Cache-Control", "no-store, no-cache, must-revalidate")
+c.JSON(http.StatusOK, gin.H{
+	"panel_name": brandName,
+	"username":   u.Username,
+	"status":     u.Status,
+	"expire_at":  expireStr,
+	"traffic_used_bytes":  u.TrafficUsedBytes,
+	"traffic_limit_bytes": u.TrafficLimitBytes,
+	"today_up":   todayUp,
+	"today_down": todayDown,
+	"rate":       sample,
+	"route_name": routeName,
+	"entry":      entryDisplay,
+	"note":       u.Note,
+	// convenience links
+	"info_url":     base + "/u/" + tok,
+	"subscription": base + "/sub/" + tok,
+	"mihomo_url":   base + "/sub/" + tok + "/mihomo.yaml",
+	// same payload as admin share modal (QR / YAML) — no standalone password field
+	"share_url":   share["share_url"],
+	"share_urls":  share["share_urls"],
+	"entries":     share["entries"],
+	"mihomo_yaml": share["mihomo_yaml"],
+})
 }
 
 func (s *Server) myRate(c *gin.Context) {
