@@ -110,12 +110,13 @@ CREATE TABLE IF NOT EXISTS users (
   sticky_exit_id TEXT DEFAULT '',
   sub_token TEXT NOT NULL UNIQUE,
   route_id INTEGER,
-  entry_host TEXT DEFAULT '',
-  entry_port INTEGER NOT NULL DEFAULT 0,
-  note TEXT DEFAULT '',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
+entry_host TEXT DEFAULT '',
+	  entry_port INTEGER NOT NULL DEFAULT 0,
+	  note TEXT DEFAULT '',
+	  display_multiplier REAL NOT NULL DEFAULT 1,
+	  created_at TEXT NOT NULL,
+	  updated_at TEXT NOT NULL
+	);
 
 CREATE TABLE IF NOT EXISTS traffic_hourly (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -158,11 +159,12 @@ CREATE TABLE IF NOT EXISTS settings (
 		`ALTER TABLE nodes ADD COLUMN port_min INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE nodes ADD COLUMN port_max INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE nodes ADD COLUMN private_ip TEXT DEFAULT ''`,
-		`ALTER TABLE users ADD COLUMN entry_host TEXT DEFAULT ''`,
-		`ALTER TABLE users ADD COLUMN entry_port INTEGER NOT NULL DEFAULT 0`,
-	} {
-		_, _ = s.db.Exec(q) // ignore "duplicate column" on fresh DBs
-	}
+`ALTER TABLE users ADD COLUMN entry_host TEXT DEFAULT ''`,
+			`ALTER TABLE users ADD COLUMN entry_port INTEGER NOT NULL DEFAULT 0`,
+			`ALTER TABLE users ADD COLUMN display_multiplier REAL NOT NULL DEFAULT 1`,
+		} {
+			_, _ = s.db.Exec(q) // ignore "duplicate column" on fresh DBs
+		}
 	return nil
 }
 
@@ -617,10 +619,13 @@ func (s *Store) CreateUser(u *model.User) error {
 	if u.ExpireAt != nil {
 		exp = u.ExpireAt.UTC().Format(time.RFC3339)
 	}
-	res, err := s.db.Exec(`INSERT INTO users(username,password_hash,proxy_password,status,expire_at,traffic_limit_bytes,traffic_used_bytes,speed_limit_bps,max_sessions,sticky_exit_id,sub_token,route_id,entry_host,entry_port,note,created_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		u.Username, mustHash(u.ProxyPassword), u.ProxyPassword, u.Status, exp,
-		u.TrafficLimitBytes, u.TrafficUsedBytes, u.SpeedLimitBps, u.MaxSessions, u.StickyExitID, u.SubToken, u.RouteID, u.EntryHost, u.EntryPort, u.Note, ts, ts)
+if u.DisplayMultiplier <= 0 {
+			u.DisplayMultiplier = 1
+		}
+		res, err := s.db.Exec(`INSERT INTO users(username,password_hash,proxy_password,status,expire_at,traffic_limit_bytes,traffic_used_bytes,speed_limit_bps,max_sessions,sticky_exit_id,sub_token,route_id,entry_host,entry_port,note,display_multiplier,created_at,updated_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			u.Username, mustHash(u.ProxyPassword), u.ProxyPassword, u.Status, exp,
+			u.TrafficLimitBytes, u.TrafficUsedBytes, u.SpeedLimitBps, u.MaxSessions, u.StickyExitID, u.SubToken, u.RouteID, u.EntryHost, u.EntryPort, u.Note, u.DisplayMultiplier, ts, ts)
 	if err != nil {
 		return err
 	}
@@ -648,29 +653,47 @@ func (s *Store) ResetUserProxyPassword(id int64) (string, error) {
 }
 
 func (s *Store) ResetSubToken(id int64) (string, error) {
-	tok := strings.ReplaceAll(uuid.NewString(), "-", "")
-	ts := now()
-	_, err := s.db.Exec(`UPDATE users SET sub_token=?, updated_at=? WHERE id=?`, tok, ts, id)
-	return tok, err
-}
+		tok := strings.ReplaceAll(uuid.NewString(), "-", "")
+		ts := now()
+		_, err := s.db.Exec(`UPDATE users SET sub_token=?, updated_at=? WHERE id=?`, tok, ts, id)
+		return tok, err
+	}
 
-func (s *Store) GetUser(id int64) (*model.User, error) {
-	row := s.db.QueryRow(`SELECT id,username,password_hash,proxy_password,status,expire_at,traffic_limit_bytes,traffic_used_bytes,speed_limit_bps,max_sessions,sticky_exit_id,sub_token,route_id,entry_host,entry_port,note,created_at,updated_at FROM users WHERE id=?`, id)
-	return scanUser(row)
-}
+	// SetUserDisplayMultiplier sets public query-page display scale (real metering unchanged).
+	// mult <= 0 is stored as 1.
+	func (s *Store) SetUserDisplayMultiplier(id int64, mult float64) error {
+		if mult <= 0 {
+			mult = 1
+		}
+		if mult < 0.1 {
+			mult = 0.1
+		}
+		if mult > 100 {
+			mult = 100
+		}
+		_, err := s.db.Exec(`UPDATE users SET display_multiplier=?, updated_at=? WHERE id=?`, mult, now(), id)
+		return err
+	}
 
-func (s *Store) GetUserByUsername(username string) (*model.User, error) {
-	row := s.db.QueryRow(`SELECT id,username,password_hash,proxy_password,status,expire_at,traffic_limit_bytes,traffic_used_bytes,speed_limit_bps,max_sessions,sticky_exit_id,sub_token,route_id,entry_host,entry_port,note,created_at,updated_at FROM users WHERE username=?`, username)
-	return scanUser(row)
-}
+	const userSelectCols = `id,username,password_hash,proxy_password,status,expire_at,traffic_limit_bytes,traffic_used_bytes,speed_limit_bps,max_sessions,sticky_exit_id,sub_token,route_id,entry_host,entry_port,note,display_multiplier,created_at,updated_at`
 
-func (s *Store) GetUserBySubToken(token string) (*model.User, error) {
-	row := s.db.QueryRow(`SELECT id,username,password_hash,proxy_password,status,expire_at,traffic_limit_bytes,traffic_used_bytes,speed_limit_bps,max_sessions,sticky_exit_id,sub_token,route_id,entry_host,entry_port,note,created_at,updated_at FROM users WHERE sub_token=?`, token)
-	return scanUser(row)
-}
+	func (s *Store) GetUser(id int64) (*model.User, error) {
+		row := s.db.QueryRow(`SELECT `+userSelectCols+` FROM users WHERE id=?`, id)
+		return scanUser(row)
+	}
 
-func (s *Store) ListUsers() ([]model.User, error) {
-	rows, err := s.db.Query(`SELECT id,username,password_hash,proxy_password,status,expire_at,traffic_limit_bytes,traffic_used_bytes,speed_limit_bps,max_sessions,sticky_exit_id,sub_token,route_id,entry_host,entry_port,note,created_at,updated_at FROM users ORDER BY id DESC`)
+	func (s *Store) GetUserByUsername(username string) (*model.User, error) {
+		row := s.db.QueryRow(`SELECT `+userSelectCols+` FROM users WHERE username=?`, username)
+		return scanUser(row)
+	}
+
+	func (s *Store) GetUserBySubToken(token string) (*model.User, error) {
+		row := s.db.QueryRow(`SELECT `+userSelectCols+` FROM users WHERE sub_token=?`, token)
+		return scanUser(row)
+	}
+
+	func (s *Store) ListUsers() ([]model.User, error) {
+		rows, err := s.db.Query(`SELECT ` + userSelectCols + ` FROM users ORDER BY id DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -747,7 +770,7 @@ func (s *Store) ListActiveProxyUsers() ([]model.User, error) {
 	if err := s.RefreshUserStatuses(); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.Query(`SELECT id,username,password_hash,proxy_password,status,expire_at,traffic_limit_bytes,traffic_used_bytes,speed_limit_bps,max_sessions,sticky_exit_id,sub_token,route_id,entry_host,entry_port,note,created_at,updated_at FROM users WHERE status=?`, model.StatusActive)
+	rows, err := s.db.Query(`SELECT `+userSelectCols+` FROM users WHERE status=?`, model.StatusActive)
 	if err != nil {
 		return nil, err
 	}
@@ -764,38 +787,44 @@ func (s *Store) ListActiveProxyUsers() ([]model.User, error) {
 }
 
 func scanUser(row scannable) (*model.User, error) {
-	var u model.User
-	var exp, created, updated sql.NullString
-	var routeID sql.NullInt64
-	var entryHost sql.NullString
-	var entryPort sql.NullInt64
-	if err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.ProxyPassword, &u.Status, &exp, &u.TrafficLimitBytes, &u.TrafficUsedBytes, &u.SpeedLimitBps, &u.MaxSessions, &u.StickyExitID, &u.SubToken, &routeID, &entryHost, &entryPort, &u.Note, &created, &updated); err != nil {
-		return nil, err
-	}
-	if exp.Valid {
-		u.ExpireAt = parseTime(exp.String)
-	}
-	if routeID.Valid {
-		u.RouteID = &routeID.Int64
-	}
-	if entryHost.Valid {
-		u.EntryHost = entryHost.String
-	}
-	if entryPort.Valid {
-		u.EntryPort = int(entryPort.Int64)
-	}
-	if created.Valid {
-		if t := parseTime(created.String); t != nil {
-			u.CreatedAt = *t
+		var u model.User
+		var exp, created, updated sql.NullString
+		var routeID sql.NullInt64
+		var entryHost sql.NullString
+		var entryPort sql.NullInt64
+		var displayMult sql.NullFloat64
+		if err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.ProxyPassword, &u.Status, &exp, &u.TrafficLimitBytes, &u.TrafficUsedBytes, &u.SpeedLimitBps, &u.MaxSessions, &u.StickyExitID, &u.SubToken, &routeID, &entryHost, &entryPort, &u.Note, &displayMult, &created, &updated); err != nil {
+			return nil, err
 		}
-	}
-	if updated.Valid {
-		if t := parseTime(updated.String); t != nil {
-			u.UpdatedAt = *t
+		if exp.Valid {
+			u.ExpireAt = parseTime(exp.String)
 		}
+		if routeID.Valid {
+			u.RouteID = &routeID.Int64
+		}
+		if entryHost.Valid {
+			u.EntryHost = entryHost.String
+		}
+		if entryPort.Valid {
+			u.EntryPort = int(entryPort.Int64)
+		}
+		if displayMult.Valid && displayMult.Float64 > 0 {
+			u.DisplayMultiplier = displayMult.Float64
+		} else {
+			u.DisplayMultiplier = 1
+		}
+		if created.Valid {
+			if t := parseTime(created.String); t != nil {
+				u.CreatedAt = *t
+			}
+		}
+		if updated.Valid {
+			if t := parseTime(updated.String); t != nil {
+				u.UpdatedAt = *t
+			}
+		}
+		return &u, nil
 	}
-	return &u, nil
-}
 
 // ---------- Rates (memory) ----------
 

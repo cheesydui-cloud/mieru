@@ -1,20 +1,21 @@
 package api
 
 import (
-	"encoding/json"
-	"fmt"
-	"io"
-	"io/fs"
-	"log"
-	"net"
-	"net/http"
-	"net/url"
-	"os"
-	"path"
-	"strconv"
-	"strings"
-	"sync"
-	"time"
+		"encoding/json"
+		"fmt"
+		"io"
+		"io/fs"
+		"log"
+		"math"
+		"net"
+		"net/http"
+		"net/url"
+		"os"
+		"path"
+		"strconv"
+		"strings"
+		"sync"
+		"time"
 
 	"github.com/cheesydui-cloud/mieru/internal/auth"
 	"github.com/cheesydui-cloud/mieru/internal/config"
@@ -227,9 +228,10 @@ func (s *Server) Router() *gin.Engine {
 		admin.DELETE("/users/:id", s.deleteUser)
 		admin.POST("/users/:id/reset-password", s.resetUserPassword)
 		admin.POST("/users/:id/reset-sub", s.resetUserSub)
-		admin.POST("/users/:id/renew", s.renewUser)
-		admin.POST("/users/:id/add-traffic", s.addUserTraffic)
-		admin.POST("/users/:id/toggle", s.toggleUser)
+admin.POST("/users/:id/renew", s.renewUser)
+			admin.POST("/users/:id/add-traffic", s.addUserTraffic)
+			admin.POST("/users/:id/toggle", s.toggleUser)
+			admin.POST("/users/:id/display-multiplier", s.setUserDisplayMultiplier)
 
 		admin.GET("/metrics/rates", s.listRates)
 		admin.GET("/audit", s.listAudit)
@@ -2349,13 +2351,49 @@ func (s *Server) toggleUser(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	_ = s.gen.RebuildAll()
-	u2, _ := s.store.GetUser(id)
-	s.store.Audit("admin", "toggle_user", fmt.Sprintf("%d", id), u2.Status)
-	c.JSON(http.StatusOK, u2)
-}
+_ = s.gen.RebuildAll()
+		u2, _ := s.store.GetUser(id)
+		s.store.Audit("admin", "toggle_user", fmt.Sprintf("%d", id), u2.Status)
+		c.JSON(http.StatusOK, u2)
+	}
 
-func (s *Server) listRates(c *gin.Context) {
+	// setUserDisplayMultiplier scales public query-page used/today/rate only.
+	// Real traffic_used_bytes and admin list stay unscaled.
+	func (s *Server) setUserDisplayMultiplier(c *gin.Context) {
+		id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+		if id <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "bad id"})
+			return
+		}
+		if _, err := s.store.GetUser(id); err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		var req struct {
+			Multiplier float64 `json:"multiplier"`
+		}
+		if err := c.BindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
+			return
+		}
+		mult := req.Multiplier
+		if mult <= 0 {
+			mult = 1
+		}
+		if mult < 0.1 || mult > 100 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "multiplier must be between 0.1 and 100"})
+			return
+		}
+		if err := s.store.SetUserDisplayMultiplier(id, mult); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		u2, _ := s.store.GetUser(id)
+		s.store.Audit("admin", "display_multiplier", fmt.Sprintf("%d", id), fmt.Sprintf("%v", mult))
+		c.JSON(http.StatusOK, u2)
+	}
+
+	func (s *Server) listRates(c *gin.Context) {
 	// drop stale samples (>15s) so UI doesn't show frozen speeds
 	rates := s.store.AllRates()
 	now := time.Now().Unix()
@@ -2437,64 +2475,96 @@ share := s.userSharePayload(u)
 u.PasswordHash = ""
 u.ProxyPassword = ""
 
-sample, _ := s.store.GetRate(u.ID)
-todayUp, todayDown := s.store.TodayTrafficByUser(u.ID)
+sample, hasRate := s.store.GetRate(u.ID)
+	todayUp, todayDown := s.store.TodayTrafficByUser(u.ID)
 
-routeName := ""
-entryDisplay := ""
-if u.RouteID != nil {
-	if r, err := s.store.GetRoute(*u.RouteID); err == nil && r != nil {
-		routeName = r.Name
+	// Display multiplier: scale used / today / rate for query page only.
+	// Quota (limit) stays real so ring fills faster when mult > 1.
+	mult := u.DisplayMultiplier
+	if mult <= 0 {
+		mult = 1
 	}
-}
-if eps := s.resolveUserMitaEndpoints(u); len(eps) > 0 {
-	entryDisplay = fmt.Sprintf("%s:%d", eps[0].Host, eps[0].Port)
-} else if strings.TrimSpace(u.EntryHost) != "" {
-	if u.EntryPort > 0 {
-		entryDisplay = fmt.Sprintf("%s:%d", u.EntryHost, u.EntryPort)
+	scaleBytes := func(n int64) int64 {
+		if mult == 1 {
+			return n
+		}
+		return int64(math.Round(float64(n) * mult))
+	}
+	dispUsed := scaleBytes(u.TrafficUsedBytes)
+	dispTodayUp := scaleBytes(todayUp)
+	dispTodayDown := scaleBytes(todayDown)
+	var rateOut interface{}
+	if !hasRate {
+		rateOut = gin.H{"up_bps": 0, "down_bps": 0}
 	} else {
-		entryDisplay = u.EntryHost
+		rateOut = gin.H{
+			"up_bps":     scaleBytes(sample.UpBps),
+			"down_bps":   scaleBytes(sample.DownBps),
+			"up_bytes":   scaleBytes(sample.UpBytes),
+			"down_bytes": scaleBytes(sample.DownBytes),
+			"ts":         sample.TS,
+			"user_id":    sample.UserID,
+		}
 	}
-}
 
-base := s.publicBase(c)
-var expireStr interface{}
-if u.ExpireAt != nil {
-	expireStr = u.ExpireAt.UTC().Format("2006-01-02")
-} else {
-	expireStr = nil
-}
+	routeName := ""
+	entryDisplay := ""
+	if u.RouteID != nil {
+		if r, err := s.store.GetRoute(*u.RouteID); err == nil && r != nil {
+			routeName = r.Name
+		}
+	}
+	if eps := s.resolveUserMitaEndpoints(u); len(eps) > 0 {
+		entryDisplay = fmt.Sprintf("%s:%d", eps[0].Host, eps[0].Port)
+	} else if strings.TrimSpace(u.EntryHost) != "" {
+		if u.EntryPort > 0 {
+			entryDisplay = fmt.Sprintf("%s:%d", u.EntryHost, u.EntryPort)
+		} else {
+			entryDisplay = u.EntryHost
+		}
+	}
 
-// panel brand for page header
-brandName, _ := s.store.GetSetting("panel_name")
-if strings.TrimSpace(brandName) == "" {
-	brandName = "Mieru"
-}
+	base := s.publicBase(c)
+	var expireStr interface{}
+	if u.ExpireAt != nil {
+		expireStr = u.ExpireAt.UTC().Format("2006-01-02")
+	} else {
+		expireStr = nil
+	}
 
-c.Header("Cache-Control", "no-store, no-cache, must-revalidate")
-c.JSON(http.StatusOK, gin.H{
-	"panel_name": brandName,
-	"username":   u.Username,
-	"status":     u.Status,
-	"expire_at":  expireStr,
-	"traffic_used_bytes":  u.TrafficUsedBytes,
-	"traffic_limit_bytes": u.TrafficLimitBytes,
-	"today_up":   todayUp,
-	"today_down": todayDown,
-	"rate":       sample,
-	"route_name": routeName,
-	"entry":      entryDisplay,
-	"note":       u.Note,
-	// convenience links
-	"info_url":     base + "/u/" + tok,
-	"subscription": base + "/sub/" + tok,
-	"mihomo_url":   base + "/sub/" + tok + "/mihomo.yaml",
-	// same payload as admin share modal (QR / YAML) — no standalone password field
-	"share_url":   share["share_url"],
-	"share_urls":  share["share_urls"],
-	"entries":     share["entries"],
-	"mihomo_yaml": share["mihomo_yaml"],
-})
+	// panel brand for page header
+	brandName, _ := s.store.GetSetting("panel_name")
+	if strings.TrimSpace(brandName) == "" {
+		brandName = "Mieru"
+	}
+
+	c.Header("Cache-Control", "no-store, no-cache, must-revalidate")
+	c.JSON(http.StatusOK, gin.H{
+		"panel_name": brandName,
+		"username":   u.Username,
+		"status":     u.Status,
+		"expire_at":  expireStr,
+		// scaled for display
+		"traffic_used_bytes": dispUsed,
+		// real quota (not scaled)
+		"traffic_limit_bytes": u.TrafficLimitBytes,
+		"today_up":            dispTodayUp,
+		"today_down":          dispTodayDown,
+		"rate":                rateOut,
+		"display_multiplier":  mult,
+		"route_name":          routeName,
+		"entry":               entryDisplay,
+		"note":                u.Note,
+		// convenience links
+		"info_url":     base + "/u/" + tok,
+		"subscription": base + "/sub/" + tok,
+		"mihomo_url":   base + "/sub/" + tok + "/mihomo.yaml",
+		// same payload as admin share modal (QR / YAML) — no standalone password field
+		"share_url":   share["share_url"],
+		"share_urls":  share["share_urls"],
+		"entries":     share["entries"],
+		"mihomo_yaml": share["mihomo_yaml"],
+	})
 }
 
 func (s *Server) myRate(c *gin.Context) {

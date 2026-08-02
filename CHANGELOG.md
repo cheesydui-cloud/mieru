@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.4.26] - 2026-08-02
+
+### 查询页显示倍率
+
+- 用户「更多」→ **倍率设置**（0.1～100，默认 1）
+- 仅放大用户查询页的 **已用 / 今日 / 实时**；**配额不变**（圆环会随倍率变满）
+- 管理员用户列表仍显示真实流量；列表用户名旁显示 `×N` 标记
+- `POST /api/admin/users/:id/display-multiplier`；公开 `GET /api/u/:token` 返回已缩放数值 + `display_multiplier`
+- 真实计量、超流判定、节点配置不受影响
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | MIERU_VERSION=v0.4.26 bash
+```
+
+升完强制刷新浏览器。
+
 ## [0.4.25] - 2026-08-02
 
 ### 查询页：扫码 + YAML

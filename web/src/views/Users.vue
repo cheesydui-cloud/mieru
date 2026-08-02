@@ -52,6 +52,9 @@ const renewDate = ref('')
 const trafficShow = ref(false)
 const trafficUser = ref(null)
 const trafficGB = ref(50)
+const multShow = ref(false)
+const multUser = ref(null)
+const multValue = ref(1)
 const resetShow = ref(false)
 const resetInfo = ref(null) // { username, proxy_password }
 
@@ -528,6 +531,38 @@ function openAddTraffic(u) {
   trafficShow.value = true
 }
 
+function openMultiplier(u) {
+  closeMore()
+  multUser.value = u
+  const m = Number(u?.display_multiplier)
+  multValue.value = Number.isFinite(m) && m > 0 ? m : 1
+  multShow.value = true
+}
+
+async function doSetMultiplier() {
+  if (!multUser.value) return
+  let m = Number(multValue.value)
+  if (!Number.isFinite(m) || m <= 0) m = 1
+  if (m < 0.1 || m > 100) {
+    error.value = '倍率需在 0.1～100 之间'
+    return
+  }
+  saving.value = true
+  try {
+    await api(`/api/admin/users/${multUser.value.id}/display-multiplier`, {
+      method: 'POST',
+      body: JSON.stringify({ multiplier: m }),
+    })
+    toast.value = m === 1 ? '已恢复真实显示（×1）' : `查询页已设为 ×${m}`
+    multShow.value = false
+    await loadUsers()
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    saving.value = false
+  }
+}
+
 async function doAddTraffic(unlimited = false) {
   if (!trafficUser.value) return
   saving.value = true
@@ -660,7 +695,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div v-if="error && !show && !subShow && !renewShow && !trafficShow && !resetShow" class="error">{{ error }}</div>
+  <div v-if="error && !show && !subShow && !renewShow && !trafficShow && !multShow && !resetShow" class="error">{{ error }}</div>
   <div v-if="toast" class="toast" @click="toast = ''">{{ toast }}</div>
 
   <Teleport to="body">
@@ -671,6 +706,9 @@ onUnmounted(() => {
       @click.stop
     >
       <button type="button" @click="copyUserInfo(moreUser); closeMore()">复制查询页</button>
+      <button type="button" @click="openMultiplier(moreUser); closeMore()">
+        倍率设置{{ moreUser.display_multiplier && moreUser.display_multiplier !== 1 ? ` · ×${moreUser.display_multiplier}` : '' }}
+      </button>
       <button type="button" @click="openAddTraffic(moreUser); closeMore()">加流量</button>
       <button type="button" @click="resetPw(moreUser.id); closeMore()">重置密码</button>
     </div>
@@ -778,7 +816,15 @@ onUnmounted(() => {
           <tbody>
             <tr v-for="u in g.users" :key="u.id">
               <td class="col-user">
-                <div class="name-link">{{ u.username }}</div>
+                <div class="name-link">
+                  {{ u.username }}
+                  <span
+                    v-if="u.display_multiplier && Number(u.display_multiplier) !== 1"
+                    class="badge mono"
+                    style="margin-left:6px;font-size:10px"
+                    :title="'查询页显示倍率 ×' + u.display_multiplier"
+                  >×{{ u.display_multiplier }}</span>
+                </div>
                 <div v-if="u.note" class="muted note-line">{{ u.note }}</div>
                 <div class="muted mono" style="font-size:11px">#{{ u.id }}</div>
               </td>
@@ -1040,6 +1086,34 @@ onUnmounted(() => {
         <button class="btn btn-ghost" @click="trafficShow = false">取消</button>
         <button class="btn btn-ghost" :disabled="saving" @click="doAddTraffic(true)">改为不限</button>
         <button class="btn btn-primary" :disabled="saving" @click="doAddTraffic(false)">确认加流量</button>
+      </div>
+    </div>
+  </div>
+
+  <div v-if="multShow" class="modal-mask" @click.self="multShow = false">
+    <div class="modal" style="width:min(400px,100%)">
+      <div class="modal-hd">
+        <h3>倍率设置 · {{ multUser?.username }}</h3>
+        <button class="btn btn-ghost btn-sm" @click="multShow = false">关闭</button>
+      </div>
+      <div class="modal-bd">
+        <p class="muted" style="margin: 0 0 12px; font-size: 12.5px; line-height: 1.5">
+          仅影响用户<strong>查询页</strong>的「已用 / 今日 / 实时」显示；配额与后台列表仍为真实值。
+        </p>
+        <div class="pkg-row">
+          <button class="btn btn-ghost btn-sm" type="button" @click="multValue = 1">×1</button>
+          <button class="btn btn-ghost btn-sm" type="button" @click="multValue = 1.5">×1.5</button>
+          <button class="btn btn-ghost btn-sm" type="button" @click="multValue = 2">×2</button>
+          <button class="btn btn-ghost btn-sm" type="button" @click="multValue = 3">×3</button>
+        </div>
+        <div class="field">
+          <label>显示倍率（0.1～100）</label>
+          <input v-model.number="multValue" type="number" min="0.1" max="100" step="0.1" />
+        </div>
+      </div>
+      <div class="modal-ft">
+        <button class="btn btn-ghost" @click="multShow = false">取消</button>
+        <button class="btn btn-primary" :disabled="saving" @click="doSetMultiplier">保存</button>
       </div>
     </div>
   </div>
