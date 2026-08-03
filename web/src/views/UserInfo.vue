@@ -119,6 +119,10 @@ const panelTitle = computed(() => info.value?.panel_name || brand.name || 'Mieru
 const shareURL = computed(() => info.value?.share_url || '')
 const mihomoYAML = computed(() => info.value?.mihomo_yaml || '')
 const entries = computed(() => (Array.isArray(info.value?.entries) ? info.value.entries : []))
+/** Clash Verge / Mihomo remote profile URL (must end with /mihomo.yaml) */
+const clashVergeURL = computed(
+  () => info.value?.clash_verge_url || info.value?.mihomo_url || '',
+)
 
 /** Query page: host only, never show :port */
 function entryHostOnly(raw) {
@@ -413,13 +417,37 @@ onUnmounted(() => {
 
         <div class="panel">
           <div class="panel-hd">
-            <h2>订阅链接</h2>
+            <h2>Clash Verge / Mihomo 订阅</h2>
+            <div class="row-actions">
+              <button
+                class="btn btn-primary btn-sm"
+                :disabled="!clashVergeURL"
+                @click="copy(clashVergeURL)"
+              >
+                复制 Clash Verge 链接
+              </button>
+              <button class="btn btn-ghost btn-sm" :disabled="!clashVergeURL" @click="copy(clashVergeURL)">
+                复制 Mihomo URL
+              </button>
+            </div>
+          </div>
+          <div class="panel-bd" style="padding: 14px 18px">
+            <div class="mono" style="word-break: break-all; color: var(--text-secondary); font-size: 12.5px">
+              {{ clashVergeURL || '—' }}
+            </div>
+            <p class="muted" style="margin: 10px 0 0; font-size: 12px; line-height: 1.5">
+              <strong>Clash Verge / Windows / Mac</strong>：把上面整段粘贴到客户端「订阅 → 订阅文件链接」。
+              必须是 <code class="mono">.../mihomo.yaml</code> 结尾；不要用下方的普通订阅链接。
+            </p>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-hd">
+            <h2>普通订阅（mierus://）</h2>
             <div class="row-actions">
               <button class="btn btn-ghost btn-sm" :disabled="!info.subscription" @click="copy(info.subscription)">
                 复制订阅
-              </button>
-              <button class="btn btn-ghost btn-sm" :disabled="!info.mihomo_url" @click="copy(info.mihomo_url)">
-                复制 Mihomo URL
               </button>
             </div>
           </div>
@@ -428,8 +456,8 @@ onUnmounted(() => {
               {{ info.subscription || '—' }}
             </div>
             <p class="muted" style="margin: 10px 0 0; font-size: 12px; line-height: 1.5">
-              本链接可直接扫码导入或下载 YAML，请勿公开转发给无关人员。
-              若怀疑泄露，请联系管理员在后台「重置订阅」以作废旧链接。
+              内容为 <code class="mono">mierus://</code> 节点列表，给支持原生 mieru 的客户端/扫码用。
+              <strong>Clash Verge 请用上方链接</strong>。请勿公开转发；泄露可让管理员「重置订阅」。
             </p>
           </div>
         </div>

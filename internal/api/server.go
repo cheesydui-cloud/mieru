@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -2361,16 +2362,17 @@ func (s *Server) createUser(c *gin.Context) {
 	base := s.publicBase(c)
 	share := s.userSharePayload(u)
 	c.JSON(http.StatusCreated, gin.H{
-		"user":           u,
-		"proxy_password": u.ProxyPassword,
-		"sub_token":      u.SubToken,
-		"subscription":   base + "/sub/" + u.SubToken,
-		"info_url":       base + "/u/" + u.SubToken,
-		"share_url":      share["share_url"],
-		"share_urls":     share["share_urls"],
-		"entries":        share["entries"],
-		"mihomo_yaml":    share["mihomo_yaml"],
-		"mihomo_url":     base + "/sub/" + u.SubToken + "/mihomo.yaml",
+		"user":            u,
+		"proxy_password":  u.ProxyPassword,
+		"sub_token":       u.SubToken,
+		"subscription":    base + "/sub/" + u.SubToken,
+		"info_url":        base + "/u/" + u.SubToken,
+		"share_url":       share["share_url"],
+		"share_urls":      share["share_urls"],
+		"entries":         share["entries"],
+		"mihomo_yaml":     share["mihomo_yaml"],
+		"mihomo_url":      base + "/sub/" + u.SubToken + "/mihomo.yaml",
+		"clash_verge_url": base + "/sub/" + u.SubToken + "/mihomo.yaml",
 	})
 }
 
@@ -2385,14 +2387,15 @@ func (s *Server) getUser(c *gin.Context) {
 	share := s.userSharePayload(u)
 	base := s.publicBase(c)
 	c.JSON(http.StatusOK, gin.H{
-		"user":         u,
-		"rate":         sample,
-		"subscription": base + "/sub/" + u.SubToken,
-		"share_url":    share["share_url"],
-		"share_urls":   share["share_urls"],
-		"entries":      share["entries"],
-		"mihomo_yaml":  share["mihomo_yaml"],
-		"mihomo_url":   base + "/sub/" + u.SubToken + "/mihomo.yaml",
+		"user":            u,
+		"rate":            sample,
+		"subscription":    base + "/sub/" + u.SubToken,
+		"share_url":       share["share_url"],
+		"share_urls":      share["share_urls"],
+		"entries":         share["entries"],
+		"mihomo_yaml":     share["mihomo_yaml"],
+		"mihomo_url":      base + "/sub/" + u.SubToken + "/mihomo.yaml",
+		"clash_verge_url": base + "/sub/" + u.SubToken + "/mihomo.yaml",
 	})
 }
 
@@ -2507,10 +2510,11 @@ func (s *Server) resetUserSub(c *gin.Context) {
 	base := s.publicBase(c)
 	s.store.Audit("admin", "reset_sub", fmt.Sprintf("%d", id), "")
 	c.JSON(http.StatusOK, gin.H{
-		"sub_token":    tok,
-		"subscription": base + "/sub/" + tok,
-		"info_url":     base + "/u/" + tok,
-		"mihomo_url":   base + "/sub/" + tok + "/mihomo.yaml",
+		"sub_token":       tok,
+		"subscription":    base + "/sub/" + tok,
+		"info_url":        base + "/u/" + tok,
+		"mihomo_url":      base + "/sub/" + tok + "/mihomo.yaml",
+		"clash_verge_url": base + "/sub/" + tok + "/mihomo.yaml",
 	})
 }
 
@@ -3195,9 +3199,10 @@ func (s *Server) publicUserInfo(c *gin.Context) {
 		"entry":               entryDisplay,
 		"note":                u.Note,
 		// convenience links
-		"info_url":     base + "/u/" + tok,
-		"subscription": base + "/sub/" + tok,
-		"mihomo_url":   base + "/sub/" + tok + "/mihomo.yaml",
+		"info_url":        base + "/u/" + tok,
+		"subscription":    base + "/sub/" + tok,
+		"mihomo_url":      base + "/sub/" + tok + "/mihomo.yaml",
+		"clash_verge_url": base + "/sub/" + tok + "/mihomo.yaml",
 		// same payload as admin share modal (QR / YAML) — no standalone password field
 		"share_url":   share["share_url"],
 		"share_urls":  share["share_urls"],
@@ -4034,6 +4039,7 @@ func (s *Server) getUserShare(c *gin.Context) {
 	payload := s.userSharePayload(u)
 	base := s.publicBase(c)
 	payload["mihomo_url"] = base + "/sub/" + u.SubToken + "/mihomo.yaml"
+	payload["clash_verge_url"] = base + "/sub/" + u.SubToken + "/mihomo.yaml"
 	payload["mihomo_download"] = base + "/api/admin/users/" + strconv.FormatInt(u.ID, 10) + "/mihomo.yaml"
 	c.JSON(http.StatusOK, payload)
 }
@@ -4104,9 +4110,20 @@ func (s *Server) subscriptionMihomo(c *gin.Context) {
 	endpoints := s.resolveUserMitaEndpoints(u)
 	body := buildMihomoYAML(u, endpoints)
 	fname := "mihomo-" + u.Username + ".yaml"
-	c.Header("Content-Disposition", "attachment; filename="+fname)
+	// Clash Verge / Mihomo remote profile headers.
+	// Prefer inline over attachment — some clients fail import on forced download.
+	c.Header("Content-Disposition", "inline; filename="+fname)
 	c.Header("Profile-Update-Interval", "24")
-	c.Data(http.StatusOK, "application/x-yaml; charset=utf-8", []byte(body))
+	c.Header("Profile-Title", "base64:"+base64.StdEncoding.EncodeToString([]byte(u.Username)))
+	expire := int64(0)
+	if u.ExpireAt != nil && !u.ExpireAt.IsZero() {
+		expire = u.ExpireAt.Unix()
+	}
+	c.Header("Subscription-Userinfo", fmt.Sprintf(
+		"upload=%d; download=%d; total=%d; expire=%d",
+		0, u.TrafficUsedBytes, u.TrafficLimitBytes, expire,
+	))
+	c.Data(http.StatusOK, "text/yaml; charset=utf-8", []byte(body))
 }
 
 func (s *Server) agentHeartbeat(c *gin.Context) {

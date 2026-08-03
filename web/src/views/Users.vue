@@ -46,6 +46,7 @@ const subQR = ref('')
 const subLoading = ref(false)
 const entries = ref([])
 const mihomoYAML = ref('')
+const clashVergeURL = ref('')
 
 const renewShow = ref(false)
 const renewUser = ref(null)
@@ -701,6 +702,7 @@ async function openSub(u) {
   subQR.value = ''
   entries.value = []
   mihomoYAML.value = ''
+  clashVergeURL.value = ''
   subShow.value = true
   subLoading.value = true
   try {
@@ -717,6 +719,7 @@ async function openSub(u) {
       shareURLs.value = detail.share_urls || detail.share_url || ''
       entries.value = Array.isArray(detail.entries) ? detail.entries : []
       mihomoYAML.value = detail.mihomo_yaml || ''
+      clashVergeURL.value = detail.clash_verge_url || detail.mihomo_url || ''
       if (detail.user) subUser.value = { ...u, ...detail.user }
     }
     if (!shareURL.value && created.value && created.value.user?.id === u?.id) {
@@ -724,6 +727,7 @@ async function openSub(u) {
       shareURLs.value = created.value.share_urls || shareURL.value
       entries.value = created.value.entries || []
       mihomoYAML.value = created.value.mihomo_yaml || ''
+      clashVergeURL.value = created.value.clash_verge_url || created.value.mihomo_url || ''
     }
     if (!shareURL.value && u?.share_url) shareURL.value = u.share_url
     if (shareURL.value) subQR.value = await makeQR(shareURL.value)
@@ -1301,6 +1305,13 @@ onUnmounted(() => {
             </div>
           </div>
           <div class="field">
+            <label>Clash Verge 订阅链接（粘贴到客户端「订阅文件链接」）</label>
+            <textarea readonly rows="2" class="mono share-ta" :value="clashVergeURL" />
+            <div class="row-actions" style="margin: 8px 0 12px">
+              <button class="btn btn-primary btn-sm" type="button" :disabled="!clashVergeURL" @click="copy(clashVergeURL)">
+                复制 Clash Verge 链接
+              </button>
+            </div>
             <label>Mihomo / Clash Meta YAML</label>
             <textarea readonly rows="10" class="mono share-ta" :value="mihomoYAML" />
           </div>

@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.5.10] - 2026-08-03
+
+### 查询页 Clash Verge 订阅链接
+
+- 用户查询页新增 **「复制 Clash Verge 链接」**（`.../sub/<token>/mihomo.yaml`）
+- 与普通 `mierus://` 订阅分开显示，避免 Verge 导入失败
+- Mihomo YAML 响应改为 `inline` + `Profile-Title` / `Subscription-Userinfo`，改善远程订阅导入
+- 管理端扫码/分享弹窗同步展示 Clash Verge 链接
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | bash
+```
+
 ## [0.5.9] - 2026-08-03
 
 ### 面板一键同步节点 PANEL_URL
