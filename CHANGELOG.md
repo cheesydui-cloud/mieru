@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.5.11] - 2026-08-04
+
+### Clash Verge / Mihomo 国内直连分流
+
+- 订阅 `.../mihomo.yaml` 默认规则改为：
+  - 局域网 / 私有地址 → **DIRECT**
+  - 国内域名（`GEOSITE,cn`）+ 国内 IP（`GEOIP,CN`）→ **DIRECT**
+  - 其余外网 → **PROXY**（节点）
+- DNS：国内 DoH 优先 + 国外 fallback，避免国内站被解析成海外 IP
+- 客户端请保持 **规则 / Rule** 模式（不要全局）
+- 更新面板后用户在 Verge 点「更新订阅」即可，无需重建节点配置
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | bash
+```
+
 ## [0.5.10] - 2026-08-03
 
 ### 查询页 Clash Verge 订阅链接
