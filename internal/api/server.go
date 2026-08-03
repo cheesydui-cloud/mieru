@@ -302,6 +302,8 @@ func (s *Server) Router() *gin.Engine {
 		admin.GET("/audit", s.listAudit)
 		admin.GET("/rebuild-status", s.getRebuildStatus)
 		admin.GET("/backup", s.exportBackup)
+		admin.GET("/migration/export", s.exportMigration)
+		admin.POST("/migration/import", s.importMigration)
 
 		admin.GET("/settings", s.getSettings)
 		admin.PUT("/settings", s.putSettings)
@@ -2835,6 +2837,74 @@ func (s *Server) exportBackup(c *gin.Context) {
 		"routes":      routes,
 		"users":       safeUsers,
 		"note":        "不含 agent_token / 管理员密码哈希 / 用户代理密码。节点需保留本机 /etc/mieru-agent.env。",
+	})
+}
+
+// exportMigration downloads a full secret-inclusive package for moving the panel host.
+func (s *Server) exportMigration(c *gin.Context) {
+	snap, err := s.store.ExportMigration(s.Version)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	s.store.Audit("admin", "export_migration", "*", fmt.Sprintf(
+		"nodes=%d routes=%d users=%d anns=%d traffic=%d",
+		len(snap.Nodes), len(snap.Routes), len(snap.Users), len(snap.Announcements), len(snap.TrafficHourly),
+	))
+	c.Header("Cache-Control", "no-store")
+	c.Header("Content-Disposition", fmt.Sprintf(
+		`attachment; filename="mieru-migration-%s.json"`,
+		time.Now().UTC().Format("20060102-150405"),
+	))
+	c.JSON(http.StatusOK, snap)
+}
+
+// importMigration replaces this panel's DB with a migration package (destructive).
+// Requires header X-Confirm-Import: 1
+func (s *Server) importMigration(c *gin.Context) {
+	if c.GetHeader("X-Confirm-Import") != "1" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少确认头 X-Confirm-Import: 1"})
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64<<20)
+	var snap store.MigrationSnapshot
+	if err := c.ShouldBindJSON(&snap); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效 JSON: " + err.Error()})
+		return
+	}
+	if err := store.ValidateMigrationSnapshot(&snap); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := s.store.ImportMigration(&snap); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	rebuildOK := true
+	rebuildErr := ""
+	if err := s.gen.RebuildAll(); err != nil {
+		rebuildOK = false
+		rebuildErr = err.Error()
+		log.Printf("migration import rebuild: %v", err)
+	}
+	s.store.Audit("admin", "import_migration", "*", fmt.Sprintf(
+		"nodes=%d routes=%d users=%d anns=%d traffic=%d rebuild_ok=%v",
+		len(snap.Nodes), len(snap.Routes), len(snap.Users), len(snap.Announcements), len(snap.TrafficHourly), rebuildOK,
+	))
+	c.JSON(http.StatusOK, gin.H{
+		"ok":            true,
+		"nodes":         len(snap.Nodes),
+		"routes":        len(snap.Routes),
+		"users":         len(snap.Users),
+		"announcements": len(snap.Announcements),
+		"traffic_rows":  len(snap.TrafficHourly),
+		"settings":      len(snap.Settings),
+		"admins":        len(snap.Admins),
+		"rebuild_ok":    rebuildOK,
+		"rebuild_error": rebuildErr,
+		"exported_at":   snap.ExportedAt,
+		"panel_version": snap.PanelVersion,
+		"hint":          "导入完成。若面板 IP/域名已变：1) 设置里改「面板公网地址」2) 各节点 /etc/mieru-agent.env 的 PANEL_URL 改成新地址后 restart agent。管理员请用迁移包内的旧密码登录。",
 	})
 }
 

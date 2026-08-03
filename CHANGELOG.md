@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.5.8] - 2026-08-03
+
+### 面板一键迁移（完整导出 + 覆盖导入）
+
+- 设置 → **完整迁移（含密钥）**
+  - **导出完整迁移包**：含 agent_token / 用户代理密码 / 管理员哈希 / backbone / CF / 公告 / 小时流量等
+  - **导入并覆盖**：事务清空后按原 ID 写回，导入后自动重建配置
+- 原「下载备份」保留（无密钥，仅查阅，不能换机）
+- API：`GET /api/admin/migration/export`、`POST /api/admin/migration/import`（需 `X-Confirm-Import: 1`）
+
+换机后若 URL 变了：改面板「公网地址」+ 各节点 `/etc/mieru-agent.env` 的 `PANEL_URL` 后重启 agent。
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | bash
+```
+
 ## [0.5.7] - 2026-08-02
 
 ### 去掉用户限速入口

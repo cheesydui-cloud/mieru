@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
-import { api, getToken } from '../api'
+import { api, clearSession, getToken } from '../api'
 import { setBrandMeta } from '../brand'
 import { useFlash } from '../flash'
 
@@ -8,12 +8,17 @@ const pageFlash = useFlash()
 const brandFlash = useFlash()
 const cfFlash = useFlash()
 const backupFlash = useFlash()
+const migFlash = useFlash()
 const pwFlash = useFlash()
 const savingBrand = ref(false)
 const savingCF = ref(false)
 const clearingCF = ref(false)
 const savingPw = ref(false)
 const backupLoading = ref(false)
+const migExportLoading = ref(false)
+const migImportLoading = ref(false)
+const migFile = ref(null)
+const migPreview = ref(null)
 const audit = ref([])
 const auditQ = ref('')
 const auditAction = ref('')
@@ -121,11 +126,155 @@ async function downloadBackup() {
     a.click()
     a.remove()
     URL.revokeObjectURL(a.href)
-    backupFlash.ok('备份已下载（不含 agent_token / 管理员密码）')
+    backupFlash.ok('备份已下载（不含密钥，不能用于换机）')
   } catch (e) {
     backupFlash.err(e.message)
   } finally {
     backupLoading.value = false
+  }
+}
+
+async function downloadMigration() {
+  if (
+    !confirm(
+      '将下载【含密钥】的完整迁移包。\n\n包含：agent_token、用户代理密码、管理员密码哈希、backbone/CF 等。\n任何拿到该文件的人可控制节点与用户。\n\n确认导出？',
+    )
+  ) {
+    return
+  }
+  migExportLoading.value = true
+  migFlash.clear()
+  try {
+    const tok = getToken()
+    const res = await fetch('/api/admin/migration/export', {
+      headers: {
+        Accept: 'application/json',
+        ...(tok ? { Authorization: `Bearer ${tok}` } : {}),
+      },
+      cache: 'no-store',
+    })
+    const text = await res.text()
+    if (!res.ok) {
+      let msg = text
+      try {
+        msg = JSON.parse(text).error || text
+      } catch {
+        /* keep */
+      }
+      throw new Error(msg || res.statusText)
+    }
+    const blob = new Blob([text], { type: 'application/json' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `mieru-migration-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(a.href)
+    migFlash.ok('完整迁移包已下载（含密钥，请离线妥善保管）')
+  } catch (e) {
+    migFlash.err(e.message)
+  } finally {
+    migExportLoading.value = false
+  }
+}
+
+function onMigrationFile(ev) {
+  migFlash.clear()
+  migPreview.value = null
+  migFile.value = null
+  const f = ev.target.files && ev.target.files[0]
+  if (!f) return
+  const reader = new FileReader()
+  reader.onload = () => {
+    try {
+      const data = JSON.parse(String(reader.result || ''))
+      if (data.format !== 'mieru-panel-migration') {
+        throw new Error(`不是完整迁移包（format=${data.format || '空'}）。请用「导出完整迁移包」生成的文件。`)
+      }
+      if (!data.secrets_included) {
+        throw new Error('该文件未包含密钥，不能用于导入')
+      }
+      migFile.value = data
+      migPreview.value = {
+        format_version: data.format_version,
+        exported_at: data.exported_at || '—',
+        panel_version: data.panel_version || '—',
+        nodes: Array.isArray(data.nodes) ? data.nodes.length : 0,
+        routes: Array.isArray(data.routes) ? data.routes.length : 0,
+        users: Array.isArray(data.users) ? data.users.length : 0,
+        announcements: Array.isArray(data.announcements) ? data.announcements.length : 0,
+        traffic: Array.isArray(data.traffic_hourly) ? data.traffic_hourly.length : 0,
+        settings: data.settings ? Object.keys(data.settings).length : 0,
+        admins: Array.isArray(data.admins) ? data.admins.length : 0,
+      }
+    } catch (e) {
+      migFlash.err(e.message || '文件解析失败')
+      if (ev.target) ev.target.value = ''
+    }
+  }
+  reader.onerror = () => {
+    migFlash.err('读取文件失败')
+  }
+  reader.readAsText(f)
+}
+
+async function doImportMigration() {
+  if (!migFile.value) {
+    migFlash.err('请先选择迁移包文件')
+    return
+  }
+  if (
+    !confirm(
+      '导入将【覆盖】本机全部面板数据：\n设置 / 节点 / 隧道 / 用户 / 公告 / 流量历史 / 管理员密码。\n\n当前本机数据会被清空且不可恢复（除非你另有备份）。\n确认继续？',
+    )
+  ) {
+    return
+  }
+  if (!confirm('再次确认：这是不可逆的覆盖导入。确定导入？')) {
+    return
+  }
+  migImportLoading.value = true
+  migFlash.clear()
+  try {
+    const tok = getToken()
+    const res = await fetch('/api/admin/migration/import', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-Confirm-Import': '1',
+        ...(tok ? { Authorization: `Bearer ${tok}` } : {}),
+      },
+      body: JSON.stringify(migFile.value),
+    })
+    const text = await res.text()
+    let data = null
+    try {
+      data = JSON.parse(text)
+    } catch {
+      /* keep */
+    }
+    if (!res.ok) {
+      throw new Error((data && data.error) || text || res.statusText)
+    }
+    const n = data || {}
+    migFlash.ok(
+      `导入成功：节点 ${n.nodes ?? 0} / 隧道 ${n.routes ?? 0} / 用户 ${n.users ?? 0}` +
+        (n.rebuild_ok === false ? `（配置重建失败：${n.rebuild_error || '未知'}）` : '，配置已重建') +
+        '。请用旧面板管理员密码重新登录；若换了 IP/域名，改设置「面板公网地址」并更新各节点 PANEL_URL。',
+    )
+    migFile.value = null
+    migPreview.value = null
+    // credentials may have changed — force re-login shortly
+    setTimeout(() => {
+      clearSession()
+      location.href = '/login'
+    }, 3500)
+  } catch (e) {
+    migFlash.err(e.message)
+  } finally {
+    migImportLoading.value = false
   }
 }
 
@@ -555,7 +704,7 @@ onMounted(load)
       <div>
         <h2>备份导出</h2>
         <div class="muted" style="font-size:12px;margin-top:3px">
-          JSON 快照：设置 / 节点（无 token）/ 隧道 / 用户
+          安全快照（无密钥）— 仅供查阅，不能用于换机
         </div>
       </div>
       <button type="button" class="btn btn-ghost btn-sm" :disabled="backupLoading" @click="downloadBackup">
@@ -571,8 +720,81 @@ onMounted(load)
         @click="backupFlash.clear()"
       >{{ backupFlash.msg }}</div>
       <p class="help-text" style="margin:0">
-        不含 agent_token、管理员密码哈希、用户代理密码。节点侧请继续保留
-        <code class="mono">/etc/mieru-agent.env</code>。
+        不含 agent_token、管理员密码、用户代理密码。
+        <strong>换服务器请用下方「完整迁移」</strong>。
+      </p>
+    </div>
+  </div>
+
+  <div class="panel" style="border-color: var(--danger)">
+    <div class="panel-hd">
+      <div>
+        <h2>完整迁移（含密钥）</h2>
+        <div class="muted" style="font-size:12px;margin-top:3px;color:var(--danger)">
+          换面板服务器专用 · 导出/导入会触及全部密钥
+        </div>
+      </div>
+      <button
+        type="button"
+        class="btn btn-danger btn-sm"
+        :disabled="migExportLoading"
+        @click="downloadMigration"
+      >
+        {{ migExportLoading ? '导出中…' : '导出完整迁移包' }}
+      </button>
+    </div>
+    <div class="panel-bd" style="padding:14px 16px">
+      <div
+        v-if="migFlash.msg"
+        class="action-feedback"
+        :class="migFlash.kind"
+        style="margin-top:0;margin-bottom:12px"
+        @click="migFlash.clear()"
+      >{{ migFlash.msg }}</div>
+
+      <p class="help-text" style="margin:0 0 12px;line-height:1.6">
+        <strong>换机步骤：</strong><br />
+        ① 旧机导出完整迁移包并离线保存<br />
+        ② 新机安装同版本面板并登录<br />
+        ③ 在此选择文件 →「导入并覆盖」<br />
+        ④ 设置「面板公网地址」为新 URL<br />
+        ⑤ 各节点修改
+        <code class="mono">/etc/mieru-agent.env</code>
+        的 <code class="mono">PANEL_URL</code> 后
+        <code class="mono">systemctl restart mieru-agent</code>
+        （token 不用改）
+      </p>
+
+      <div class="field" style="margin-bottom:10px">
+        <label>选择迁移包（.json）</label>
+        <input type="file" accept=".json,application/json" @change="onMigrationFile" />
+      </div>
+
+      <div
+        v-if="migPreview"
+        class="mono"
+        style="font-size:12px;line-height:1.7;padding:10px 12px;background:var(--bg-muted,#f8fafc);border-radius:10px;margin-bottom:12px"
+      >
+        <div>导出时间：{{ migPreview.exported_at }} · 源版本 {{ migPreview.panel_version }}</div>
+        <div>
+          节点 {{ migPreview.nodes }} · 隧道 {{ migPreview.routes }} · 用户 {{ migPreview.users }}
+          · 公告 {{ migPreview.announcements }} · 流量行 {{ migPreview.traffic }}
+          · 设置 {{ migPreview.settings }} · 管理员 {{ migPreview.admins }}
+        </div>
+      </div>
+
+      <div class="action-bar">
+        <button
+          type="button"
+          class="btn btn-danger"
+          :disabled="migImportLoading || !migFile"
+          @click="doImportMigration"
+        >
+          {{ migImportLoading ? '导入中…' : '导入并覆盖本机数据' }}
+        </button>
+      </div>
+      <p class="help-text" style="margin:10px 0 0;color:var(--danger)">
+        导入会清空本机现有数据并写入迁移包内容；管理员密码以迁移包为准，成功后需重新登录。
       </p>
     </div>
   </div>
