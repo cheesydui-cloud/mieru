@@ -68,6 +68,9 @@ type Agent struct {
 	// upgradeBusy: 1 while self-upgrade download/install running
 	upgradeBusy      int32
 	lastUpgradeJobID string // avoid re-running same job every heartbeat
+	// panelURLBusy: 1 while rewriting AGENT_PANEL_URL / restarting
+	panelURLBusy      int32
+	lastPanelURLJobID string // avoid re-running same job every heartbeat
 	// traffic log rate-limit (unix sec of last diagnostic line)
 	lastTrafficLog int64
 	// meterEnabled: true when this node runs mita_server (from desired plugins),
@@ -246,7 +249,8 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 			Port      int    `json:"port"`
 			TimeoutMS int    `json:"timeout_ms"`
 		} `json:"dial_jobs"`
-		UpgradeJob *upgradeJob `json:"upgrade_job"`
+		UpgradeJob  *upgradeJob  `json:"upgrade_job"`
+		PanelURLJob *panelURLJob `json:"panel_url_job"`
 	}
 	if err := a.postJSON(ctx, "/api/agent/heartbeat", body, &resp); err != nil {
 		if err == errUnauthorized {
@@ -282,6 +286,10 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 	// Panel-pushed self-upgrade (download tarball + restart). Non-blocking.
 	if resp.UpgradeJob != nil && resp.UpgradeJob.ID != "" {
 		a.scheduleUpgrade(ctx, *resp.UpgradeJob)
+	}
+	// Panel-pushed PANEL_URL rewrite + restart. Non-blocking.
+	if resp.PanelURLJob != nil && resp.PanelURLJob.ID != "" {
+		a.schedulePanelURLUpdate(ctx, *resp.PanelURLJob)
 	}
 	if resp.NeedPull {
 		a.schedulePull(ctx)

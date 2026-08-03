@@ -51,6 +51,12 @@ type upgradeJob struct {
 	Asset   string   `json:"asset"`   // filename hint
 }
 
+// panelURLJob is delivered on heartbeat; agent rewrites AGENT_PANEL_URL and restarts.
+type panelURLJob struct {
+	ID  string `json:"id"`
+	URL string `json:"url"` // normalized panel base URL, no trailing slash
+}
+
 type Server struct {
 	cfg     config.PanelConfig
 	store   *store.Store
@@ -66,6 +72,10 @@ type Server struct {
 	// pending agent self-upgrades (one per node; replaced if re-queued)
 	upgradeMu   sync.Mutex
 	upgradeJobs map[string]*upgradeJob // nodeID -> job
+
+	// pending panel URL rewrites (one per node; replaced if re-queued)
+	panelURLMu   sync.Mutex
+	panelURLJobs map[string]*panelURLJob // nodeID -> job
 
 	// login rate limit (per IP)
 	loginMu   sync.Mutex
@@ -104,17 +114,18 @@ type probeSnap struct {
 
 func New(cfg config.PanelConfig, st *store.Store) *Server {
 	return &Server{
-		cfg:         cfg,
-		store:       st,
-		jwt:         auth.NewTokenManager(cfg.JWTSecret),
-		gen:         &configgen.Builder{Store: st},
-		Version:     "dev",
-		dialWait:    map[string]map[string]chan dialResult{},
-		dialJobs:    map[string][]dialJob{},
-		upgradeJobs: map[string]*upgradeJob{},
-		loginFail:   map[string]*loginAttempt{},
-		lastTraffic: map[string]time.Time{},
-		lastProbe:   map[int64]probeSnap{},
+		cfg:          cfg,
+		store:        st,
+		jwt:          auth.NewTokenManager(cfg.JWTSecret),
+		gen:          &configgen.Builder{Store: st},
+		Version:      "dev",
+		dialWait:     map[string]map[string]chan dialResult{},
+		dialJobs:     map[string][]dialJob{},
+		upgradeJobs:  map[string]*upgradeJob{},
+		panelURLJobs: map[string]*panelURLJob{},
+		loginFail:    map[string]*loginAttempt{},
+		lastTraffic:  map[string]time.Time{},
+		lastProbe:    map[int64]probeSnap{},
 	}
 }
 
@@ -260,6 +271,7 @@ func (s *Server) Router() *gin.Engine {
 		agent.POST("/traffic", s.agentTraffic)
 		agent.POST("/dial-result", s.agentDialResult)
 		agent.POST("/upgrade-result", s.agentUpgradeResult)
+		agent.POST("/panel-url-result", s.agentPanelURLResult)
 	}
 
 	admin := r.Group("/api/admin")
@@ -274,6 +286,8 @@ func (s *Server) Router() *gin.Engine {
 		admin.POST("/nodes/:id/rebuild", s.rebuildAll)
 		admin.POST("/nodes/:id/upgrade", s.upgradeNode)
 		admin.POST("/nodes/upgrade-all", s.upgradeAllNodes)
+		admin.POST("/nodes/:id/sync-panel-url", s.syncNodePanelURL)
+		admin.POST("/nodes/sync-panel-url", s.syncAllPanelURL)
 		admin.POST("/rebuild", s.rebuildAll)
 
 		admin.GET("/routes", s.listRoutes)
@@ -594,7 +608,11 @@ func (s *Server) listNodes(c *gin.Context) {
 		UpgradeStatus    string `json:"upgrade_status,omitempty"` // pending|running|ok|error
 		UpgradeTarget    string `json:"upgrade_target,omitempty"` // target version
 		UpgradeError     string `json:"upgrade_error,omitempty"`
-		UpgradePending   bool   `json:"upgrade_pending,omitempty"` // still in panel queue
+		UpgradePending   bool   `json:"upgrade_pending,omitempty"`  // still in panel queue
+		PanelURLStatus   string `json:"panel_url_status,omitempty"` // pending|ok|error
+		PanelURLTarget   string `json:"panel_url_target,omitempty"`
+		PanelURLError    string `json:"panel_url_error,omitempty"`
+		PanelURLPending  bool   `json:"panel_url_pending,omitempty"`
 		PanelVersion     string `json:"panel_version,omitempty"`
 		AgentConfigVer   int64  `json:"agent_config_version,omitempty"` // last reported applied version
 		ConfigStale      bool   `json:"config_stale,omitempty"`         // desired > agent applied
@@ -633,6 +651,15 @@ func (s *Server) listNodes(c *gin.Context) {
 				}
 				if v, ok := meta["upgrade_error"].(string); ok {
 					no.UpgradeError = v
+				}
+				if v, ok := meta["panel_url_status"].(string); ok {
+					no.PanelURLStatus = v
+				}
+				if v, ok := meta["panel_url_target"].(string); ok {
+					no.PanelURLTarget = strings.TrimSpace(v)
+				}
+				if v, ok := meta["panel_url_error"].(string); ok {
+					no.PanelURLError = v
 				}
 				// agent last applied config version (from heartbeat)
 				switch cv := meta["agent_config_version"].(type) {
@@ -700,6 +727,14 @@ func (s *Server) listNodes(c *gin.Context) {
 			}
 		}
 		s.upgradeMu.Unlock()
+		s.panelURLMu.Lock()
+		if _, ok := s.panelURLJobs[n.ID]; ok {
+			no.PanelURLPending = true
+			if no.PanelURLStatus == "" {
+				no.PanelURLStatus = "pending"
+			}
+		}
+		s.panelURLMu.Unlock()
 		if reveal {
 			if full, err := s.store.GetNode(n.ID); err == nil {
 				no.AgentToken = full.AgentToken
@@ -1000,6 +1035,122 @@ func (s *Server) upgradeAllNodes(c *gin.Context) {
 		"skipped": skipped,
 		"version": s.Version,
 		"message": fmt.Sprintf("已向 %d 个在线节点推送升级", len(queued)),
+	})
+}
+
+func (s *Server) queuePanelURLJob(nodeID, url string) (*panelURLJob, error) {
+	url = normalizePanelURL(url)
+	if url == "" {
+		return nil, fmt.Errorf("panel_url empty")
+	}
+	if strings.TrimSpace(nodeID) == "" {
+		return nil, fmt.Errorf("node id empty")
+	}
+	job := &panelURLJob{
+		ID:  strings.ReplaceAll(uuid.NewString(), "-", ""),
+		URL: url,
+	}
+	s.panelURLMu.Lock()
+	s.panelURLJobs[nodeID] = job
+	s.panelURLMu.Unlock()
+	_ = s.store.HeartbeatEx(nodeID, "", "", "", map[string]string{
+		"panel_url_status": "pending",
+		"panel_url_target": url,
+		"panel_url_error":  "",
+	})
+	return job, nil
+}
+
+func (s *Server) peekPanelURLJob(nodeID string) *panelURLJob {
+	s.panelURLMu.Lock()
+	defer s.panelURLMu.Unlock()
+	return s.panelURLJobs[nodeID]
+}
+
+func (s *Server) clearPanelURLJob(nodeID string) {
+	s.panelURLMu.Lock()
+	delete(s.panelURLJobs, nodeID)
+	s.panelURLMu.Unlock()
+}
+
+func (s *Server) currentPanelURLSetting() string {
+	u, _ := s.store.GetSetting("panel_url")
+	return normalizePanelURL(u)
+}
+
+func (s *Server) syncNodePanelURL(c *gin.Context) {
+	id := c.Param("id")
+	n, err := s.store.GetNode(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "node not found"})
+		return
+	}
+	url := s.currentPanelURLSetting()
+	if url == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请先在设置里保存「面板公网地址」"})
+		return
+	}
+	// Optional override body: {"panel_url":"..."}
+	var body struct {
+		PanelURL string `json:"panel_url"`
+	}
+	_ = c.ShouldBindJSON(&body)
+	if u := normalizePanelURL(body.PanelURL); u != "" {
+		url = u
+	}
+	job, err := s.queuePanelURLJob(n.ID, url)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	s.store.Audit("admin", "node.sync_panel_url", n.ID, "url="+job.URL)
+	c.JSON(http.StatusOK, gin.H{
+		"ok":      true,
+		"node_id": n.ID,
+		"job_id":  job.ID,
+		"url":     job.URL,
+		"message": "已排队同步 PANEL_URL，节点下次心跳（≤5s）会改写 env 并重启 agent",
+	})
+}
+
+func (s *Server) syncAllPanelURL(c *gin.Context) {
+	url := s.currentPanelURLSetting()
+	var body struct {
+		PanelURL string `json:"panel_url"`
+	}
+	_ = c.ShouldBindJSON(&body)
+	if u := normalizePanelURL(body.PanelURL); u != "" {
+		url = u
+	}
+	if url == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请先在设置里保存「面板公网地址」"})
+		return
+	}
+	list, err := s.store.ListNodes()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	var queued []string
+	var skipped []string
+	for _, n := range list {
+		if n.Status != model.StatusOnline && n.Status != model.StatusDegraded {
+			skipped = append(skipped, n.ID+"(offline)")
+			continue
+		}
+		if _, err := s.queuePanelURLJob(n.ID, url); err != nil {
+			skipped = append(skipped, n.ID+"("+err.Error()+")")
+			continue
+		}
+		queued = append(queued, n.ID)
+	}
+	s.store.Audit("admin", "node.sync_panel_url_all", "", fmt.Sprintf("url=%s queued=%d", url, len(queued)))
+	c.JSON(http.StatusOK, gin.H{
+		"ok":      true,
+		"url":     url,
+		"queued":  queued,
+		"skipped": skipped,
+		"message": fmt.Sprintf("已向 %d 个在线节点推送 PANEL_URL=%s", len(queued), url),
 	})
 }
 
@@ -2904,7 +3055,7 @@ func (s *Server) importMigration(c *gin.Context) {
 		"rebuild_error": rebuildErr,
 		"exported_at":   snap.ExportedAt,
 		"panel_version": snap.PanelVersion,
-		"hint":          "导入完成。若面板 IP/域名已变：1) 设置里改「面板公网地址」2) 各节点 /etc/mieru-agent.env 的 PANEL_URL 改成新地址后 restart agent。管理员请用迁移包内的旧密码登录。",
+		"hint":          "导入完成。若面板 IP/域名已变：1) 设置里改「面板公网地址」2) 设置里点「同步 PANEL_URL 到节点」（节点需仍能连上当前面板一次）；离线节点仍需 SSH 改 /etc/mieru-agent.env。管理员请用迁移包内的旧密码登录。",
 	})
 }
 
@@ -4007,6 +4158,11 @@ func (s *Server) agentHeartbeat(c *gin.Context) {
 			upJob = job
 		}
 	}
+	// Panel URL rewrite: keep delivering until agent reports success.
+	var urlJob *panelURLJob
+	if job := s.peekPanelURLJob(req.NodeID); job != nil {
+		urlJob = job
+	}
 	cfgVer := int64(0)
 	if n != nil {
 		cfgVer = n.ConfigVersion
@@ -4017,6 +4173,7 @@ func (s *Server) agentHeartbeat(c *gin.Context) {
 		"need_pull":      needPull,
 		"dial_jobs":      jobs,
 		"upgrade_job":    upJob,
+		"panel_url_job":  urlJob,
 	})
 }
 
@@ -4062,6 +4219,46 @@ func (s *Server) agentUpgradeResult(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+func (s *Server) agentPanelURLResult(c *gin.Context) {
+	var req struct {
+		NodeID string `json:"node_id"`
+		Token  string `json:"token"`
+		JobID  string `json:"job_id"`
+		OK     bool   `json:"ok"`
+		URL    string `json:"url"`
+		Error  string `json:"error"`
+	}
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
+		return
+	}
+	if _, err := s.store.GetNodeByToken(req.NodeID, req.Token); err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	patch := map[string]string{}
+	if req.OK {
+		s.clearPanelURLJob(req.NodeID)
+		patch["panel_url_status"] = "ok"
+		patch["panel_url_error"] = ""
+		if u := normalizePanelURL(req.URL); u != "" {
+			patch["panel_url_target"] = u
+		}
+	} else {
+		// Keep job queued so agent can retry; surface error in UI.
+		patch["panel_url_status"] = "error"
+		errMsg := strings.TrimSpace(req.Error)
+		if errMsg == "" {
+			errMsg = "panel url update failed"
+		}
+		if len(errMsg) > 500 {
+			errMsg = errMsg[:500] + "…"
+		}
+		patch["panel_url_error"] = errMsg
+	}
+	_ = s.store.HeartbeatEx(req.NodeID, "", "", "", patch)
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
 func (s *Server) agentDialResult(c *gin.Context) {
 	var req struct {
 		NodeID  string `json:"node_id"`

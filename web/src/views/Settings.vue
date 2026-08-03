@@ -17,6 +17,8 @@ const savingPw = ref(false)
 const backupLoading = ref(false)
 const migExportLoading = ref(false)
 const migImportLoading = ref(false)
+const syncURLLoading = ref(false)
+const syncURLFlash = useFlash()
 const migFile = ref(null)
 const migPreview = ref(null)
 const audit = ref([])
@@ -262,7 +264,7 @@ async function doImportMigration() {
     migFlash.ok(
       `导入成功：节点 ${n.nodes ?? 0} / 隧道 ${n.routes ?? 0} / 用户 ${n.users ?? 0}` +
         (n.rebuild_ok === false ? `（配置重建失败：${n.rebuild_error || '未知'}）` : '，配置已重建') +
-        '。请用旧面板管理员密码重新登录；若换了 IP/域名，改设置「面板公网地址」并更新各节点 PANEL_URL。',
+        '。请用旧面板管理员密码重新登录；若换了 IP/域名，改设置「面板公网地址」并点「同步 PANEL_URL 到节点」。',
     )
     migFile.value = null
     migPreview.value = null
@@ -333,6 +335,44 @@ async function putSettingsBody(body) {
     method: 'PUT',
     body: JSON.stringify(body),
   })
+}
+
+
+/** 向在线节点下发当前面板地址（改写 /etc/mieru-agent.env 并重启 agent） */
+async function syncPanelURLToNodes() {
+  const url = (form.panel_url || '').trim()
+  if (!url) {
+    syncURLFlash.err('请先填写并保存「面板公网地址」')
+    return
+  }
+  if (
+    !confirm(
+      `向所有在线节点推送 PANEL_URL？\n\n目标：${url}\n\n` +
+        `• 节点须仍能连上当前面板一次（心跳）\n` +
+        `• Agent 会改写 /etc/mieru-agent.env 并 systemctl restart\n` +
+        `• 离线节点会被跳过，需 SSH 手动改\n` +
+        `• 建议先点上方「保存」再同步`,
+    )
+  ) {
+    return
+  }
+  syncURLLoading.value = true
+  syncURLFlash.clear()
+  try {
+    // ensure settings saved first so panel_url in DB matches
+    await putSettingsBody(brandPayload())
+    const res = await api('/api/admin/nodes/sync-panel-url', {
+      method: 'POST',
+      body: JSON.stringify({ panel_url: url }),
+    })
+    const q = Array.isArray(res.queued) ? res.queued.length : 0
+    const s = Array.isArray(res.skipped) ? res.skipped.length : 0
+    syncURLFlash.ok(res.message || `已排队 ${q} 个节点` + (s ? `，跳过 ${s}` : ''))
+  } catch (e) {
+    syncURLFlash.err(e.message)
+  } finally {
+    syncURLLoading.value = false
+  }
 }
 
 /** 仅保存面板品牌 / 地址（不改动 CF Token） */
@@ -609,6 +649,15 @@ onMounted(load)
         <button type="button" class="btn btn-primary" :disabled="savingBrand" @click="saveBrandSettings">
           {{ savingBrand ? '保存中…' : '保存' }}
         </button>
+        <button
+          type="button"
+          class="btn btn-ghost"
+          :disabled="syncURLLoading || !form.panel_url"
+          @click="syncPanelURLToNodes"
+          title="向在线节点心跳下发 AGENT_PANEL_URL 并重启 agent"
+        >
+          {{ syncURLLoading ? '同步中…' : '同步 PANEL_URL 到节点' }}
+        </button>
         <div
           v-if="brandFlash.msg"
           class="action-feedback"
@@ -616,6 +665,19 @@ onMounted(load)
           @click="brandFlash.clear()"
         >{{ brandFlash.msg }}</div>
       </div>
+      <p class="help-text" style="margin:10px 0 0;line-height:1.55">
+        向<strong>当前仍在心跳的节点</strong>下发本页地址（改 env 并重启 agent）。
+        <strong>换机推荐</strong>：旧面板还在跑、节点仍 online 时，把地址改成<strong>新 URL</strong> → 保存 → 同步；节点连上新机后再停旧机/导入。
+        若已迁完且节点失联，只能 SSH 改
+        <code class="mono">/etc/mieru-agent.env</code>。
+      </p>
+      <div
+        v-if="syncURLFlash.msg"
+        class="action-feedback"
+        :class="syncURLFlash.kind"
+        style="margin-top:10px"
+        @click="syncURLFlash.clear()"
+      >{{ syncURLFlash.msg }}</div>
     </div>
   </div>
 
@@ -757,12 +819,9 @@ onMounted(load)
         ① 旧机导出完整迁移包并离线保存<br />
         ② 新机安装同版本面板并登录<br />
         ③ 在此选择文件 →「导入并覆盖」<br />
-        ④ 设置「面板公网地址」为新 URL<br />
-        ⑤ 各节点修改
-        <code class="mono">/etc/mieru-agent.env</code>
-        的 <code class="mono">PANEL_URL</code> 后
-        <code class="mono">systemctl restart mieru-agent</code>
-        （token 不用改）
+        ④ <strong>理想顺序</strong>：旧机仍在线时把公网地址改成新 URL → 保存 →「同步 PANEL_URL 到节点」→ 再停旧机并在新机导入<br />
+        ⑤ 若已导入新机、节点仍指旧地址：只能 SSH 改
+        <code class="mono">/etc/mieru-agent.env</code>（token 不用改）
       </p>
 
       <div class="field" style="margin-bottom:10px">

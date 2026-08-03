@@ -511,6 +511,11 @@ function upgradeRowHint(n) {
   if (st === 'running') {
     return n.upgrade_target ? `升级中 → v${n.upgrade_target}` : '升级中…'
   }
+  const pu = n.panel_url_status || ''
+  if (pu === 'error' && n.panel_url_error) return `PANEL_URL: ${n.panel_url_error}`
+  if (pu === 'pending' || n.panel_url_pending) {
+    return n.panel_url_target ? `同步 PANEL_URL → ${n.panel_url_target}` : '同步 PANEL_URL 中…'
+  }
   if (n.config_stale) {
     return `配置未生效 面板v${n.config_version}/Agent v${n.agent_config_version || '?'}`
   }
@@ -563,6 +568,30 @@ async function pushUpgrade(n) {
     const next = { ...upgrading.value }
     delete next[n.id]
     upgrading.value = next
+  }
+}
+
+
+async function syncPanelURL(n) {
+  if (!n?.id) return
+  if (!confirm(`向节点「${n.name || n.id}」推送当前面板 PANEL_URL？`)) return
+  try {
+    const res = await api(`/api/admin/nodes/${n.id}/sync-panel-url`, { method: 'POST' })
+    flash.ok(res.message || '已排队同步 PANEL_URL')
+    await load()
+  } catch (e) {
+    error.value = e.message
+  }
+}
+
+async function syncPanelURLAll() {
+  if (!confirm('向所有在线节点推送当前设置中的面板 PANEL_URL？\n节点须仍能连上当前面板一次。')) return
+  try {
+    const res = await api('/api/admin/nodes/sync-panel-url', { method: 'POST' })
+    flash.ok(res.message || '已推送')
+    await load()
+  } catch (e) {
+    error.value = e.message
   }
 }
 
@@ -667,6 +696,7 @@ onUnmounted(() => {
     <input class="input-filter" v-model="filter" />
     <div class="row-actions">
       <button class="btn btn-ghost btn-sm" @click="pushUpgradeAll" title="向所有在线节点推送 Agent 升级">全部升级 Agent</button>
+      <button class="btn btn-ghost btn-sm" @click="syncPanelURLAll" title="向在线节点下发设置中的面板地址（改 env 并重启）">同步 PANEL_URL</button>
       <button
         class="btn btn-ghost btn-sm"
         @click="rebuild"
@@ -771,6 +801,14 @@ onUnmounted(() => {
                 @click="pushUpgrade(n)"
               >
                 {{ upgradeLabel(n) }}
+              </button>
+              <button
+                class="btn btn-link btn-sm"
+                :disabled="n.status === 'offline' || n.panel_url_pending"
+                :title="n.panel_url_error || '下发当前面板 PANEL_URL 并重启 agent'"
+                @click="syncPanelURL(n)"
+              >
+                {{ n.panel_url_pending ? '同步中…' : '同步URL' }}
               </button>
               <button class="btn btn-link btn-sm" @click="showInstall(n.id)">安装+防火墙</button>
               <button class="btn btn-link-danger btn-sm" @click="remove(n)">删除</button>

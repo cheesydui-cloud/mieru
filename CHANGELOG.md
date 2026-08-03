@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.5.9] - 2026-08-03
+
+### 面板一键同步节点 PANEL_URL
+
+- 设置页新增 **「同步 PANEL_URL 到节点」**：向在线节点心跳下发 `panel_url_job`
+- Agent 改写 `/etc/mieru-agent.env` 的 `AGENT_PANEL_URL`（兼容已有 `PANEL_URL`）并 `systemctl restart mieru-agent`
+- 节点页：工具栏「同步 PANEL_URL」+ 单节点「同步URL」；状态显示在行内提示
+- API：`POST /api/admin/nodes/sync-panel-url`、`POST /api/admin/nodes/:id/sync-panel-url`、`POST /api/agent/panel-url-result`
+- 换机：节点须仍能连上**当前**面板一次；离线节点仍需 SSH
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | bash
+```
+
 ## [0.5.8] - 2026-08-03
 
 ### 面板一键迁移（完整导出 + 覆盖导入）
