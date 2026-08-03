@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.7] - 2026-08-02
+
+### 去掉用户限速入口
+
+- 用户「更多」限速菜单、列表限速徽章、限速弹窗全部移除（mita 无原生带宽，不做假功能）
+- 后端字段与 API 保留但不在面板暴露
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | bash
+```
+
 ## [0.5.6] - 2026-08-02
 
 ### 扫尾定版（公告 + 限速字段 + 稳定性）
