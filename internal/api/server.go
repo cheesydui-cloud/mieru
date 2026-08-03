@@ -1,29 +1,29 @@
 package api
 
 import (
-		"encoding/json"
-		"fmt"
-		"io"
-		"io/fs"
-		"log"
-		"math"
-		"net"
-		"net/http"
-		"net/url"
-		"os"
-		"path"
-		"strconv"
-		"strings"
-		"sync"
-		"time"
+	"encoding/json"
+	"fmt"
+	"io"
+	"io/fs"
+	"log"
+	"math"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"path"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 
-"github.com/cheesydui-cloud/mieru/internal/auth"
-		"github.com/cheesydui-cloud/mieru/internal/cloudflare"
-		"github.com/cheesydui-cloud/mieru/internal/config"
-		"github.com/cheesydui-cloud/mieru/internal/configgen"
-		"github.com/cheesydui-cloud/mieru/internal/model"
-		"github.com/cheesydui-cloud/mieru/internal/store"
-		"github.com/cheesydui-cloud/mieru/web"
+	"github.com/cheesydui-cloud/mieru/internal/auth"
+	"github.com/cheesydui-cloud/mieru/internal/cloudflare"
+	"github.com/cheesydui-cloud/mieru/internal/config"
+	"github.com/cheesydui-cloud/mieru/internal/configgen"
+	"github.com/cheesydui-cloud/mieru/internal/model"
+	"github.com/cheesydui-cloud/mieru/internal/store"
+	"github.com/cheesydui-cloud/mieru/web"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -79,21 +79,21 @@ type Server struct {
 	probeMu   sync.Mutex
 	lastProbe map[int64]probeSnap // routeID
 
-// serialize background auto-rebuilds (startup / quota flip)
-		rebuildMu     sync.Mutex
-		rebuildBusy   bool
-		lastRebuildAt time.Time
-		lastRebuildOK bool
-		lastRebuildReason string
-		lastRebuildErr    string
-	}
+	// serialize background auto-rebuilds (startup / quota flip)
+	rebuildMu         sync.Mutex
+	rebuildBusy       bool
+	lastRebuildAt     time.Time
+	lastRebuildOK     bool
+	lastRebuildReason string
+	lastRebuildErr    string
+}
 
-	// OfflineAfter is how long without heartbeat before a node is treated as offline.
-	const OfflineAfter = 60 * time.Second
+// OfflineAfter is how long without heartbeat before a node is treated as offline.
+const OfflineAfter = 60 * time.Second
 
 type loginAttempt struct {
-	fails    int
-	windowAt time.Time
+	fails     int
+	windowAt  time.Time
 	lockUntil time.Time
 }
 
@@ -291,33 +291,33 @@ func (s *Server) Router() *gin.Engine {
 		admin.DELETE("/users/:id", s.deleteUser)
 		admin.POST("/users/:id/reset-password", s.resetUserPassword)
 		admin.POST("/users/:id/reset-sub", s.resetUserSub)
-admin.POST("/users/:id/renew", s.renewUser)
-			admin.POST("/users/:id/add-traffic", s.addUserTraffic)
-			admin.POST("/users/:id/toggle", s.toggleUser)
-admin.POST("/users/:id/display-multiplier", s.setUserDisplayMultiplier)
-admin.POST("/users/:id/speed-limit", s.setUserSpeedLimit)
-			admin.POST("/users/batch", s.batchUsers)
+		admin.POST("/users/:id/renew", s.renewUser)
+		admin.POST("/users/:id/add-traffic", s.addUserTraffic)
+		admin.POST("/users/:id/toggle", s.toggleUser)
+		admin.POST("/users/:id/display-multiplier", s.setUserDisplayMultiplier)
+		admin.POST("/users/:id/speed-limit", s.setUserSpeedLimit)
+		admin.POST("/users/batch", s.batchUsers)
 
-			admin.GET("/metrics/rates", s.listRates)
-			admin.GET("/audit", s.listAudit)
-			admin.GET("/rebuild-status", s.getRebuildStatus)
-			admin.GET("/backup", s.exportBackup)
+		admin.GET("/metrics/rates", s.listRates)
+		admin.GET("/audit", s.listAudit)
+		admin.GET("/rebuild-status", s.getRebuildStatus)
+		admin.GET("/backup", s.exportBackup)
 
-admin.GET("/settings", s.getSettings)
-				admin.PUT("/settings", s.putSettings)
-				admin.POST("/admin-password", s.changeAdminPassword)
-				admin.POST("/cloudflare/dns", s.cloudflareUpsertDNS)
-				admin.GET("/cloudflare/lookup", s.cloudflareLookupDNS)
-				admin.POST("/cloudflare/test", s.cloudflareTest)
-				admin.GET("/nodes/:id/install", s.nodeInstallCmd)
-				admin.GET("/diagnose", s.diagnose)
-				admin.GET("/nodes/:id/desired", s.nodeDesiredConfig)
-				admin.GET("/announcements", s.listAnnouncements)
-				admin.POST("/announcements", s.createAnnouncement)
-				admin.PUT("/announcements/:id", s.updateAnnouncement)
-				admin.DELETE("/announcements/:id", s.deleteAnnouncement)
-				admin.POST("/announcements/:id/popup", s.setAnnouncementPopup)
-			}
+		admin.GET("/settings", s.getSettings)
+		admin.PUT("/settings", s.putSettings)
+		admin.POST("/admin-password", s.changeAdminPassword)
+		admin.POST("/cloudflare/dns", s.cloudflareUpsertDNS)
+		admin.GET("/cloudflare/lookup", s.cloudflareLookupDNS)
+		admin.POST("/cloudflare/test", s.cloudflareTest)
+		admin.GET("/nodes/:id/install", s.nodeInstallCmd)
+		admin.GET("/diagnose", s.diagnose)
+		admin.GET("/nodes/:id/desired", s.nodeDesiredConfig)
+		admin.GET("/announcements", s.listAnnouncements)
+		admin.POST("/announcements", s.createAnnouncement)
+		admin.PUT("/announcements/:id", s.updateAnnouncement)
+		admin.DELETE("/announcements/:id", s.deleteAnnouncement)
+		admin.POST("/announcements/:id/popup", s.setAnnouncementPopup)
+	}
 
 	portal := r.Group("/api/me")
 	portal.Use(s.requireUserOrAdmin())
@@ -584,129 +584,129 @@ func (s *Server) listNodes(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-type nodeOut struct {
-			model.Node
-			AgentToken        string `json:"agent_token,omitempty"`
-			AgentVersion      string `json:"agent_version,omitempty"`
-			ApplyError        string `json:"apply_error,omitempty"`
-			UpgradeStatus     string `json:"upgrade_status,omitempty"` // pending|running|ok|error
-			UpgradeTarget     string `json:"upgrade_target,omitempty"` // target version
-			UpgradeError      string `json:"upgrade_error,omitempty"`
-			UpgradePending    bool   `json:"upgrade_pending,omitempty"` // still in panel queue
-			PanelVersion      string `json:"panel_version,omitempty"`
-			AgentConfigVer    int64  `json:"agent_config_version,omitempty"` // last reported applied version
-			ConfigStale       bool   `json:"config_stale,omitempty"`         // desired > agent applied
-			HeartbeatAgeSec   int64  `json:"heartbeat_age_sec,omitempty"`
-			NoHeartbeat       bool   `json:"no_heartbeat,omitempty"` // never seen or >N min
-			TrafficReportAge  int64  `json:"traffic_report_age_sec,omitempty"`
-			TrafficReporting  bool   `json:"traffic_reporting,omitempty"`
-			MeteringCapable   bool   `json:"metering_capable,omitempty"` // exit/hybrid + agent >= 0.4.17
-			MeteringHint      string `json:"metering_hint,omitempty"`
-		}
-		out := make([]nodeOut, 0, len(list))
-		reveal := c.Query("reveal") == "1"
-		panelVer := strings.TrimPrefix(strings.TrimSpace(s.Version), "v")
-		now := time.Now()
-for _, n := range list {
-				applyOfflineStatus(&n, now)
-				no := nodeOut{Node: n, PanelVersion: panelVer}
-				no.AgentToken = ""
-				no.Node.AgentToken = ""
-				// surface last apply error from meta_json for degraded nodes
-				if n.MetaJSON != "" {
-				var meta map[string]interface{}
-				if json.Unmarshal([]byte(n.MetaJSON), &meta) == nil {
-					if v, ok := meta["apply_error"].(string); ok {
-						no.ApplyError = v
+	type nodeOut struct {
+		model.Node
+		AgentToken       string `json:"agent_token,omitempty"`
+		AgentVersion     string `json:"agent_version,omitempty"`
+		ApplyError       string `json:"apply_error,omitempty"`
+		UpgradeStatus    string `json:"upgrade_status,omitempty"` // pending|running|ok|error
+		UpgradeTarget    string `json:"upgrade_target,omitempty"` // target version
+		UpgradeError     string `json:"upgrade_error,omitempty"`
+		UpgradePending   bool   `json:"upgrade_pending,omitempty"` // still in panel queue
+		PanelVersion     string `json:"panel_version,omitempty"`
+		AgentConfigVer   int64  `json:"agent_config_version,omitempty"` // last reported applied version
+		ConfigStale      bool   `json:"config_stale,omitempty"`         // desired > agent applied
+		HeartbeatAgeSec  int64  `json:"heartbeat_age_sec,omitempty"`
+		NoHeartbeat      bool   `json:"no_heartbeat,omitempty"` // never seen or >N min
+		TrafficReportAge int64  `json:"traffic_report_age_sec,omitempty"`
+		TrafficReporting bool   `json:"traffic_reporting,omitempty"`
+		MeteringCapable  bool   `json:"metering_capable,omitempty"` // exit/hybrid + agent >= 0.4.17
+		MeteringHint     string `json:"metering_hint,omitempty"`
+	}
+	out := make([]nodeOut, 0, len(list))
+	reveal := c.Query("reveal") == "1"
+	panelVer := strings.TrimPrefix(strings.TrimSpace(s.Version), "v")
+	now := time.Now()
+	for _, n := range list {
+		applyOfflineStatus(&n, now)
+		no := nodeOut{Node: n, PanelVersion: panelVer}
+		no.AgentToken = ""
+		no.Node.AgentToken = ""
+		// surface last apply error from meta_json for degraded nodes
+		if n.MetaJSON != "" {
+			var meta map[string]interface{}
+			if json.Unmarshal([]byte(n.MetaJSON), &meta) == nil {
+				if v, ok := meta["apply_error"].(string); ok {
+					no.ApplyError = v
+				}
+				if v, ok := meta["agent_version"].(string); ok {
+					// Normalize: strip leading "v" so UI "v{{ver}}" never becomes "vv0.3.10"
+					no.AgentVersion = strings.TrimPrefix(strings.TrimSpace(v), "v")
+				}
+				if v, ok := meta["upgrade_status"].(string); ok {
+					no.UpgradeStatus = v
+				}
+				if v, ok := meta["upgrade_target"].(string); ok {
+					no.UpgradeTarget = strings.TrimPrefix(strings.TrimSpace(v), "v")
+				}
+				if v, ok := meta["upgrade_error"].(string); ok {
+					no.UpgradeError = v
+				}
+				// agent last applied config version (from heartbeat)
+				switch cv := meta["agent_config_version"].(type) {
+				case float64:
+					no.AgentConfigVer = int64(cv)
+				case string:
+					if n, err := strconv.ParseInt(cv, 10, 64); err == nil {
+						no.AgentConfigVer = n
 					}
-					if v, ok := meta["agent_version"].(string); ok {
-						// Normalize: strip leading "v" so UI "v{{ver}}" never becomes "vv0.3.10"
-						no.AgentVersion = strings.TrimPrefix(strings.TrimSpace(v), "v")
-					}
-					if v, ok := meta["upgrade_status"].(string); ok {
-						no.UpgradeStatus = v
-					}
-					if v, ok := meta["upgrade_target"].(string); ok {
-						no.UpgradeTarget = strings.TrimPrefix(strings.TrimSpace(v), "v")
-					}
-					if v, ok := meta["upgrade_error"].(string); ok {
-						no.UpgradeError = v
-					}
-					// agent last applied config version (from heartbeat)
-					switch cv := meta["agent_config_version"].(type) {
-					case float64:
-						no.AgentConfigVer = int64(cv)
-					case string:
-						if n, err := strconv.ParseInt(cv, 10, 64); err == nil {
-							no.AgentConfigVer = n
-						}
-					case json.Number:
-						if n, err := cv.Int64(); err == nil {
-							no.AgentConfigVer = n
-						}
+				case json.Number:
+					if n, err := cv.Int64(); err == nil {
+						no.AgentConfigVer = n
 					}
 				}
 			}
-			if no.AgentConfigVer > 0 && n.ConfigVersion > no.AgentConfigVer {
-				no.ConfigStale = true
+		}
+		if no.AgentConfigVer > 0 && n.ConfigVersion > no.AgentConfigVer {
+			no.ConfigStale = true
+		}
+		if n.LastSeen != nil {
+			age := int64(now.Sub(*n.LastSeen).Seconds())
+			if age < 0 {
+				age = 0
 			}
-			if n.LastSeen != nil {
-				age := int64(now.Sub(*n.LastSeen).Seconds())
+			no.HeartbeatAgeSec = age
+			// > OfflineAfter without heartbeat → highlight / treat offline
+			if age > int64(OfflineAfter.Seconds()) {
+				no.NoHeartbeat = true
+			}
+		} else {
+			no.NoHeartbeat = true
+			no.HeartbeatAgeSec = -1
+		}
+		// traffic metering trust for exit/hybrid
+		if n.Role == model.RoleExit || n.Role == model.RoleHybrid {
+			s.trafficMu.Lock()
+			if t, ok := s.lastTraffic[n.ID]; ok && !t.IsZero() {
+				age := int64(now.Sub(t).Seconds())
 				if age < 0 {
 					age = 0
 				}
-				no.HeartbeatAgeSec = age
-// > OfflineAfter without heartbeat → highlight / treat offline
-					if age > int64(OfflineAfter.Seconds()) {
-						no.NoHeartbeat = true
-					}
-				} else {
-					no.NoHeartbeat = true
-					no.HeartbeatAgeSec = -1
-				}
-			// traffic metering trust for exit/hybrid
-			if n.Role == model.RoleExit || n.Role == model.RoleHybrid {
-				s.trafficMu.Lock()
-				if t, ok := s.lastTraffic[n.ID]; ok && !t.IsZero() {
-					age := int64(now.Sub(t).Seconds())
-					if age < 0 {
-						age = 0
-					}
-					no.TrafficReportAge = age
-					no.TrafficReporting = age <= 30
-				} else {
-					no.TrafficReportAge = -1
-				}
-				s.trafficMu.Unlock()
-				no.MeteringCapable = agentVersionAtLeast(no.AgentVersion, 0, 4, 17)
-				switch {
-				case no.AgentVersion == "":
-					no.MeteringHint = "无 Agent 版本（未上线）"
-				case !no.MeteringCapable:
-					no.MeteringHint = "需 Agent ≥ v0.4.17 才可靠计量"
-				case !no.TrafficReporting:
-					no.MeteringHint = "计量开启但近期无上报（检查 mita 用户名是否对齐）"
-				default:
-					no.MeteringHint = "计量正常"
-				}
+				no.TrafficReportAge = age
+				no.TrafficReporting = age <= 30
+			} else {
+				no.TrafficReportAge = -1
 			}
-			s.upgradeMu.Lock()
-			if _, ok := s.upgradeJobs[n.ID]; ok {
-				no.UpgradePending = true
-				if no.UpgradeStatus == "" {
-					no.UpgradeStatus = "pending"
-				}
+			s.trafficMu.Unlock()
+			no.MeteringCapable = agentVersionAtLeast(no.AgentVersion, 0, 4, 17)
+			switch {
+			case no.AgentVersion == "":
+				no.MeteringHint = "无 Agent 版本（未上线）"
+			case !no.MeteringCapable:
+				no.MeteringHint = "需 Agent ≥ v0.4.17 才可靠计量"
+			case !no.TrafficReporting:
+				no.MeteringHint = "计量开启但近期无上报（检查 mita 用户名是否对齐）"
+			default:
+				no.MeteringHint = "计量正常"
 			}
-			s.upgradeMu.Unlock()
-			if reveal {
-				if full, err := s.store.GetNode(n.ID); err == nil {
-					no.AgentToken = full.AgentToken
-				}
-			}
-			out = append(out, no)
 		}
-		c.JSON(http.StatusOK, out)
+		s.upgradeMu.Lock()
+		if _, ok := s.upgradeJobs[n.ID]; ok {
+			no.UpgradePending = true
+			if no.UpgradeStatus == "" {
+				no.UpgradeStatus = "pending"
+			}
+		}
+		s.upgradeMu.Unlock()
+		if reveal {
+			if full, err := s.store.GetNode(n.ID); err == nil {
+				no.AgentToken = full.AgentToken
+			}
+		}
+		out = append(out, no)
 	}
+	c.JSON(http.StatusOK, out)
+}
 
 // agentVersionAtLeast compares dotted semver (no leading v).
 func agentVersionAtLeast(ver string, maj, min, patch int) bool {
@@ -1002,19 +1002,19 @@ func (s *Server) upgradeAllNodes(c *gin.Context) {
 }
 
 func (s *Server) rebuildAll(c *gin.Context) {
-		if err := s.rebuildNow("manual"); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "rebuild": s.rebuildStatusSnapshot()})
-			return
-		}
-		s.store.Audit("admin", "rebuild_all", "*", "")
-		// surface backbone (username only) so ops can confirm tunnel identity
-		bbUser, _ := s.store.GetSetting(configgen.SettingBackboneUser)
-		c.JSON(http.StatusOK, gin.H{"ok": true, "backbone_user": bbUser, "rebuild": s.rebuildStatusSnapshot()})
+	if err := s.rebuildNow("manual"); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "rebuild": s.rebuildStatusSnapshot()})
+		return
 	}
+	s.store.Audit("admin", "rebuild_all", "*", "")
+	// surface backbone (username only) so ops can confirm tunnel identity
+	bbUser, _ := s.store.GetSetting(configgen.SettingBackboneUser)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "backbone_user": bbUser, "rebuild": s.rebuildStatusSnapshot()})
+}
 
-	func (s *Server) getRebuildStatus(c *gin.Context) {
-		c.JSON(http.StatusOK, s.rebuildStatusSnapshot())
-	}
+func (s *Server) getRebuildStatus(c *gin.Context) {
+	c.JSON(http.StatusOK, s.rebuildStatusSnapshot())
+}
 
 // diagnose returns a human-readable health snapshot of the multi-hop data plane.
 // Secrets (passwords) are never included — only usernames / hosts / plugin types.
@@ -1034,8 +1034,8 @@ func (s *Server) diagnose(c *gin.Context) {
 
 	type issueItem struct {
 		Text   string `json:"text"`
-		Href   string `json:"href,omitempty"`   // e.g. /nodes?tab=exit
-		Kind   string `json:"kind,omitempty"`   // node|route|user|global
+		Href   string `json:"href,omitempty"` // e.g. /nodes?tab=exit
+		Kind   string `json:"kind,omitempty"` // node|route|user|global
 		NodeID string `json:"node_id,omitempty"`
 	}
 	type nodeDiag struct {
@@ -1091,22 +1091,22 @@ func (s *Server) diagnose(c *gin.Context) {
 	configStaleN := 0
 	trafficSilent := 0
 
-for i := range nodes {
-			applyOfflineStatus(&nodes[i], now)
-			n := nodes[i]
-			d := nodeDiag{
-				ID:            n.ID,
-				Name:          n.Name,
-				Role:          n.Role,
-				Status:        n.Status,
-				PublicIP:      n.PublicIP,
-				PrivateIP:     n.PrivateIP,
-				DialHost:      n.DialHost(),
-				PublicPort:    n.PublicServicePort(),
-				ConfigVersion: n.ConfigVersion,
-				Issues:        []string{},
-				IssueItems:    []issueItem{},
-			}
+	for i := range nodes {
+		applyOfflineStatus(&nodes[i], now)
+		n := nodes[i]
+		d := nodeDiag{
+			ID:            n.ID,
+			Name:          n.Name,
+			Role:          n.Role,
+			Status:        n.Status,
+			PublicIP:      n.PublicIP,
+			PrivateIP:     n.PrivateIP,
+			DialHost:      n.DialHost(),
+			PublicPort:    n.PublicServicePort(),
+			ConfigVersion: n.ConfigVersion,
+			Issues:        []string{},
+			IssueItems:    []issueItem{},
+		}
 		if n.Role == model.RoleExit || n.Role == model.RoleHybrid {
 			d.MitaPort = n.MitaPrimaryPort()
 		}
@@ -1139,62 +1139,62 @@ for i := range nodes {
 			if age < 0 {
 				age = 0
 			}
-d.HeartbeatAgeSec = age
-				if age > int64(OfflineAfter.Seconds()) {
-					d.NoHeartbeat = true
-				}
-			} else {
+			d.HeartbeatAgeSec = age
+			if age > int64(OfflineAfter.Seconds()) {
 				d.NoHeartbeat = true
-				d.HeartbeatAgeSec = -1
 			}
-			if n.Role == model.RoleExit || n.Role == model.RoleHybrid {
-				s.trafficMu.Lock()
-				if t, ok := s.lastTraffic[n.ID]; ok && !t.IsZero() {
-					age := int64(now.Sub(t).Seconds())
-					if age < 0 {
-						age = 0
-					}
-					d.TrafficReportAge = age
-					d.TrafficReporting = age <= 30
-				} else {
-					d.TrafficReportAge = -1
+		} else {
+			d.NoHeartbeat = true
+			d.HeartbeatAgeSec = -1
+		}
+		if n.Role == model.RoleExit || n.Role == model.RoleHybrid {
+			s.trafficMu.Lock()
+			if t, ok := s.lastTraffic[n.ID]; ok && !t.IsZero() {
+				age := int64(now.Sub(t).Seconds())
+				if age < 0 {
+					age = 0
 				}
-				s.trafficMu.Unlock()
-				d.MeteringCapable = agentVersionAtLeast(d.AgentVersion, 0, 4, 17)
-				if !d.TrafficReporting {
-					trafficSilent++
-				}
-				switch {
-				case d.AgentVersion == "":
-					d.MeteringHint = "无 Agent 版本"
-				case !d.MeteringCapable:
-					d.MeteringHint = "需 ≥ v0.4.17"
-				case !d.TrafficReporting:
-					d.MeteringHint = "近期无流量上报"
-				default:
-					d.MeteringHint = "计量正常"
-				}
+				d.TrafficReportAge = age
+				d.TrafficReporting = age <= 30
+			} else {
+				d.TrafficReportAge = -1
 			}
+			s.trafficMu.Unlock()
+			d.MeteringCapable = agentVersionAtLeast(d.AgentVersion, 0, 4, 17)
+			if !d.TrafficReporting {
+				trafficSilent++
+			}
+			switch {
+			case d.AgentVersion == "":
+				d.MeteringHint = "无 Agent 版本"
+			case !d.MeteringCapable:
+				d.MeteringHint = "需 ≥ v0.4.17"
+			case !d.TrafficReporting:
+				d.MeteringHint = "近期无流量上报"
+			default:
+				d.MeteringHint = "计量正常"
+			}
+		}
 
-			addIssue := func(text string) {
-				d.Issues = append(d.Issues, text)
-				href := "/nodes"
-				if n.Role == model.RoleExit || n.Role == model.RoleHybrid {
-					href = "/nodes?tab=exit"
-				} else if n.Role == model.RoleRelay || n.Role == model.RoleEntry {
-					href = "/nodes?tab=front"
-				}
-				d.IssueItems = append(d.IssueItems, issueItem{Text: text, Href: href, Kind: "node", NodeID: n.ID})
+		addIssue := func(text string) {
+			d.Issues = append(d.Issues, text)
+			href := "/nodes"
+			if n.Role == model.RoleExit || n.Role == model.RoleHybrid {
+				href = "/nodes?tab=exit"
+			} else if n.Role == model.RoleRelay || n.Role == model.RoleEntry {
+				href = "/nodes?tab=front"
 			}
-			if n.DialHost() == "" {
-				addIssue("无公网/内网/域名 — 上一跳无法拨入")
-			}
-			if n.Status != model.StatusOnline && n.Status != model.StatusDegraded {
-				addIssue("Agent 离线或从未心跳")
-			}
-			if d.NoHeartbeat {
-				addIssue(fmt.Sprintf("超过 %d 秒无心跳", int(OfflineAfter.Seconds())))
-			}
+			d.IssueItems = append(d.IssueItems, issueItem{Text: text, Href: href, Kind: "node", NodeID: n.ID})
+		}
+		if n.DialHost() == "" {
+			addIssue("无公网/内网/域名 — 上一跳无法拨入")
+		}
+		if n.Status != model.StatusOnline && n.Status != model.StatusDegraded {
+			addIssue("Agent 离线或从未心跳")
+		}
+		if d.NoHeartbeat {
+			addIssue(fmt.Sprintf("超过 %d 秒无心跳", int(OfflineAfter.Seconds())))
+		}
 		if n.Status == model.StatusDegraded {
 			addIssue("Agent 降级（上次 apply 失败，查 journalctl -u mieru-agent）")
 		}
@@ -1336,79 +1336,79 @@ d.HeartbeatAgeSec = age
 	if configStaleN > 0 {
 		addGlobal(fmt.Sprintf("%d 个节点配置未生效（desired > applied）", configStaleN), "/nodes")
 	}
-if trafficSilent > 0 {
-			addGlobal(fmt.Sprintf("%d 个落地近期无流量上报", trafficSilent), "/nodes?tab=exit")
-		}
-
-		// user ops cards: expiring soon / over quota / expired
-		expiringSoon, overQuota, expiredN := 0, 0, 0
-		for _, u := range allUsers {
-			switch u.Status {
-			case model.StatusOverQuota:
-				overQuota++
-			case model.StatusExpired:
-				expiredN++
-			}
-			if u.ExpireAt != nil {
-				days := u.ExpireAt.Sub(now).Hours() / 24
-				if days >= 0 && days <= 3 {
-					expiringSoon++
-				}
-			}
-		}
-		if expiringSoon > 0 {
-			addGlobal(fmt.Sprintf("%d 个用户 3 天内到期", expiringSoon), "/users")
-		}
-		if overQuota > 0 {
-			addGlobal(fmt.Sprintf("%d 个用户已超流量", overQuota), "/users")
-		}
-
-		// panel_url hint
-		if s.store.PanelBaseURL() == "" {
-			addGlobal("未设置对外面板地址 — 查询页/订阅链接可能变成 IP:端口", "/settings")
-		}
-
-		onlineN, offlineN := 0, 0
-		for _, d := range out {
-			if d.Status == model.StatusOnline {
-				onlineN++
-			} else if d.Status == model.StatusOffline || d.NoHeartbeat {
-				offlineN++
-			}
-		}
-
-		dash, _ := s.store.Dashboard()
-		todayTotal := dash.TodayUp + dash.TodayDown
-		c.JSON(http.StatusOK, gin.H{
-			"version":            s.Version,
-			"backbone_user":      bbUser,
-			"backbone_set":       bbUser != "" && bbPass != "",
-			"active_users":       len(users),
-			"enabled_routes":     enabledRoutes,
-			"global_issues":      globalIssues,
-			"global_issue_items": globalItems,
-			"nodes":              out,
-			"tunnel_edges":       edges,
-			"rebuild":            s.rebuildStatusSnapshot(),
-			"stats": gin.H{
-				"agent_behind":   agentBehind,
-				"config_stale":   configStaleN,
-				"traffic_silent": trafficSilent,
-				"panel_version":  panelVer,
-				"expiring_soon":  expiringSoon,
-				"over_quota":     overQuota,
-				"expired_users":  expiredN,
-				"online_nodes":   onlineN,
-				"offline_nodes":  offlineN,
-				"today_up":       dash.TodayUp,
-				"today_down":     dash.TodayDown,
-				"today_total":    todayTotal,
-				"total_users":    dash.TotalUsers,
-				"active_users":   dash.ActiveUsers,
-			},
-			"topology_hint": "手机 ──mierus──► 前置(tcp_forward) ──TCP──► 落地 mita ──► 家宽出口",
-		})
+	if trafficSilent > 0 {
+		addGlobal(fmt.Sprintf("%d 个落地近期无流量上报", trafficSilent), "/nodes?tab=exit")
 	}
+
+	// user ops cards: expiring soon / over quota / expired
+	expiringSoon, overQuota, expiredN := 0, 0, 0
+	for _, u := range allUsers {
+		switch u.Status {
+		case model.StatusOverQuota:
+			overQuota++
+		case model.StatusExpired:
+			expiredN++
+		}
+		if u.ExpireAt != nil {
+			days := u.ExpireAt.Sub(now).Hours() / 24
+			if days >= 0 && days <= 3 {
+				expiringSoon++
+			}
+		}
+	}
+	if expiringSoon > 0 {
+		addGlobal(fmt.Sprintf("%d 个用户 3 天内到期", expiringSoon), "/users")
+	}
+	if overQuota > 0 {
+		addGlobal(fmt.Sprintf("%d 个用户已超流量", overQuota), "/users")
+	}
+
+	// panel_url hint
+	if s.store.PanelBaseURL() == "" {
+		addGlobal("未设置对外面板地址 — 查询页/订阅链接可能变成 IP:端口", "/settings")
+	}
+
+	onlineN, offlineN := 0, 0
+	for _, d := range out {
+		if d.Status == model.StatusOnline {
+			onlineN++
+		} else if d.Status == model.StatusOffline || d.NoHeartbeat {
+			offlineN++
+		}
+	}
+
+	dash, _ := s.store.Dashboard()
+	todayTotal := dash.TodayUp + dash.TodayDown
+	c.JSON(http.StatusOK, gin.H{
+		"version":            s.Version,
+		"backbone_user":      bbUser,
+		"backbone_set":       bbUser != "" && bbPass != "",
+		"active_users":       len(users),
+		"enabled_routes":     enabledRoutes,
+		"global_issues":      globalIssues,
+		"global_issue_items": globalItems,
+		"nodes":              out,
+		"tunnel_edges":       edges,
+		"rebuild":            s.rebuildStatusSnapshot(),
+		"stats": gin.H{
+			"agent_behind":   agentBehind,
+			"config_stale":   configStaleN,
+			"traffic_silent": trafficSilent,
+			"panel_version":  panelVer,
+			"expiring_soon":  expiringSoon,
+			"over_quota":     overQuota,
+			"expired_users":  expiredN,
+			"online_nodes":   onlineN,
+			"offline_nodes":  offlineN,
+			"today_up":       dash.TodayUp,
+			"today_down":     dash.TodayDown,
+			"today_total":    todayTotal,
+			"total_users":    dash.TotalUsers,
+			"active_users":   dash.ActiveUsers,
+		},
+		"topology_hint": "手机 ──mierus──► 前置(tcp_forward) ──TCP──► 落地 mita ──► 家宽出口",
+	})
+}
 
 func (s *Server) nodeDesiredConfig(c *gin.Context) {
 	id := c.Param("id")
@@ -1458,16 +1458,16 @@ func (s *Server) nodeDesiredConfig(c *gin.Context) {
 // routeView enriches a route with allocated front/exit ports for the tunnel list UI.
 type routeView struct {
 	model.Route
-	FrontPort      int    `json:"front_port,omitempty"` // 前置入口端口（手机扫码连这个）
-	ExitPort       int    `json:"exit_port,omitempty"`  // 落地 mita 端口
-	FrontHost      string `json:"front_host,omitempty"`
-	ExitHost       string `json:"exit_host,omitempty"`
-	FrontName      string `json:"front_name,omitempty"`
-	ExitName       string `json:"exit_name,omitempty"`
-	UserCount      int    `json:"user_count,omitempty"`
-	EntryEndpoint  string `json:"entry_endpoint,omitempty"` // host:port for copy
-	PathSummary    string `json:"path_summary,omitempty"`   // 前置 IP:port → 落地 mita
-	LastProbeAt    string `json:"last_probe_at,omitempty"`
+	FrontPort       int    `json:"front_port,omitempty"` // 前置入口端口（手机扫码连这个）
+	ExitPort        int    `json:"exit_port,omitempty"`  // 落地 mita 端口
+	FrontHost       string `json:"front_host,omitempty"`
+	ExitHost        string `json:"exit_host,omitempty"`
+	FrontName       string `json:"front_name,omitempty"`
+	ExitName        string `json:"exit_name,omitempty"`
+	UserCount       int    `json:"user_count,omitempty"`
+	EntryEndpoint   string `json:"entry_endpoint,omitempty"` // host:port for copy
+	PathSummary     string `json:"path_summary,omitempty"`   // 前置 IP:port → 落地 mita
+	LastProbeAt     string `json:"last_probe_at,omitempty"`
 	LastProbeHealth string `json:"last_probe_health,omitempty"`
 }
 
@@ -1520,26 +1520,26 @@ func (s *Server) enrichRoute(r *model.Route) routeView {
 			}
 			continue
 		}
-if n.Role == model.RoleRelay || n.Role == model.RoleEntry {
-				if frontID == "" {
-					frontID = n.ID
-					v.FrontName = n.Name
-					// Client-facing: domain first when set (same as share/query page)
-					v.FrontHost = n.ClientHost()
-					if v.FrontHost == "" {
-						if ip := strings.TrimSpace(n.PublicIP); ip != "" {
-							v.FrontHost = ip
-						} else if hn := strings.TrimSpace(n.Hostname); hn != "" {
-							v.FrontHost = hn
-						} else {
-							v.FrontHost = n.DialHost()
-						}
+		if n.Role == model.RoleRelay || n.Role == model.RoleEntry {
+			if frontID == "" {
+				frontID = n.ID
+				v.FrontName = n.Name
+				// Client-facing: domain first when set (same as share/query page)
+				v.FrontHost = n.ClientHost()
+				if v.FrontHost == "" {
+					if ip := strings.TrimSpace(n.PublicIP); ip != "" {
+						v.FrontHost = ip
+					} else if hn := strings.TrimSpace(n.Hostname); hn != "" {
+						v.FrontHost = hn
+					} else {
+						v.FrontHost = n.DialHost()
 					}
 				}
 			}
 		}
-		// Per-route front listen port (multi-exit pool allocation, same as share/QR).
-		if frontID != "" {
+	}
+	// Per-route front listen port (multi-exit pool allocation, same as share/QR).
+	if frontID != "" {
 		if p := configgen.FrontListenPort(s.store, frontID, r); p > 0 {
 			v.FrontPort = p
 		} else if n, err := s.store.GetNode(frontID); err == nil {
@@ -2066,23 +2066,23 @@ func (s *Server) probeRoute(c *gin.Context) {
 	} else {
 		health = "down"
 	}
-_ = s.store.SetRouteHealth(id, health)
-		r.Health = health
-		checkedAt := time.Now().UTC()
-		s.probeMu.Lock()
-		s.lastProbe[id] = probeSnap{At: checkedAt, Health: health}
-		s.probeMu.Unlock()
+	_ = s.store.SetRouteHealth(id, health)
+	r.Health = health
+	checkedAt := time.Now().UTC()
+	s.probeMu.Lock()
+	s.lastProbe[id] = probeSnap{At: checkedAt, Health: health}
+	s.probeMu.Unlock()
 
-		c.JSON(http.StatusOK, gin.H{
-			"route_id":    id,
-			"health":      health,
-			"hops":        results,
-			"checked_at":  checkedAt.Format(time.RFC3339),
-			"tested_legs": legCount,
-			"skipped":     skipCount,
-			"note":        "关键：前置 Agent → 落地 mita。商家公网入口无 Agent，显示「不可测」属正常，不代表手机连不上。",
-		})
-	}
+	c.JSON(http.StatusOK, gin.H{
+		"route_id":    id,
+		"health":      health,
+		"hops":        results,
+		"checked_at":  checkedAt.Format(time.RFC3339),
+		"tested_legs": legCount,
+		"skipped":     skipCount,
+		"note":        "关键：前置 Agent → 落地 mita。商家公网入口无 Agent，显示「不可测」属正常，不代表手机连不上。",
+	})
+}
 
 func (s *Server) listUsers(c *gin.Context) {
 	_ = s.store.RefreshUserStatuses()
@@ -2207,19 +2207,19 @@ func (s *Server) createUser(c *gin.Context) {
 	s.store.Audit("admin", "create_user", fmt.Sprintf("%d", u.ID), u.Username)
 	base := s.publicBase(c)
 	share := s.userSharePayload(u)
-c.JSON(http.StatusCreated, gin.H{
-			"user":           u,
-			"proxy_password": u.ProxyPassword,
-			"sub_token":      u.SubToken,
-			"subscription":   base + "/sub/" + u.SubToken,
-			"info_url":       base + "/u/" + u.SubToken,
-			"share_url":      share["share_url"],
-			"share_urls":     share["share_urls"],
-			"entries":        share["entries"],
-			"mihomo_yaml":    share["mihomo_yaml"],
-			"mihomo_url":     base + "/sub/" + u.SubToken + "/mihomo.yaml",
-		})
-	}
+	c.JSON(http.StatusCreated, gin.H{
+		"user":           u,
+		"proxy_password": u.ProxyPassword,
+		"sub_token":      u.SubToken,
+		"subscription":   base + "/sub/" + u.SubToken,
+		"info_url":       base + "/u/" + u.SubToken,
+		"share_url":      share["share_url"],
+		"share_urls":     share["share_urls"],
+		"entries":        share["entries"],
+		"mihomo_yaml":    share["mihomo_yaml"],
+		"mihomo_url":     base + "/sub/" + u.SubToken + "/mihomo.yaml",
+	})
+}
 
 func (s *Server) getUser(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -2345,21 +2345,21 @@ func (s *Server) resetUserPassword(c *gin.Context) {
 }
 
 func (s *Server) resetUserSub(c *gin.Context) {
-		id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-		tok, err := s.store.ResetSubToken(id)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		base := s.publicBase(c)
-		s.store.Audit("admin", "reset_sub", fmt.Sprintf("%d", id), "")
-		c.JSON(http.StatusOK, gin.H{
-			"sub_token":    tok,
-			"subscription": base + "/sub/" + tok,
-			"info_url":     base + "/u/" + tok,
-			"mihomo_url":   base + "/sub/" + tok + "/mihomo.yaml",
-		})
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	tok, err := s.store.ResetSubToken(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
 	}
+	base := s.publicBase(c)
+	s.store.Audit("admin", "reset_sub", fmt.Sprintf("%d", id), "")
+	c.JSON(http.StatusOK, gin.H{
+		"sub_token":    tok,
+		"subscription": base + "/sub/" + tok,
+		"info_url":     base + "/u/" + tok,
+		"mihomo_url":   base + "/sub/" + tok + "/mihomo.yaml",
+	})
+}
 
 // renewUser extends expire_at by days, or sets absolute date; re-activates expired/over_quota.
 func (s *Server) renewUser(c *gin.Context) {
@@ -2494,49 +2494,48 @@ func (s *Server) toggleUser(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-_ = s.gen.RebuildAll()
-		u2, _ := s.store.GetUser(id)
-		s.store.Audit("admin", "toggle_user", fmt.Sprintf("%d", id), u2.Status)
-		c.JSON(http.StatusOK, u2)
-	}
+	_ = s.gen.RebuildAll()
+	u2, _ := s.store.GetUser(id)
+	s.store.Audit("admin", "toggle_user", fmt.Sprintf("%d", id), u2.Status)
+	c.JSON(http.StatusOK, u2)
+}
 
-	// setUserDisplayMultiplier scales public query-page used/today/rate only.
-	// Real traffic_used_bytes and admin list stay unscaled.
-	func (s *Server) setUserDisplayMultiplier(c *gin.Context) {
-		id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-		if id <= 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "bad id"})
-			return
-		}
-		if _, err := s.store.GetUser(id); err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
-			return
-		}
-		var req struct {
-			Multiplier float64 `json:"multiplier"`
-		}
-		if err := c.BindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
-			return
-		}
-		mult := req.Multiplier
-		if mult <= 0 {
-			mult = 1
-		}
-		if mult < 0.1 || mult > 100 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "multiplier must be between 0.1 and 100"})
-			return
-		}
-		if err := s.store.SetUserDisplayMultiplier(id, mult); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		u2, _ := s.store.GetUser(id)
-		s.store.Audit("admin", "display_multiplier", fmt.Sprintf("%d", id), fmt.Sprintf("%v", mult))
-		c.JSON(http.StatusOK, u2)
+// setUserDisplayMultiplier scales public query-page used/today/rate only.
+// Real traffic_used_bytes and admin list stay unscaled.
+func (s *Server) setUserDisplayMultiplier(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	if id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad id"})
+		return
 	}
+	if _, err := s.store.GetUser(id); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	var req struct {
+		Multiplier float64 `json:"multiplier"`
+	}
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
+		return
+	}
+	mult := req.Multiplier
+	if mult <= 0 {
+		mult = 1
+	}
+	if mult < 0.1 || mult > 100 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "multiplier must be between 0.1 and 100"})
+		return
+	}
+	if err := s.store.SetUserDisplayMultiplier(id, mult); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	u2, _ := s.store.GetUser(id)
+	s.store.Audit("admin", "display_multiplier", fmt.Sprintf("%d", id), fmt.Sprintf("%v", mult))
+	c.JSON(http.StatusOK, u2)
+}
 
-	
 // setUserSpeedLimit sets per-user max rate (bytes/sec, 0=unlimited). Triggers rebuild.
 func (s *Server) setUserSpeedLimit(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -2892,12 +2891,12 @@ func (s *Server) publicUserInfo(c *gin.Context) {
 		u = u2
 	}
 	// Keep proxy password only for building share/YAML (same capability as /sub/:token).
-// Never return password_hash or a standalone proxy_password field.
-share := s.userSharePayload(u)
-u.PasswordHash = ""
-u.ProxyPassword = ""
+	// Never return password_hash or a standalone proxy_password field.
+	share := s.userSharePayload(u)
+	u.PasswordHash = ""
+	u.ProxyPassword = ""
 
-sample, hasRate := s.store.GetRate(u.ID)
+	sample, hasRate := s.store.GetRate(u.ID)
 	todayUp, todayDown := s.store.TodayTrafficByUser(u.ID)
 
 	// Display multiplier: scale used / today / rate for query page only.
@@ -2936,12 +2935,12 @@ sample, hasRate := s.store.GetRate(u.ID)
 			routeName = r.Name
 		}
 	}
-// Query page: show host only (no :port) — port stays in QR/YAML/share.
-		if eps := s.resolveUserMitaEndpoints(u); len(eps) > 0 {
-			entryDisplay = strings.TrimSpace(eps[0].Host)
-		} else if strings.TrimSpace(u.EntryHost) != "" {
-			entryDisplay = strings.TrimSpace(u.EntryHost)
-		}
+	// Query page: show host only (no :port) — port stays in QR/YAML/share.
+	if eps := s.resolveUserMitaEndpoints(u); len(eps) > 0 {
+		entryDisplay = strings.TrimSpace(eps[0].Host)
+	} else if strings.TrimSpace(u.EntryHost) != "" {
+		entryDisplay = strings.TrimSpace(u.EntryHost)
+	}
 
 	base := s.publicBase(c)
 	var expireStr interface{}
@@ -3040,60 +3039,60 @@ func normalizePanelURL(raw string) string {
 }
 
 func (s *Server) buildInstallCmd(c *gin.Context, n *model.Node) installInfo {
-		base := s.publicBase(c)
-		role := n.Role
-		if role == "" {
-			role = "exit"
+	base := s.publicBase(c)
+	role := n.Role
+	if role == "" {
+		role = "exit"
+	}
+	cmd := fmt.Sprintf(
+		"curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | bash -s -- --panel-url %s --node-id %s --token %s --role %s",
+		base, n.ID, n.AgentToken, role,
+	)
+	// firewall + install one-liner for operator paste
+	fw := ""
+	if n.Role == model.RoleRelay || n.Role == model.RoleEntry {
+		min, max := n.PortMin, n.PortMax
+		if min <= 0 {
+			min = n.ListenPort
 		}
-		cmd := fmt.Sprintf(
-			"curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | bash -s -- --panel-url %s --node-id %s --token %s --role %s",
-			base, n.ID, n.AgentToken, role,
-		)
-		// firewall + install one-liner for operator paste
-		fw := ""
-		if n.Role == model.RoleRelay || n.Role == model.RoleEntry {
-			min, max := n.PortMin, n.PortMax
-			if min <= 0 {
-				min = n.ListenPort
-			}
-			if max <= 0 {
-				max = min
-			}
-			if min > 0 {
-				if max > min {
-					fw = fmt.Sprintf(
-						"# 防火墙放行前置端口池 %d-%d（按实际防火墙二选一）\n"+
-							"ufw allow %d:%d/tcp || true\n"+
-							"# firewall-cmd --permanent --add-port=%d-%d/tcp && firewall-cmd --reload\n",
-						min, max, min, max, min, max,
-					)
-				} else {
-					fw = fmt.Sprintf(
-						"# 防火墙放行端口 %d\nufw allow %d/tcp || true\n",
-						min, min,
-					)
-				}
-			}
-		} else if n.Role == model.RoleExit || n.Role == model.RoleHybrid {
-			p := n.MitaPrimaryPort()
-			if p > 0 {
+		if max <= 0 {
+			max = min
+		}
+		if min > 0 {
+			if max > min {
 				fw = fmt.Sprintf(
-					"# 防火墙放行落地 mita 端口 %d（若前置经公网连落地才需要；同机房内网可跳过）\n"+
-						"ufw allow %d/tcp || true\n",
-					p, p,
+					"# 防火墙放行前置端口池 %d-%d（按实际防火墙二选一）\n"+
+						"ufw allow %d:%d/tcp || true\n"+
+						"# firewall-cmd --permanent --add-port=%d-%d/tcp && firewall-cmd --reload\n",
+					min, max, min, max, min, max,
+				)
+			} else {
+				fw = fmt.Sprintf(
+					"# 防火墙放行端口 %d\nufw allow %d/tcp || true\n",
+					min, min,
 				)
 			}
 		}
-		full := cmd
-		if fw != "" {
-			full = fw + "\n# 安装 Agent\n" + cmd
+	} else if n.Role == model.RoleExit || n.Role == model.RoleHybrid {
+		p := n.MitaPrimaryPort()
+		if p > 0 {
+			fw = fmt.Sprintf(
+				"# 防火墙放行落地 mita 端口 %d（若前置经公网连落地才需要；同机房内网可跳过）\n"+
+					"ufw allow %d/tcp || true\n",
+				p, p,
+			)
 		}
-		hint := "在对应 Linux 节点上执行。含防火墙放行说明 + 安装命令。请先在「设置」填写面板地址。"
-		if s.store.PanelBaseURL() == "" {
-			hint = "尚未配置面板地址，当前用浏览器访问地址生成命令。生产环境请到「设置」填写固定面板地址。"
-		}
-		return installInfo{PanelURL: base, Cmd: full, Hint: hint}
 	}
+	full := cmd
+	if fw != "" {
+		full = fw + "\n# 安装 Agent\n" + cmd
+	}
+	hint := "在对应 Linux 节点上执行。含防火墙放行说明 + 安装命令。请先在「设置」填写面板地址。"
+	if s.store.PanelBaseURL() == "" {
+		hint = "尚未配置面板地址，当前用浏览器访问地址生成命令。生产环境请到「设置」填写固定面板地址。"
+	}
+	return installInfo{PanelURL: base, Cmd: full, Hint: hint}
+}
 
 // publicBrand returns panel display name for unauthenticated pages (login, title, favicon).
 func (s *Server) publicBrand(c *gin.Context) {
@@ -3117,217 +3116,216 @@ func (s *Server) publicBrand(c *gin.Context) {
 }
 
 func (s *Server) getSettings(c *gin.Context) {
-		m, err := s.store.GetSettings(
-			"panel_url", "panel_name", "panel_subtitle", "panel_favicon",
-			configgen.SettingBackboneUser,
-			"cf_api_token", "cf_zone_id", "cf_proxied_default",
-		)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		panelURL := m["panel_url"]
-		if panelURL == "" {
-			panelURL = s.publicBase(c)
-		}
-		name := m["panel_name"]
-		if name == "" {
-			name = "Mieru"
-		}
-		sub := strings.TrimSpace(m["panel_subtitle"])
-		jwtDefault := s.cfg.JWTSecret == "change-me-in-production-please" || s.cfg.JWTSecret == "change-me-in-production"
-		corsWide := len(s.cfg.CORSOrigins) == 1 && s.cfg.CORSOrigins[0] == "*"
-		cfTok := strings.TrimSpace(m["cf_api_token"])
-		cfZone := strings.TrimSpace(m["cf_zone_id"])
-		c.JSON(http.StatusOK, gin.H{
-			"panel_url":       panelURL,
-			"panel_name":      name,
-			"panel_subtitle":  sub,
-			"panel_favicon":   strings.TrimSpace(m["panel_favicon"]),
-			"panel_url_set":   m["panel_url"] != "",
-			"version":         s.Version,
-			"admin_user":      s.cfg.AdminUser,
-			"backbone_user":   m[configgen.SettingBackboneUser],
-			"backbone_ready":  m[configgen.SettingBackboneUser] != "",
-			"jwt_is_default":  jwtDefault,
-			"cors_wide_open":  corsWide,
-			"cors_origins":    s.cfg.CORSOrigins,
-			"cf_configured":   cfTok != "" && cfZone != "",
-			"cf_zone_id":      cfZone,
-			"cf_token_set":    cfTok != "",
-			"cf_proxied_default": m["cf_proxied_default"] == "1" || strings.EqualFold(m["cf_proxied_default"], "true"),
-			"security_hints": func() []string {
-				hints := []string{}
-				if jwtDefault {
-					hints = append(hints, "PANEL_JWT_SECRET 仍为默认值，请在 /etc/mieru-panel.env 设置强随机密钥后重启面板")
-				}
-				if corsWide {
-					hints = append(hints, "PANEL_CORS=*（宽松跨域）。同域部署可忽略；若仅本机访问可设为具体 Origin")
-				}
-				return hints
-			}(),
-		})
+	m, err := s.store.GetSettings(
+		"panel_url", "panel_name", "panel_subtitle", "panel_favicon",
+		configgen.SettingBackboneUser,
+		"cf_api_token", "cf_zone_id", "cf_proxied_default",
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
 	}
+	panelURL := m["panel_url"]
+	if panelURL == "" {
+		panelURL = s.publicBase(c)
+	}
+	name := m["panel_name"]
+	if name == "" {
+		name = "Mieru"
+	}
+	sub := strings.TrimSpace(m["panel_subtitle"])
+	jwtDefault := s.cfg.JWTSecret == "change-me-in-production-please" || s.cfg.JWTSecret == "change-me-in-production"
+	corsWide := len(s.cfg.CORSOrigins) == 1 && s.cfg.CORSOrigins[0] == "*"
+	cfTok := strings.TrimSpace(m["cf_api_token"])
+	cfZone := strings.TrimSpace(m["cf_zone_id"])
+	c.JSON(http.StatusOK, gin.H{
+		"panel_url":          panelURL,
+		"panel_name":         name,
+		"panel_subtitle":     sub,
+		"panel_favicon":      strings.TrimSpace(m["panel_favicon"]),
+		"panel_url_set":      m["panel_url"] != "",
+		"version":            s.Version,
+		"admin_user":         s.cfg.AdminUser,
+		"backbone_user":      m[configgen.SettingBackboneUser],
+		"backbone_ready":     m[configgen.SettingBackboneUser] != "",
+		"jwt_is_default":     jwtDefault,
+		"cors_wide_open":     corsWide,
+		"cors_origins":       s.cfg.CORSOrigins,
+		"cf_configured":      cfTok != "" && cfZone != "",
+		"cf_zone_id":         cfZone,
+		"cf_token_set":       cfTok != "",
+		"cf_proxied_default": m["cf_proxied_default"] == "1" || strings.EqualFold(m["cf_proxied_default"], "true"),
+		"security_hints": func() []string {
+			hints := []string{}
+			if jwtDefault {
+				hints = append(hints, "PANEL_JWT_SECRET 仍为默认值，请在 /etc/mieru-panel.env 设置强随机密钥后重启面板")
+			}
+			if corsWide {
+				hints = append(hints, "PANEL_CORS=*（宽松跨域）。同域部署可忽略；若仅本机访问可设为具体 Origin")
+			}
+			return hints
+		}(),
+	})
+}
 
 func (s *Server) putSettings(c *gin.Context) {
-		var req struct {
-			PanelURL      string `json:"panel_url"`
-			PanelName     string `json:"panel_name"`
-			PanelSubtitle string `json:"panel_subtitle"`
-			PanelFavicon  string `json:"panel_favicon"` // data URL or empty to clear
-			// Cloudflare (optional). Empty cf_api_token keeps existing; "clear" removes.
-			CFAPIToken       *string `json:"cf_api_token"`
-			CFZoneID         *string `json:"cf_zone_id"`
-			CFProxiedDefault *bool   `json:"cf_proxied_default"`
-		}
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
+	var req struct {
+		PanelURL      string `json:"panel_url"`
+		PanelName     string `json:"panel_name"`
+		PanelSubtitle string `json:"panel_subtitle"`
+		PanelFavicon  string `json:"panel_favicon"` // data URL or empty to clear
+		// Cloudflare (optional). Empty cf_api_token keeps existing; "clear" removes.
+		CFAPIToken       *string `json:"cf_api_token"`
+		CFZoneID         *string `json:"cf_zone_id"`
+		CFProxiedDefault *bool   `json:"cf_proxied_default"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
+		return
+	}
+	url := normalizePanelURL(req.PanelURL)
+	if url == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "panel_url required (e.g. http://IP:8080 or https://panel.example.com)"})
+		return
+	}
+	if err := s.store.SetSetting("panel_url", url); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	name := strings.TrimSpace(req.PanelName)
+	// Collapse internal whitespace runs for display consistency.
+	name = strings.Join(strings.Fields(name), " ")
+	if name == "" {
+		name = "Mieru"
+	}
+	// Avoid absurdly long sidebar titles (UTF-8 runes).
+	if rn := []rune(name); len(rn) > 32 {
+		name = string(rn[:32])
+	}
+	if err := s.store.SetSetting("panel_name", name); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	sub := strings.Join(strings.Fields(strings.TrimSpace(req.PanelSubtitle)), " ")
+	if rn := []rune(sub); len(rn) > 80 {
+		sub = string(rn[:80])
+	}
+	if err := s.store.SetSetting("panel_subtitle", sub); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	// favicon: allow empty (clear) or data:image/...; base64,... max ~200KB raw in settings
+	fav := strings.TrimSpace(req.PanelFavicon)
+	if fav != "" {
+		if !strings.HasPrefix(fav, "data:image/") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "favicon 须为 data:image/... 格式"})
 			return
 		}
-		url := normalizePanelURL(req.PanelURL)
-		if url == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "panel_url required (e.g. http://IP:8080 or https://panel.example.com)"})
+		if len(fav) > 280000 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "图标过大（请用 ≤100KB 的 PNG/SVG）"})
 			return
 		}
-		if err := s.store.SetSetting("panel_url", url); err != nil {
+	}
+	if err := s.store.SetSetting("panel_favicon", fav); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if req.CFZoneID != nil {
+		if err := s.store.SetSetting("cf_zone_id", strings.TrimSpace(*req.CFZoneID)); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		name := strings.TrimSpace(req.PanelName)
-		// Collapse internal whitespace runs for display consistency.
-		name = strings.Join(strings.Fields(name), " ")
-		if name == "" {
-			name = "Mieru"
-		}
-		// Avoid absurdly long sidebar titles (UTF-8 runes).
-		if rn := []rune(name); len(rn) > 32 {
-			name = string(rn[:32])
-		}
-		if err := s.store.SetSetting("panel_name", name); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		sub := strings.Join(strings.Fields(strings.TrimSpace(req.PanelSubtitle)), " ")
-		if rn := []rune(sub); len(rn) > 80 {
-			sub = string(rn[:80])
-		}
-		if err := s.store.SetSetting("panel_subtitle", sub); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		// favicon: allow empty (clear) or data:image/...; base64,... max ~200KB raw in settings
-		fav := strings.TrimSpace(req.PanelFavicon)
-		if fav != "" {
-			if !strings.HasPrefix(fav, "data:image/") {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "favicon 须为 data:image/... 格式"})
-				return
-			}
-			if len(fav) > 280000 {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "图标过大（请用 ≤100KB 的 PNG/SVG）"})
-				return
-			}
-		}
-		if err := s.store.SetSetting("panel_favicon", fav); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		if req.CFZoneID != nil {
-			if err := s.store.SetSetting("cf_zone_id", strings.TrimSpace(*req.CFZoneID)); err != nil {
+	}
+	if req.CFAPIToken != nil {
+		tok := strings.TrimSpace(*req.CFAPIToken)
+		if tok == "" || strings.EqualFold(tok, "clear") {
+			_ = s.store.SetSetting("cf_api_token", "")
+		} else if tok != "********" && !strings.HasPrefix(tok, "••••") {
+			if err := s.store.SetSetting("cf_api_token", tok); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
 		}
-		if req.CFAPIToken != nil {
-			tok := strings.TrimSpace(*req.CFAPIToken)
-			if tok == "" || strings.EqualFold(tok, "clear") {
-				_ = s.store.SetSetting("cf_api_token", "")
-			} else if tok != "********" && !strings.HasPrefix(tok, "••••") {
-				if err := s.store.SetSetting("cf_api_token", tok); err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-					return
-				}
-			}
-		}
-		if req.CFProxiedDefault != nil {
-			v := "0"
-			if *req.CFProxiedDefault {
-				v = "1"
-			}
-			_ = s.store.SetSetting("cf_proxied_default", v)
-		}
-		s.store.Audit("admin", "update_settings", "panel", url)
-		cfTok, _ := s.store.GetSetting("cf_api_token")
-		cfZone, _ := s.store.GetSetting("cf_zone_id")
-		c.JSON(http.StatusOK, gin.H{
-			"ok":             true,
-			"panel_url":      url,
-			"panel_name":     name,
-			"panel_subtitle": sub,
-			"panel_favicon":  fav,
-			"cf_configured":  strings.TrimSpace(cfTok) != "" && strings.TrimSpace(cfZone) != "",
-			"cf_zone_id":     strings.TrimSpace(cfZone),
-			"cf_token_set":   strings.TrimSpace(cfTok) != "",
-		})
 	}
-
-	func (s *Server) cfClient() (*cloudflare.Client, error) {
-		tok, _ := s.store.GetSetting("cf_api_token")
-		zone, _ := s.store.GetSetting("cf_zone_id")
-		if strings.TrimSpace(tok) == "" || strings.TrimSpace(zone) == "" {
-			return nil, fmt.Errorf("请先在设置页填写 Cloudflare API Token 与 Zone ID")
+	if req.CFProxiedDefault != nil {
+		v := "0"
+		if *req.CFProxiedDefault {
+			v = "1"
 		}
-		return cloudflare.New(tok, zone), nil
+		_ = s.store.SetSetting("cf_proxied_default", v)
 	}
+	s.store.Audit("admin", "update_settings", "panel", url)
+	cfTok, _ := s.store.GetSetting("cf_api_token")
+	cfZone, _ := s.store.GetSetting("cf_zone_id")
+	c.JSON(http.StatusOK, gin.H{
+		"ok":             true,
+		"panel_url":      url,
+		"panel_name":     name,
+		"panel_subtitle": sub,
+		"panel_favicon":  fav,
+		"cf_configured":  strings.TrimSpace(cfTok) != "" && strings.TrimSpace(cfZone) != "",
+		"cf_zone_id":     strings.TrimSpace(cfZone),
+		"cf_token_set":   strings.TrimSpace(cfTok) != "",
+	})
+}
 
-	// cloudflareUpsertDNS creates/updates A/AAAA for a node domain → IP.
-	// Body: { name, ip, proxied? }. Proxied defaults to false (DNS only) for custom ports.
-	func (s *Server) cloudflareUpsertDNS(c *gin.Context) {
-		var req struct {
-			Name    string `json:"name"`
-			IP      string `json:"ip"`
-			Proxied *bool  `json:"proxied"`
-		}
-		if err := c.BindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
-			return
-		}
-		cli, err := s.cfClient()
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		proxied := false
-		if req.Proxied != nil {
-			proxied = *req.Proxied
-		} else {
-			v, _ := s.store.GetSetting("cf_proxied_default")
-			proxied = v == "1" || strings.EqualFold(v, "true")
-		}
-		// Custom non-HTTP ports cannot go through orange-cloud proxy.
-		if proxied {
-			// still allow if user insists, but warn in response
-		}
-		rec, err := cli.UpsertA(req.Name, req.IP, proxied)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		s.store.Audit("admin", "cf_dns_upsert", req.Name, fmt.Sprintf("%s → %s proxied=%v", rec.Type, req.IP, proxied))
-		note := ""
-		if proxied {
-			note = "已开启 CF 代理（橙云）。自定义非 80/443 端口可能不可用，入口建议关闭代理（仅 DNS）。"
-		}
-		c.JSON(http.StatusOK, gin.H{
-			"ok":      true,
-			"record":  rec,
-			"name":    rec.Name,
-			"type":    rec.Type,
-			"content": rec.Content,
-			"proxied": rec.Proxied,
-			"note":    note,
-		})
+func (s *Server) cfClient() (*cloudflare.Client, error) {
+	tok, _ := s.store.GetSetting("cf_api_token")
+	zone, _ := s.store.GetSetting("cf_zone_id")
+	if strings.TrimSpace(tok) == "" || strings.TrimSpace(zone) == "" {
+		return nil, fmt.Errorf("请先在设置页填写 Cloudflare API Token 与 Zone ID")
 	}
+	return cloudflare.New(tok, zone), nil
+}
 
+// cloudflareUpsertDNS creates/updates A/AAAA for a node domain → IP.
+// Body: { name, ip, proxied? }. Proxied defaults to false (DNS only) for custom ports.
+func (s *Server) cloudflareUpsertDNS(c *gin.Context) {
+	var req struct {
+		Name    string `json:"name"`
+		IP      string `json:"ip"`
+		Proxied *bool  `json:"proxied"`
+	}
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
+		return
+	}
+	cli, err := s.cfClient()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	proxied := false
+	if req.Proxied != nil {
+		proxied = *req.Proxied
+	} else {
+		v, _ := s.store.GetSetting("cf_proxied_default")
+		proxied = v == "1" || strings.EqualFold(v, "true")
+	}
+	// Custom non-HTTP ports cannot go through orange-cloud proxy.
+	if proxied {
+		// still allow if user insists, but warn in response
+	}
+	rec, err := cli.UpsertA(req.Name, req.IP, proxied)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	s.store.Audit("admin", "cf_dns_upsert", req.Name, fmt.Sprintf("%s → %s proxied=%v", rec.Type, req.IP, proxied))
+	note := ""
+	if proxied {
+		note = "已开启 CF 代理（橙云）。自定义非 80/443 端口可能不可用，入口建议关闭代理（仅 DNS）。"
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"ok":      true,
+		"record":  rec,
+		"name":    rec.Name,
+		"type":    rec.Type,
+		"content": rec.Content,
+		"proxied": rec.Proxied,
+		"note":    note,
+	})
+}
 
 // cloudflareLookupDNS finds A/AAAA names in the configured zone that point to ?ip=
 // so operators can fill 接入域名 from existing CF records.
@@ -3366,23 +3364,23 @@ func (s *Server) cloudflareLookupDNS(c *gin.Context) {
 	})
 }
 
-	func (s *Server) cloudflareTest(c *gin.Context) {
-		cli, err := s.cfClient()
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		if err := cli.VerifyToken(); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Token 无效: " + err.Error()})
-			return
-		}
-		zn, err := cli.ZoneName()
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Zone 无效: " + err.Error()})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"ok": true, "zone_name": zn})
+func (s *Server) cloudflareTest(c *gin.Context) {
+	cli, err := s.cfClient()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
+	if err := cli.VerifyToken(); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Token 无效: " + err.Error()})
+		return
+	}
+	zn, err := cli.ZoneName()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Zone 无效: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "zone_name": zn})
+}
 
 func (s *Server) changeAdminPassword(c *gin.Context) {
 	var req struct {
@@ -3904,20 +3902,20 @@ func (s *Server) agentHeartbeat(c *gin.Context) {
 	if req.Message == "degraded" || strings.TrimSpace(req.ApplyError) != "" {
 		status = model.StatusDegraded
 	}
-metaPatch := map[string]string{
-			"agent_version":         strings.TrimSpace(req.AgentVersion),
-			"agent_config_version":  strconv.FormatInt(req.ConfigVersion, 10),
-		}
-		if status == model.StatusDegraded {
-			if ae := strings.TrimSpace(req.ApplyError); ae != "" {
-				metaPatch["apply_error"] = ae
-			} else {
-				metaPatch["apply_error"] = "degraded (no detail — upgrade agent)"
-			}
+	metaPatch := map[string]string{
+		"agent_version":        strings.TrimSpace(req.AgentVersion),
+		"agent_config_version": strconv.FormatInt(req.ConfigVersion, 10),
+	}
+	if status == model.StatusDegraded {
+		if ae := strings.TrimSpace(req.ApplyError); ae != "" {
+			metaPatch["apply_error"] = ae
 		} else {
-			metaPatch["apply_error"] = "" // clear previous error
+			metaPatch["apply_error"] = "degraded (no detail — upgrade agent)"
 		}
-		_ = s.store.HeartbeatEx(req.NodeID, req.PublicIP, req.Hostname, status, metaPatch)
+	} else {
+		metaPatch["apply_error"] = "" // clear previous error
+	}
+	_ = s.store.HeartbeatEx(req.NodeID, req.PublicIP, req.Hostname, status, metaPatch)
 	n, _ := s.store.GetNode(req.NodeID)
 	needPull := n != nil && n.ConfigVersion > req.ConfigVersion
 	// Drain pending dial jobs for this agent (hop-to-hop probe).
@@ -4185,7 +4183,6 @@ func (s *Server) agentTraffic(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true, "applied": applied, "skipped": skipped, "up": sumUp, "down": sumDown})
 }
 
-
 // ---------- Announcements ----------
 
 func (s *Server) publicAnnouncements(c *gin.Context) {
@@ -4371,4 +4368,3 @@ func (s *Server) setAnnouncementPopup(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, cur)
 }
-

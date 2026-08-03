@@ -18,13 +18,13 @@ type PanelConfig struct {
 }
 
 type AgentConfig struct {
-	PanelURL      string
-	NodeID        string
-	Token         string
-	DataDir       string
+	PanelURL       string
+	NodeID         string
+	Token          string
+	DataDir        string
 	HeartbeatEvery time.Duration
-	PullEvery     time.Duration
-	Role          string
+	PullEvery      time.Duration
+	Role           string
 }
 
 func getenv(k, def string) string {

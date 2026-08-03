@@ -15,8 +15,8 @@ import (
 	"github.com/cheesydui-cloud/mieru/internal/store"
 )
 
-// set by -ldflags "-X main.Version=v0.4.40"
-var Version = "v0.4.40"
+// set by -ldflags "-X main.Version=v0.5.6"
+var Version = "v0.5.6"
 
 func main() {
 	resetAdmin := flag.Bool("reset-admin", false, "reset admin password from PANEL_ADMIN_* env and exit")
@@ -29,15 +29,15 @@ func main() {
 	}
 
 	cfg := config.LoadPanel()
-		if !filepath.IsAbs(cfg.DBPath) {
-			log.Printf("WARNING: PANEL_DB is relative (%s) — depends on WorkingDirectory; prefer absolute path", cfg.DBPath)
-		}
-		if cfg.JWTSecret == "change-me-in-production-please" || cfg.JWTSecret == "change-me-in-production" {
-			log.Printf("WARNING: PANEL_JWT_SECRET is default — set a strong secret in /etc/mieru-panel.env")
-		}
-		if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
-			log.Fatal(err)
-		}
+	if !filepath.IsAbs(cfg.DBPath) {
+		log.Printf("WARNING: PANEL_DB is relative (%s) — depends on WorkingDirectory; prefer absolute path", cfg.DBPath)
+	}
+	if cfg.JWTSecret == "change-me-in-production-please" || cfg.JWTSecret == "change-me-in-production" {
+		log.Printf("WARNING: PANEL_JWT_SECRET is default — set a strong secret in /etc/mieru-panel.env")
+	}
+	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
+		log.Fatal(err)
+	}
 
 	st, err := store.Open(cfg.DBPath)
 	if err != nil {

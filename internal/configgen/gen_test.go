@@ -24,12 +24,12 @@ func TestRebuildHybridHasLocalMieru(t *testing.T) {
 	st := openTestStore(t)
 	// seed admin not needed for rebuild
 	n := &model.Node{
-		Name:     "cm7",
-		Role:     model.RoleHybrid,
-		PublicIP: "1.2.3.4",
+		Name:      "cm7",
+		Role:      model.RoleHybrid,
+		PublicIP:  "1.2.3.4",
 		PrivateIP: "10.0.0.7",
-		PortMin:  1080,
-		PortMax:  1080,
+		PortMin:   1080,
+		PortMax:   1080,
 	}
 	if err := st.CreateNode(n); err != nil {
 		t.Fatal(err)

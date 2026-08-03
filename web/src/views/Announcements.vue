@@ -256,14 +256,15 @@ onMounted(load)
       <div class="modal-bd">
         <div class="field">
           <label>标题</label>
-          <input v-model="form.title" maxlength="80" placeholder="例如：线路维护通知" />
+          <input v-model="form.title" maxlength="120" placeholder="例如：线路维护通知" />
         </div>
         <div class="field">
           <label>内容</label>
           <textarea
             v-model="form.body"
             rows="8"
-            placeholder="支持多行纯文本。用户查询页会展示全文。"
+            maxlength="4000"
+            placeholder="支持多行纯文本。用户查询页会展示全文（最多 4000 字）。"
             style="resize: vertical; min-height: 140px"
           />
         </div>

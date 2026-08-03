@@ -296,15 +296,15 @@ type User struct {
 	RouteID           *int64     `json:"route_id,omitempty"`
 	// EntryHost/EntryPort: optional client-facing public entry override (IP or domain).
 	// Empty host = resolve from first hop of bound route (or first entry/relay node).
-EntryHost string    `json:"entry_host,omitempty"`
-		EntryPort int       `json:"entry_port,omitempty"`
-		Note      string    `json:"note"`
-		// DisplayMultiplier only affects public user-info page numbers (used/today/rate).
-		// Real metering & admin list stay unscaled. Default 1.
-		DisplayMultiplier float64   `json:"display_multiplier,omitempty"`
-		CreatedAt         time.Time `json:"created_at"`
-		UpdatedAt         time.Time `json:"updated_at"`
-	}
+	EntryHost string `json:"entry_host,omitempty"`
+	EntryPort int    `json:"entry_port,omitempty"`
+	Note      string `json:"note"`
+	// DisplayMultiplier only affects public user-info page numbers (used/today/rate).
+	// Real metering & admin list stay unscaled. Default 1.
+	DisplayMultiplier float64   `json:"display_multiplier,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+}
 
 type TrafficHourly struct {
 	ID         int64     `json:"id"`
@@ -408,10 +408,10 @@ type DashboardStats struct {
 
 // Announcement is a panel notice shown on the public user query page.
 type Announcement struct {
-	ID        int64     `json:"id"`
-	Title     string    `json:"title"`
-	Body      string    `json:"body"`
-	Enabled   bool      `json:"enabled"`
+	ID      int64  `json:"id"`
+	Title   string `json:"title"`
+	Body    string `json:"body"`
+	Enabled bool   `json:"enabled"`
 	// Popup: at most one enabled announcement should be popup; admin chooses which.
 	Popup     bool      `json:"popup"`
 	CreatedAt time.Time `json:"created_at"`

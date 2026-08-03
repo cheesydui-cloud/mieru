@@ -144,7 +144,6 @@ func (c *Client) putRecord(id string, rec DNSRecord) (*DNSRecord, error) {
 	return &out.Result, nil
 }
 
-
 // FindHostsByIP lists A/AAAA record hostnames in the zone that point to ip.
 // Used to fill the node "接入域名" from existing Cloudflare DNS.
 func (c *Client) FindHostsByIP(ip string) ([]DNSRecord, error) {

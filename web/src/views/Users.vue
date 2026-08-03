@@ -1340,8 +1340,8 @@ onUnmounted(() => {
       </div>
       <div class="modal-bd">
         <p class="muted" style="margin: 0 0 12px; font-size: 12.5px; line-height: 1.5">
-          设置该用户最大网速（Mbps）。填 <strong>0</strong> 表示不限速。
-          保存后会重建落地配置并下发。
+          设置该用户限速标记（Mbps）。填 <strong>0</strong> 表示不限速。
+          会写入用户资料并随配置下发；<strong>当前数据面不会强制限速</strong>（mita 无原生带宽字段）。
         </p>
         <div class="pkg-row">
           <button class="btn btn-ghost btn-sm" type="button" @click="speedMbps = 0">不限</button>

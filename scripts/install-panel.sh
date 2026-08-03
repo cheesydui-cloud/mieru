@@ -6,7 +6,7 @@
 set -euo pipefail
 
 REPO="${MIERU_REPO:-cheesydui-cloud/mieru}"
-# 默认拉 GitHub latest；可 MIERU_VERSION=v0.4.40 钉死
+# 默认拉 GitHub latest；可 MIERU_VERSION=v0.5.6 钉死
 VERSION="${MIERU_VERSION:-}"
 PREFIX="${MIERU_PREFIX:-/usr/local}"
 INSTALL_DIR="${MIERU_INSTALL_DIR:-/opt/mieru-panel}"
@@ -39,7 +39,7 @@ if [[ -z "$VERSION" || "$VERSION" == "latest" ]]; then
       "https://ghfast.top/https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
       | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1) || true
   fi
-  VERSION="${tag:-v0.4.40}"
+  VERSION="${tag:-v0.5.6}"
 fi
 echo "==> 目标版本 ${VERSION}"
 

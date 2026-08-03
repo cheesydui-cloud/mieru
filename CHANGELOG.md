@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.5.6] - 2026-08-02
+
+### 扫尾定版（公告 + 限速字段 + 稳定性）
+
+- **公告**（管理端 CRUD / 查询页弹窗 60s / 列表按钮）保留并加固：标题≤120 字、内容≤4000 字
+- **用户限速**：面板可设置 Mbps、列表徽章、配置下发 `speed_limit_bps`；**数据面不强制限速**（mita 无原生带宽字段，避免 tc/nft 稳定性风险）
+- 修复旧库升级缺列：`ALTER TABLE users ADD COLUMN speed_limit_bps`
+- 去掉用户页工具栏冗余「开户」
+- gofmt 整理 store/api 等核心文件
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | bash
+```
+
+然后面板点「重建配置」。
+
 ## [0.4.40] - 2026-08-02
 
 ### 用户限速 + 去掉冗余开户按钮

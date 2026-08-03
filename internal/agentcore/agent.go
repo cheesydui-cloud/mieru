@@ -95,16 +95,16 @@ func New(cfg config.AgentConfig) *Agent {
 	reg.Register(&socksin.Plugin{DataDir: filepath.Join(data, "socks")})
 	reg.Register(&tcpforward.Plugin{DataDir: filepath.Join(data, "tcpforward")})
 
-return &Agent{
-			cfg:            cfg,
-			client:         &http.Client{Timeout: 15 * time.Second},
-			registry:       reg,
-			counters:       map[int64]*userCounter{},
-			userByName:     map[string]int64{},
-			applyMu:        make(chan struct{}, 1),
-			forceApplyOnce: true,
-		}
+	return &Agent{
+		cfg:            cfg,
+		client:         &http.Client{Timeout: 15 * time.Second},
+		registry:       reg,
+		counters:       map[int64]*userCounter{},
+		userByName:     map[string]int64{},
+		applyMu:        make(chan struct{}, 1),
+		forceApplyOnce: true,
 	}
+}
 
 func (a *Agent) Run(ctx context.Context) error {
 	if a.cfg.NodeID == "" || a.cfg.Token == "" {
@@ -347,36 +347,36 @@ func (a *Agent) pullAndApply(ctx context.Context) error {
 	if r := strings.TrimSpace(cfg.Role); r != "" {
 		a.cfg.Role = r
 	}
-a.stateMu.Lock()
-		cur := a.version
-		needRetry := a.lastApplyMsg != ""
-		force := a.forceApplyOnce
-		a.stateMu.Unlock()
-		if cfg.Version > 0 && cfg.Version == cur && !needRetry && !force {
-			return nil
-		}
-		if force {
-			log.Printf("force apply after start/upgrade (panel version=%d local=%d)", cfg.Version, cur)
-		}
-
-		if err := a.apply(ctx, &cfg); err != nil {
-			a.stateMu.Lock()
-			a.lastApplyMsg = err.Error()
-			a.stateMu.Unlock()
-			// Do NOT advance version on failure/partial required-plugin failure —
-			// next pull/heartbeat will retry the same config version.
-			// Keep forceApplyOnce so subsequent pulls retry full apply.
-			return err
-		}
-		a.stateMu.Lock()
-		a.lastApplyMsg = ""
-		a.version = cfg.Version
-		a.forceApplyOnce = false
-		a.stateMu.Unlock()
-		_ = os.WriteFile(filepath.Join(a.cfg.DataDir, "version"), []byte(fmt.Sprintf("%d", cfg.Version)), 0o644)
-		log.Printf("applied config version=%d plugins=%d users=%d", cfg.Version, len(cfg.Plugins), len(cfg.Users))
+	a.stateMu.Lock()
+	cur := a.version
+	needRetry := a.lastApplyMsg != ""
+	force := a.forceApplyOnce
+	a.stateMu.Unlock()
+	if cfg.Version > 0 && cfg.Version == cur && !needRetry && !force {
 		return nil
 	}
+	if force {
+		log.Printf("force apply after start/upgrade (panel version=%d local=%d)", cfg.Version, cur)
+	}
+
+	if err := a.apply(ctx, &cfg); err != nil {
+		a.stateMu.Lock()
+		a.lastApplyMsg = err.Error()
+		a.stateMu.Unlock()
+		// Do NOT advance version on failure/partial required-plugin failure —
+		// next pull/heartbeat will retry the same config version.
+		// Keep forceApplyOnce so subsequent pulls retry full apply.
+		return err
+	}
+	a.stateMu.Lock()
+	a.lastApplyMsg = ""
+	a.version = cfg.Version
+	a.forceApplyOnce = false
+	a.stateMu.Unlock()
+	_ = os.WriteFile(filepath.Join(a.cfg.DataDir, "version"), []byte(fmt.Sprintf("%d", cfg.Version)), 0o644)
+	log.Printf("applied config version=%d plugins=%d users=%d", cfg.Version, len(cfg.Plugins), len(cfg.Users))
+	return nil
+}
 
 // seedMeteringUsers rebuilds username→user_id for traffic reporting without
 // touching plugins. Safe to call on every pull (idempotent).
