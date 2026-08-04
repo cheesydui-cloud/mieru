@@ -614,6 +614,9 @@ func (s *Server) listNodes(c *gin.Context) {
 		PanelURLTarget   string `json:"panel_url_target,omitempty"`
 		PanelURLError    string `json:"panel_url_error,omitempty"`
 		PanelURLPending  bool   `json:"panel_url_pending,omitempty"`
+		AgentPanelURL    string `json:"agent_panel_url,omitempty"`    // last reported by agent
+		PanelURLMismatch bool   `json:"panel_url_mismatch,omitempty"` // agent URL != settings
+		PanelURLFixCmd   string `json:"panel_url_fix_cmd,omitempty"` // offline one-liner
 		PanelVersion     string `json:"panel_version,omitempty"`
 		AgentConfigVer   int64  `json:"agent_config_version,omitempty"` // last reported applied version
 		ConfigStale      bool   `json:"config_stale,omitempty"`         // desired > agent applied
@@ -661,6 +664,9 @@ func (s *Server) listNodes(c *gin.Context) {
 				}
 				if v, ok := meta["panel_url_error"].(string); ok {
 					no.PanelURLError = v
+				}
+				if v, ok := meta["agent_panel_url"].(string); ok {
+					no.AgentPanelURL = strings.TrimSpace(v)
 				}
 				// agent last applied config version (from heartbeat)
 				switch cv := meta["agent_config_version"].(type) {
@@ -736,6 +742,27 @@ func (s *Server) listNodes(c *gin.Context) {
 			}
 		}
 		s.panelURLMu.Unlock()
+		// Detect PANEL_URL drift vs settings; offline nodes get a copy-paste fix command.
+		wantPU := s.currentPanelURLSetting()
+		if wantPU != "" {
+			if no.AgentPanelURL != "" && !panelURLEqual(no.AgentPanelURL, wantPU) {
+				no.PanelURLMismatch = true
+				if no.PanelURLTarget == "" {
+					no.PanelURLTarget = wantPU
+				}
+			}
+			// Always provide offline repair one-liner (uses stored token).
+			if tok := strings.TrimSpace(n.AgentToken); tok != "" {
+				role := n.Role
+				if role == "" {
+					role = "exit"
+				}
+				no.PanelURLFixCmd = fmt.Sprintf(
+					"curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | bash -s -- --panel-url %s --node-id %s --token %s --role %s",
+					wantPU, n.ID, tok, role,
+				)
+			}
+		}
 		if reveal {
 			if full, err := s.store.GetNode(n.ID); err == nil {
 				no.AgentToken = full.AgentToken
@@ -3269,6 +3296,52 @@ func normalizePanelURL(raw string) string {
 	return raw
 }
 
+// panelURLEqual compares panel base URLs ignoring trailing slash and default ports.
+func panelURLEqual(a, b string) bool {
+	a = normalizePanelURL(a)
+	b = normalizePanelURL(b)
+	if a == "" || b == "" {
+		return a == b
+	}
+	if a == b {
+		return true
+	}
+	ua, err1 := url.Parse(a)
+	ub, err2 := url.Parse(b)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	if !strings.EqualFold(ua.Scheme, ub.Scheme) {
+		return false
+	}
+	ha := strings.ToLower(ua.Hostname())
+	hb := strings.ToLower(ub.Hostname())
+	if ha != hb {
+		return false
+	}
+	pa, pb := ua.Port(), ub.Port()
+	if pa == "" {
+		if strings.EqualFold(ua.Scheme, "https") {
+			pa = "443"
+		} else {
+			pa = "80"
+		}
+	}
+	if pb == "" {
+		if strings.EqualFold(ub.Scheme, "https") {
+			pb = "443"
+		} else {
+			pb = "80"
+		}
+	}
+	if pa != pb {
+		return false
+	}
+	paPath := strings.TrimRight(ua.Path, "/")
+	pbPath := strings.TrimRight(ub.Path, "/")
+	return paPath == pbPath
+}
+
 func (s *Server) buildInstallCmd(c *gin.Context, n *model.Node) installInfo {
 	base := s.publicBase(c)
 	role := n.Role
@@ -4195,6 +4268,10 @@ func (s *Server) agentHeartbeat(c *gin.Context) {
 	} else {
 		metaPatch["apply_error"] = "" // clear previous error
 	}
+	agentPanelURL := normalizePanelURL(req.PanelURL)
+	if agentPanelURL != "" {
+		metaPatch["agent_panel_url"] = agentPanelURL
+	}
 	_ = s.store.HeartbeatEx(req.NodeID, req.PublicIP, req.Hostname, status, metaPatch)
 	n, _ := s.store.GetNode(req.NodeID)
 	needPull := n != nil && n.ConfigVersion > req.ConfigVersion
@@ -4215,6 +4292,26 @@ func (s *Server) agentHeartbeat(c *gin.Context) {
 			})
 		} else {
 			upJob = job
+		}
+	}
+	// Auto-heal: agent reached us but still has a different PANEL_URL (post-migration IP/domain drift).
+	wantPanel := s.currentPanelURLSetting()
+	if wantPanel != "" && agentPanelURL != "" && !panelURLEqual(agentPanelURL, wantPanel) {
+		if s.peekPanelURLJob(req.NodeID) == nil {
+			if _, err := s.queuePanelURLJob(req.NodeID, wantPanel); err != nil {
+				log.Printf("auto panel-url queue node=%s: %v", req.NodeID, err)
+			} else {
+				log.Printf("auto panel-url heal node=%s agent=%s want=%s", req.NodeID, agentPanelURL, wantPanel)
+			}
+		}
+	} else if wantPanel != "" && agentPanelURL != "" && panelURLEqual(agentPanelURL, wantPanel) {
+		if job := s.peekPanelURLJob(req.NodeID); job != nil && panelURLEqual(job.URL, wantPanel) {
+			s.clearPanelURLJob(req.NodeID)
+			_ = s.store.HeartbeatEx(req.NodeID, "", "", "", map[string]string{
+				"panel_url_status": "ok",
+				"panel_url_error":  "",
+				"panel_url_target": wantPanel,
+			})
 		}
 	}
 	// Panel URL rewrite: keep delivering until agent reports success.

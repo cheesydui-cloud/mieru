@@ -228,17 +228,18 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 		}
 	}
 	a.stateMu.Unlock()
-	body := model.HeartbeatRequest{
-		NodeID:        a.cfg.NodeID,
-		Token:         a.cfg.Token,
-		Role:          a.cfg.Role,
-		ConfigVersion: ver,
-		AgentVersion:  AgentVersion, // same source as CLI after SetVersion
-		Hostname:      os.Getenv("AGENT_HOSTNAME"),
-		PublicIP:      os.Getenv("AGENT_PUBLIC_IP"),
-		Message:       msg,
-		ApplyError:    applyErr,
-	}
+body := model.HeartbeatRequest{
+			NodeID:        a.cfg.NodeID,
+			Token:         a.cfg.Token,
+			Role:          a.cfg.Role,
+			ConfigVersion: ver,
+			AgentVersion:  AgentVersion, // same source as CLI after SetVersion
+			Hostname:      os.Getenv("AGENT_HOSTNAME"),
+			PublicIP:      os.Getenv("AGENT_PUBLIC_IP"),
+			Message:       msg,
+			ApplyError:    applyErr,
+			PanelURL:      strings.TrimRight(strings.TrimSpace(a.cfg.PanelURL), "/"),
+		}
 	var resp struct {
 		OK            bool  `json:"ok"`
 		ConfigVersion int64 `json:"config_version"`

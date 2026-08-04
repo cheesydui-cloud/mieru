@@ -425,9 +425,28 @@ async function saveBrandSettings() {
   savingBrand.value = true
   brandFlash.clear()
   try {
+    const url = (form.panel_url || '').trim()
     const res = await putSettingsBody(brandPayload())
     applySettingsResponse(res, { touchBrand: true, touchCF: true })
-    brandFlash.ok('面板设置已保存（名称 / 副标题 / 图标 / 地址）')
+    let extra = ''
+    // Auto-push panel URL to all *online* nodes after save (offline still need 复制修复命令).
+    if (url) {
+      try {
+        const sync = await api('/api/admin/nodes/sync-panel-url', {
+          method: 'POST',
+          body: JSON.stringify({ panel_url: url }),
+        })
+        const q = Array.isArray(sync.queued) ? sync.queued.length : 0
+        const s = Array.isArray(sync.skipped) ? sync.skipped.length : 0
+        extra =
+          q || s
+            ? `；已向 ${q} 个在线节点纠正面板地址` + (s ? `，${s} 个离线请用节点页「复制修复命令」` : '')
+            : ''
+      } catch (e) {
+        extra = `；在线节点自动纠正失败：${e.message || e}`
+      }
+    }
+    brandFlash.ok('面板设置已保存（名称 / 副标题 / 图标 / 地址）' + extra)
   } catch (e) {
     brandFlash.err(e.message)
   } finally {
@@ -650,7 +669,8 @@ onMounted(load)
           :style="!form.panel_url_set ? 'border-color:var(--warning)' : ''"
         />
         <p class="help-text" style="margin-top:6px">
-          用户查询页、订阅、扫码分享都基于此地址。带 http/https；只写 IP:端口 会自动补 http://。
+          用户查询页、订阅、扫码分享、Agent 回连都基于此地址。建议用域名；只写 IP:端口 会自动补 http://。
+          保存后会<strong>自动纠正所有在线节点</strong>的 PANEL_URL；离线节点请到节点页点「复制修复命令」。
           <span v-if="!form.panel_url_set" style="color:var(--warning);font-weight:600">
             尚未永久保存
           </span>

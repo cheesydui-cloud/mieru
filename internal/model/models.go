@@ -379,6 +379,8 @@ type HeartbeatRequest struct {
 	// ApplyError is the last plugin apply failure (empty = healthy).
 	// Shown on panel so operators don't need SSH to journalctl.
 	ApplyError string `json:"apply_error,omitempty"`
+	// PanelURL is the agent's current AGENT_PANEL_URL (so panel can detect drift after migration).
+	PanelURL string `json:"panel_url,omitempty"`
 }
 
 type TrafficReport struct {

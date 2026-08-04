@@ -512,9 +512,17 @@ function upgradeRowHint(n) {
     return n.upgrade_target ? `升级中 → v${n.upgrade_target}` : '升级中…'
   }
   const pu = n.panel_url_status || ''
-  if (pu === 'error' && n.panel_url_error) return `PANEL_URL: ${n.panel_url_error}`
+  if (pu === 'error' && n.panel_url_error) return `面板地址: ${n.panel_url_error}`
   if (pu === 'pending' || n.panel_url_pending) {
-    return n.panel_url_target ? `同步 PANEL_URL → ${n.panel_url_target}` : '同步 PANEL_URL 中…'
+    return n.panel_url_target ? `纠正面板地址 → ${n.panel_url_target}` : '纠正面板地址中…'
+  }
+  if (n.panel_url_mismatch) {
+    const from = n.agent_panel_url || '旧地址'
+    const to = n.panel_url_target || '设置中的面板地址'
+    return `面板地址不一致：${from} → ${to}`
+  }
+  if (n.status === 'offline') {
+    return '离线：请在节点机执行「复制修复命令」改面板地址'
   }
   if (n.config_stale) {
     return `配置未生效 面板v${n.config_version}/Agent v${n.agent_config_version || '?'}`
@@ -585,13 +593,27 @@ async function syncPanelURL(n) {
 }
 
 async function syncPanelURLAll() {
-  if (!confirm('向所有在线节点推送当前设置中的面板 PANEL_URL？\n节点须仍能连上当前面板一次。')) return
+  if (!confirm('向所有在线节点推送当前设置中的面板地址？\n节点须仍能连上当前面板一次；离线节点请用「复制修复命令」。')) return
   try {
     const res = await api('/api/admin/nodes/sync-panel-url', { method: 'POST' })
     flash.ok(res.message || '已推送')
     await load()
   } catch (e) {
     error.value = e.message
+  }
+}
+
+async function copyPanelURLFix(n) {
+  const cmd = (n && n.panel_url_fix_cmd) || ''
+  if (!cmd) {
+    flash.err('无修复命令：请先在设置保存「面板公网地址」，并确认节点有 token')
+    return
+  }
+  try {
+    await copyText(cmd)
+    flash.ok(`已复制「${n.name || n.id}」修复命令，SSH 到该机粘贴执行即可`)
+  } catch (e) {
+    flash.err(e.message || '复制失败')
   }
 }
 
@@ -696,7 +718,7 @@ onUnmounted(() => {
     <input class="input-filter" v-model="filter" />
     <div class="row-actions">
       <button class="btn btn-ghost btn-sm" @click="pushUpgradeAll" title="向所有在线节点推送 Agent 升级">全部升级 Agent</button>
-      <button class="btn btn-ghost btn-sm" @click="syncPanelURLAll" title="向在线节点下发设置中的面板地址（改 env 并重启）">同步 PANEL_URL</button>
+      <button class="btn btn-ghost btn-sm" @click="syncPanelURLAll" title="向在线节点自动下发设置中的面板地址（改 env 并重启）；离线节点请复制修复命令">同步面板地址</button>
       <button
         class="btn btn-ghost btn-sm"
         @click="rebuild"
@@ -771,6 +793,18 @@ onUnmounted(() => {
             <div v-if="n.hostname" class="muted" style="word-break:break-all">{{ n.hostname }}</div>
             <div v-else class="muted" style="opacity:0.45">未设置域名</div>
             <div class="muted" v-if="n.private_ip">内网 {{ n.private_ip }}</div>
+            <div
+              v-if="n.agent_panel_url"
+              class="muted"
+              :style="{
+                marginTop: '2px',
+                wordBreak: 'break-all',
+                color: n.panel_url_mismatch ? 'var(--warning)' : undefined,
+              }"
+              :title="'Agent 当前 PANEL_URL'"
+            >
+              Agent→ {{ n.agent_panel_url }}
+            </div>
           </td>
           <td class="mono">{{ portLabel(n) }}</td>
           <td>{{ n.region || '—' }}</td>
@@ -805,10 +839,19 @@ onUnmounted(() => {
               <button
                 class="btn btn-link btn-sm"
                 :disabled="n.status === 'offline' || n.panel_url_pending"
-                :title="n.panel_url_error || '下发当前面板 PANEL_URL 并重启 agent'"
+                :title="n.panel_url_error || '下发当前面板地址并重启 agent（仅在线）'"
                 @click="syncPanelURL(n)"
               >
-                {{ n.panel_url_pending ? '同步中…' : '同步URL' }}
+                {{ n.panel_url_pending ? '同步中…' : '同步地址' }}
+              </button>
+              <button
+                v-if="n.status === 'offline' || n.panel_url_mismatch"
+                class="btn btn-link btn-sm"
+                :disabled="!n.panel_url_fix_cmd"
+                title="复制 SSH 一键修复命令（重装 agent 指向当前面板）"
+                @click="copyPanelURLFix(n)"
+              >
+                复制修复命令
               </button>
               <button class="btn btn-link btn-sm" @click="showInstall(n.id)">安装+防火墙</button>
               <button class="btn btn-link-danger btn-sm" @click="remove(n)">删除</button>

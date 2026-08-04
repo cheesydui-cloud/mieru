@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.5.13] - 2026-08-05
+
+### 迁移后 PANEL_URL 自动纠正（在线）+ 离线一键修复
+
+- Agent 心跳上报当前 `AGENT_PANEL_URL`；若与设置中的面板地址不一致，**自动排队纠正**并重启 agent
+- 设置页保存「面板公网地址」后，自动向所有**在线**节点推送新地址
+- 节点页：显示 `Agent→ 当前面板地址`；不一致/离线时提供 **「复制修复命令」**（SSH 一行重装指向新面板）
+- 彻底解决：换机/改域名后「有的节点在线、有的还指着旧 IP」
+
+> 说明：完全离线、agent 未运行的机器仍需 SSH 执行修复命令（面板无法主动连出）。
+
+### 升级
+
+```bash
+# 面板 + 能连上的节点
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | bash
+# 节点（在线会随后自动纠正 URL；也可手动升 agent）
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | bash
+```
+
 ## [0.5.12] - 2026-08-05
 
 ### 完整迁移包导出/导入更不易搞错
