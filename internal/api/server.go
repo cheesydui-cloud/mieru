@@ -2983,15 +2983,19 @@ func (s *Server) exportBackup(c *gin.Context) {
 		safeUsers = append(safeUsers, row)
 	}
 	s.store.Audit("admin", "export_backup", "*", fmt.Sprintf("nodes=%d routes=%d users=%d", len(nodes), len(routes), len(users)))
-	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="mieru-backup-%s.json"`, time.Now().UTC().Format("20060102-150405")))
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="mieru-panel-backup-%s.json"`, time.Now().UTC().Format("20060102-150405")))
 	c.JSON(http.StatusOK, gin.H{
-		"exported_at": time.Now().UTC().Format(time.RFC3339),
-		"version":     s.Version,
-		"settings":    settings,
-		"nodes":       safeNodes,
-		"routes":      routes,
-		"users":       safeUsers,
-		"note":        "不含 agent_token / 管理员密码哈希 / 用户代理密码。节点需保留本机 /etc/mieru-agent.env。",
+		"format":           "mieru-panel-backup",
+		"format_version":   1,
+		"secrets_included": false,
+		"exported_at":      time.Now().UTC().Format(time.RFC3339),
+		"version":          s.Version,
+		"panel_version":    s.Version,
+		"settings":         settings,
+		"nodes":            safeNodes,
+		"routes":           routes,
+		"users":            safeUsers,
+		"note":             "安全备份：不含 agent_token / 管理员密码哈希 / 用户代理密码。不能用于换机导入；换机请用 GET /api/admin/migration/export。",
 	})
 }
 
@@ -3008,9 +3012,10 @@ func (s *Server) exportMigration(c *gin.Context) {
 	))
 	c.Header("Cache-Control", "no-store")
 	c.Header("Content-Disposition", fmt.Sprintf(
-		`attachment; filename="mieru-migration-%s.json"`,
+		`attachment; filename="mieru-panel-migration-full-%s.json"`,
 		time.Now().UTC().Format("20060102-150405"),
 	))
+	c.Header("X-Mieru-Migration-Format", store.MigrationFormat)
 	c.JSON(http.StatusOK, snap)
 }
 

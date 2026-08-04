@@ -123,7 +123,7 @@ async function downloadBackup() {
     const blob = new Blob([text], { type: 'application/json' })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
-    a.download = `mieru-backup-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`
+    a.download = `mieru-panel-backup-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`
     document.body.appendChild(a)
     a.click()
     a.remove()
@@ -165,15 +165,31 @@ async function downloadMigration() {
       }
       throw new Error(msg || res.statusText)
     }
+    // Guard: never save a non-migration payload as "完整迁移包"
+    let parsed
+    try {
+      parsed = JSON.parse(text)
+    } catch {
+      throw new Error('导出响应不是合法 JSON，请检查面板版本是否 ≥ v0.5.8')
+    }
+    if (parsed?.format !== 'mieru-panel-migration' || !parsed?.secrets_included) {
+      throw new Error(
+        '导出内容不是完整迁移包（缺少 format/secrets）。请升级面板到最新版后再导出，不要使用上方「下载备份」。',
+      )
+    }
+    const nNodes = Array.isArray(parsed.nodes) ? parsed.nodes.length : 0
+    const nUsers = Array.isArray(parsed.users) ? parsed.users.length : 0
     const blob = new Blob([text], { type: 'application/json' })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
-    a.download = `mieru-migration-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`
+    a.download = `mieru-panel-migration-full-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`
     document.body.appendChild(a)
     a.click()
     a.remove()
     URL.revokeObjectURL(a.href)
-    migFlash.ok('完整迁移包已下载（含密钥，请离线妥善保管）')
+    migFlash.ok(
+      `完整迁移包已下载（含密钥）：节点 ${nNodes} / 用户 ${nUsers}。文件名含 migration-full，请离线保管。`,
+    )
   } catch (e) {
     migFlash.err(e.message)
   } finally {
@@ -187,28 +203,57 @@ function onMigrationFile(ev) {
   migFile.value = null
   const f = ev.target.files && ev.target.files[0]
   if (!f) return
+  // Soft filename hint (not hard-fail): backup vs migration-full
+  const fname = String(f.name || '').toLowerCase()
   const reader = new FileReader()
   reader.onload = () => {
     try {
       const data = JSON.parse(String(reader.result || ''))
       if (data.format !== 'mieru-panel-migration') {
-        throw new Error(`不是完整迁移包（format=${data.format || '空'}）。请用「导出完整迁移包」生成的文件。`)
+        // Common mistake: selecting the soft backup (no format / no secrets)
+        const looksLikeBackup =
+          data.format === 'mieru-panel-backup' ||
+          (!data.format &&
+            data.exported_at &&
+            (Array.isArray(data.nodes) || Array.isArray(data.users)) &&
+            !data.secrets_included &&
+            !data.admins)
+        if (looksLikeBackup || fname.includes('backup')) {
+          throw new Error(
+            '这是「安全备份」（不含密钥），不能用于换机导入。请在旧机点红色按钮「导出完整迁移包」，文件名应含 migration-full。',
+          )
+        }
+        throw new Error(
+          `不是完整迁移包（format=${data.format || '空'}）。请用「导出完整迁移包」生成的文件（不是上方「下载备份」）。`,
+        )
       }
       if (!data.secrets_included) {
         throw new Error('该文件未包含密钥，不能用于导入')
+      }
+      // Soft check: nodes should carry agent_token
+      const nodes = Array.isArray(data.nodes) ? data.nodes : []
+      const missingTok = nodes.filter((n) => !String(n?.agent_token || '').trim()).length
+      if (nodes.length && missingTok === nodes.length) {
+        throw new Error('迁移包节点缺少 agent_token，无法恢复节点登录。请重新在旧机导出完整迁移包。')
+      }
+      const users = Array.isArray(data.users) ? data.users : []
+      const missingPw = users.filter((u) => !String(u?.proxy_password || '').trim()).length
+      if (users.length && missingPw === users.length) {
+        throw new Error('迁移包用户缺少 proxy_password，无法恢复代理密码。请重新导出完整迁移包。')
       }
       migFile.value = data
       migPreview.value = {
         format_version: data.format_version,
         exported_at: data.exported_at || '—',
         panel_version: data.panel_version || '—',
-        nodes: Array.isArray(data.nodes) ? data.nodes.length : 0,
+        nodes: nodes.length,
         routes: Array.isArray(data.routes) ? data.routes.length : 0,
-        users: Array.isArray(data.users) ? data.users.length : 0,
+        users: users.length,
         announcements: Array.isArray(data.announcements) ? data.announcements.length : 0,
         traffic: Array.isArray(data.traffic_hourly) ? data.traffic_hourly.length : 0,
         settings: data.settings ? Object.keys(data.settings).length : 0,
         admins: Array.isArray(data.admins) ? data.admins.length : 0,
+        file_name: f.name,
       }
     } catch (e) {
       migFlash.err(e.message || '文件解析失败')
@@ -816,16 +861,21 @@ onMounted(load)
 
       <p class="help-text" style="margin:0 0 12px;line-height:1.6">
         <strong>换机步骤：</strong><br />
-        ① 旧机导出完整迁移包并离线保存<br />
+        ① 旧机点本卡片右上角红色「导出完整迁移包」并离线保存<br />
         ② 新机安装同版本面板并登录<br />
         ③ 在此选择文件 →「导入并覆盖」<br />
-        ④ <strong>理想顺序</strong>：旧机仍在线时把公网地址改成新 URL → 保存 →「同步 PANEL_URL 到节点」→ 再停旧机并在新机导入<br />
+        ④ <strong>理想顺序</strong>：旧机仍在线时把公网地址改成新 URL → 保存 →「同步面板地址到节点」→ 再停旧机并在新机导入<br />
         ⑤ 若已导入新机、节点仍指旧地址：只能 SSH 改
         <code class="mono">/etc/mieru-agent.env</code>（token 不用改）
       </p>
+      <p class="help-text" style="margin:0 0 12px;color:var(--danger);line-height:1.55">
+        不要用上方「下载备份」的文件导入。正确文件名类似
+        <code class="mono">mieru-panel-migration-full-….json</code>，
+        打开后应有 <code class="mono">"format":"mieru-panel-migration"</code>。
+      </p>
 
       <div class="field" style="margin-bottom:10px">
-        <label>选择迁移包（.json）</label>
+        <label>选择完整迁移包（.json，文件名含 migration-full）</label>
         <input type="file" accept=".json,application/json" @change="onMigrationFile" />
       </div>
 
@@ -834,6 +884,7 @@ onMounted(load)
         class="mono"
         style="font-size:12px;line-height:1.7;padding:10px 12px;background:var(--bg-muted,#f8fafc);border-radius:10px;margin-bottom:12px"
       >
+        <div v-if="migPreview.file_name">文件：{{ migPreview.file_name }}</div>
         <div>导出时间：{{ migPreview.exported_at }} · 源版本 {{ migPreview.panel_version }}</div>
         <div>
           节点 {{ migPreview.nodes }} · 隧道 {{ migPreview.routes }} · 用户 {{ migPreview.users }}

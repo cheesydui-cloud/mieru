@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.5.12] - 2026-08-05
+
+### 完整迁移包导出/导入更不易搞错
+
+- 完整迁移下载文件名改为 `mieru-panel-migration-full-….json`
+- 安全备份改为 `mieru-panel-backup-….json`，并标记 `format=mieru-panel-backup` / `secrets_included=false`
+- 导出完整迁移包时前端校验响应必须含 `format=mieru-panel-migration`
+- 导入若选到安全备份，明确提示「不能用于换机」，避免再出现 `format=空`
+
+### 升级
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-panel.sh | bash
+```
+
 ## [0.5.11] - 2026-08-04
 
 ### Clash Verge / Mihomo 国内直连分流
