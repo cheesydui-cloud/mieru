@@ -98,8 +98,112 @@ async function loadAnnouncements({ autoPopup = false } = {}) {
   }
 }
 
+const UI_I18N = {
+  zh: {
+    accountInfo: '账号信息',
+    announcements: '公告',
+    exit: '退出',
+    loading: '加载中…',
+    remainTraffic: '剩余流量',
+    unlimitedTraffic: '不限流量',
+    expire: '到期',
+    permanent: '永久',
+    usedQuota: '已用 / 配额',
+    unlimited: '不限',
+    today: '今日',
+    realtime: '实时',
+    tunnel: '隧道',
+    entry: '入口',
+    note: '备注',
+    scanNode: '扫码 / 节点',
+    copyLink: '复制链接',
+    qrFail: '无法生成二维码（未绑定隧道 / 无前置地址）',
+    nodeLink: '节点链接（扫码内容 · mierus://）',
+    allEntries: '全部入口',
+    copy: '复制',
+    mihomoYaml: 'Mihomo / Clash Meta YAML',
+    copyYaml: '复制 YAML',
+    downloadYaml: '下载 YAML',
+    clashSub: 'Clash Verge / Mihomo 订阅',
+    copyClash: '复制 Clash Verge 链接',
+    copyMihomo: '复制 Mihomo URL',
+    clashHelp:
+      'Clash Verge / Windows / Mac：把上面整段粘贴到客户端「订阅 → 订阅文件链接」。必须是 .../mihomo.yaml 结尾；不要用下方的普通订阅链接。',
+    plainSub: '普通订阅（mierus://）',
+    copySub: '复制订阅',
+    plainHelp:
+      '内容为 mierus:// 节点列表，给支持原生 mieru 的客户端/扫码用。Clash Verge 请用上方链接。请勿公开转发；泄露可让管理员「重置订阅」。',
+    close: '关闭',
+    autoClose: 's 后自动关闭',
+    gotIt: '我知道了',
+    annList: '公告列表',
+    noAnn: '暂无公告',
+    popup: '弹窗',
+    invalidLink: '链接无效',
+    loadFail: '加载失败',
+    copied: '已复制',
+    copyFail: '复制失败，请手动选中',
+    noYaml: '暂无 YAML',
+    downloaded: '已下载',
+    titleSuffix: '账号信息',
+    status: { active: '正常', disabled: '停用', expired: '到期', over_quota: '超流量' },
+  },
+  en: {
+    accountInfo: 'Account',
+    announcements: 'Notices',
+    exit: 'Close',
+    loading: 'Loading…',
+    remainTraffic: 'Remaining',
+    unlimitedTraffic: 'Unlimited',
+    expire: 'Expires',
+    permanent: 'Never',
+    usedQuota: 'Used / Quota',
+    unlimited: 'Unlimited',
+    today: 'Today',
+    realtime: 'Live',
+    tunnel: 'Tunnel',
+    entry: 'Entry',
+    note: 'Note',
+    scanNode: 'QR / Node',
+    copyLink: 'Copy link',
+    qrFail: 'QR unavailable (no tunnel / entry host)',
+    nodeLink: 'Node link (QR content · mierus://)',
+    allEntries: 'All entries',
+    copy: 'Copy',
+    mihomoYaml: 'Mihomo / Clash Meta YAML',
+    copyYaml: 'Copy YAML',
+    downloadYaml: 'Download YAML',
+    clashSub: 'Clash Verge / Mihomo subscription',
+    copyClash: 'Copy Clash Verge URL',
+    copyMihomo: 'Copy Mihomo URL',
+    clashHelp:
+      'Clash Verge / Windows / Mac: paste the URL into “Subscriptions → File URL”. It must end with /mihomo.yaml. Do not use the plain subscription link below.',
+    plainSub: 'Plain subscription (mierus://)',
+    copySub: 'Copy subscription',
+    plainHelp:
+      'Contains a mierus:// node list for native mieru clients / QR. Use the Clash Verge link above for Clash. Do not share publicly; ask admin to reset subscription if leaked.',
+    close: 'Close',
+    autoClose: 's auto-close',
+    gotIt: 'Got it',
+    annList: 'Notices',
+    noAnn: 'No notices',
+    popup: 'Popup',
+    invalidLink: 'Invalid link',
+    loadFail: 'Failed to load',
+    copied: 'Copied',
+    copyFail: 'Copy failed — select manually',
+    noYaml: 'No YAML',
+    downloaded: 'Downloaded',
+    titleSuffix: 'Account',
+    status: { active: 'Active', disabled: 'Disabled', expired: 'Expired', over_quota: 'Over quota' },
+  },
+}
+
+const locale = computed(() => (info.value?.user_info_locale === 'en' ? 'en' : 'zh'))
+const t = computed(() => UI_I18N[locale.value] || UI_I18N.zh)
+
 function statusLabel(s) {
-  const m = { active: '正常', disabled: '停用', expired: '到期', over_quota: '超流量' }
+  const m = t.value.status || {}
   return m[s] || s || '—'
 }
 
@@ -165,7 +269,7 @@ watch(shareURL, (url) => {
 async function load() {
   const tok = route.params.token
   if (!tok) {
-    error.value = '链接无效'
+    error.value = UI_I18N.zh.invalidLink
     loading.value = false
     return
   }
@@ -188,7 +292,7 @@ async function load() {
     error.value = ''
     await refreshQR(data?.share_url || '')
   } catch (e) {
-    error.value = e.message || '加载失败'
+    error.value = e.message || UI_I18N.zh.loadFail
   } finally {
     loading.value = false
   }
@@ -214,12 +318,12 @@ async function copy(text) {
   if (!text) return
   try {
     await copyText(text)
-    flash.ok('已复制')
+    flash.ok(t.value.copied)
     setTimeout(() => {
       /* flash auto-clears */
     }, 2000)
   } catch {
-    flash.err('复制失败，请手动选中')
+    flash.err(t.value.copyFail)
   }
 }
 
@@ -231,7 +335,7 @@ function downloadYAML() {
       window.open(info.value.mihomo_url, '_blank')
       return
     }
-    flash.err('暂无 YAML')
+    flash.err(t.value.noYaml)
     return
   }
   const name = `mihomo-${info.value?.username || 'user'}.yaml`
@@ -243,7 +347,7 @@ function downloadYAML() {
   a.click()
   a.remove()
   URL.revokeObjectURL(a.href)
-  flash.ok(`已下载 ${name}`)
+  flash.ok(`${t.value.downloaded} ${name}`)
 }
 
 onMounted(async () => {
@@ -252,7 +356,8 @@ onMounted(async () => {
   } catch {
     /* ignore */
   }
-  document.title = `${panelTitle.value} · 账号信息`
+  document.title = `${panelTitle.value} · ${t.value.titleSuffix}`
+  document.documentElement.lang = locale.value === 'en' ? 'en' : 'zh-CN'
   await Promise.all([load(), loadAnnouncements({ autoPopup: true })])
   // status/rate refresh; share/QR stable so no need every tick
   timer = setInterval(async () => {
@@ -295,26 +400,26 @@ onUnmounted(() => {
           <div v-else class="brand-mark">{{ brandMarkLetter(panelTitle) }}</div>
           <div class="brand-text">
             <strong>{{ panelTitle }}</strong>
-            <span>账号信息</span>
+            <span>{{ t.accountInfo }}</span>
           </div>
         </div>
         <div class="row-actions" style="align-items:center;gap:8px">
           <button
             type="button"
             class="btn btn-ghost btn-sm ann-btn"
-            title="公告"
+            :title="t.announcements"
             @click="openList"
           >
-            公告
+            {{ t.announcements }}
             <span v-if="announcements.length" class="ann-btn-dot" aria-hidden="true" />
           </button>
           <button
             type="button"
             class="btn btn-ghost btn-sm"
-            title="关闭本页（查询页为公开链接，无登录态）"
+            :title="t.exit"
             @click="leavePage"
           >
-            退出
+            {{ t.exit }}
           </button>
         </div>
       </div>
@@ -326,14 +431,14 @@ onUnmounted(() => {
         style="margin:0 0 10px"
         @click="flash.clear()"
       >{{ flash.msg }}</div>
-      <div v-else-if="loading" class="muted" style="text-align: center; padding: 40px">加载中…</div>
+      <div v-else-if="loading" class="muted" style="text-align: center; padding: 40px">{{ t.loading }}</div>
 
       <template v-else-if="info">
         <div class="card ring-wrap">
           <div class="ring" :style="ringStyle">
             <div class="ring-inner">
               <strong>{{ info.traffic_limit_bytes ? remainPct + '%' : '∞' }}</strong>
-              <span>{{ info.traffic_limit_bytes ? '剩余流量' : '不限流量' }}</span>
+              <span>{{ info.traffic_limit_bytes ? t.remainTraffic : t.unlimitedTraffic }}</span>
             </div>
           </div>
           <div style="flex: 1; min-width: 0">
@@ -344,27 +449,27 @@ onUnmounted(() => {
               </span>
             </div>
             <dl class="kv">
-              <dt>到期</dt>
-              <dd>{{ info.expire_at || '永久' }}</dd>
-              <dt>已用 / 配额</dt>
+              <dt>{{ t.expire }}</dt>
+              <dd>{{ info.expire_at || t.permanent }}</dd>
+              <dt>{{ t.usedQuota }}</dt>
               <dd>
                 {{ formatBytes(info.traffic_used_bytes) }}
                 /
-                {{ info.traffic_limit_bytes ? formatBytes(info.traffic_limit_bytes) : '不限' }}
+                {{ info.traffic_limit_bytes ? formatBytes(info.traffic_limit_bytes) : t.unlimited }}
               </dd>
-              <dt>今日</dt>
+              <dt>{{ t.today }}</dt>
               <dd>↓ {{ formatBytes(info.today_down) }} · ↑ {{ formatBytes(info.today_up) }}</dd>
-              <dt>实时</dt>
+              <dt>{{ t.realtime }}</dt>
               <dd>
                 ↓ {{ formatBps(info.rate?.down_bps) }}
                 ·
                 ↑ {{ formatBps(info.rate?.up_bps) }}
               </dd>
-              <dt v-if="info.route_name">隧道</dt>
+              <dt v-if="info.route_name">{{ t.tunnel }}</dt>
               <dd v-if="info.route_name">{{ info.route_name }}</dd>
-              <dt v-if="entryDisplay">入口</dt>
+              <dt v-if="entryDisplay">{{ t.entry }}</dt>
               <dd v-if="entryDisplay" class="mono">{{ entryDisplay }}</dd>
-              <dt v-if="info.note">备注</dt>
+              <dt v-if="info.note">{{ t.note }}</dt>
               <dd v-if="info.note">{{ info.note }}</dd>
             </dl>
           </div>
@@ -372,29 +477,29 @@ onUnmounted(() => {
 
         <div class="panel">
           <div class="panel-hd">
-            <h2>扫码 / 节点</h2>
+            <h2>{{ t.scanNode }}</h2>
             <div class="row-actions">
-              <button class="btn btn-ghost btn-sm" :disabled="!shareURL" @click="copy(shareURL)">复制链接</button>
+              <button class="btn btn-ghost btn-sm" :disabled="!shareURL" @click="copy(shareURL)">{{ t.copyLink }}</button>
             </div>
           </div>
           <div class="panel-bd share-block">
             <div class="qr-center">
               <div v-if="subQR" class="qr-box">
-                <img :src="subQR" alt="节点二维码" width="260" height="260" />
+                <img :src="subQR" :alt="t.scanNode" width="260" height="260" />
               </div>
               <div v-else class="muted" style="padding: 16px; text-align: center">
-                无法生成二维码（未绑定隧道 / 无前置地址）
+                {{ t.qrFail }}
               </div>
             </div>
             <div class="field" style="margin-top: 14px">
-              <label>节点链接（扫码内容 · mierus://）</label>
+              <label>{{ t.nodeLink }}</label>
               <textarea readonly rows="3" class="mono share-ta" :value="shareURL" />
             </div>
             <div v-if="entries.length > 1" class="field">
-              <label>全部入口</label>
+              <label>{{ t.allEntries }}</label>
               <div v-for="(e, i) in entries" :key="i" class="mono entry-row">
                 <span>{{ e.name }} · {{ e.host }}</span>
-                <button class="btn btn-link btn-sm" type="button" @click="copy(e.url)">复制</button>
+                <button class="btn btn-link btn-sm" type="button" @click="copy(e.url)">{{ t.copy }}</button>
               </div>
             </div>
           </div>
@@ -402,11 +507,11 @@ onUnmounted(() => {
 
         <div class="panel">
           <div class="panel-hd">
-            <h2>Mihomo / Clash Meta YAML</h2>
+            <h2>{{ t.mihomoYaml }}</h2>
             <div class="row-actions">
-              <button class="btn btn-ghost btn-sm" :disabled="!mihomoYAML" @click="copy(mihomoYAML)">复制 YAML</button>
+              <button class="btn btn-ghost btn-sm" :disabled="!mihomoYAML" @click="copy(mihomoYAML)">{{ t.copyYaml }}</button>
               <button class="btn btn-primary btn-sm" :disabled="!mihomoYAML && !info.mihomo_url" @click="downloadYAML">
-                下载 YAML
+                {{ t.downloadYaml }}
               </button>
             </div>
           </div>
@@ -417,17 +522,17 @@ onUnmounted(() => {
 
         <div class="panel">
           <div class="panel-hd">
-            <h2>Clash Verge / Mihomo 订阅</h2>
+            <h2>{{ t.clashSub }}</h2>
             <div class="row-actions">
               <button
                 class="btn btn-primary btn-sm"
                 :disabled="!clashVergeURL"
                 @click="copy(clashVergeURL)"
               >
-                复制 Clash Verge 链接
+                {{ t.copyClash }}
               </button>
               <button class="btn btn-ghost btn-sm" :disabled="!clashVergeURL" @click="copy(clashVergeURL)">
-                复制 Mihomo URL
+                {{ t.copyMihomo }}
               </button>
             </div>
           </div>
@@ -436,18 +541,17 @@ onUnmounted(() => {
               {{ clashVergeURL || '—' }}
             </div>
             <p class="muted" style="margin: 10px 0 0; font-size: 12px; line-height: 1.5">
-              <strong>Clash Verge / Windows / Mac</strong>：把上面整段粘贴到客户端「订阅 → 订阅文件链接」。
-              必须是 <code class="mono">.../mihomo.yaml</code> 结尾；不要用下方的普通订阅链接。
+              {{ t.clashHelp }}
             </p>
           </div>
         </div>
 
         <div class="panel">
           <div class="panel-hd">
-            <h2>普通订阅（mierus://）</h2>
+            <h2>{{ t.plainSub }}</h2>
             <div class="row-actions">
               <button class="btn btn-ghost btn-sm" :disabled="!info.subscription" @click="copy(info.subscription)">
-                复制订阅
+                {{ t.copySub }}
               </button>
             </div>
           </div>
@@ -456,8 +560,7 @@ onUnmounted(() => {
               {{ info.subscription || '—' }}
             </div>
             <p class="muted" style="margin: 10px 0 0; font-size: 12px; line-height: 1.5">
-              内容为 <code class="mono">mierus://</code> 节点列表，给支持原生 mieru 的客户端/扫码用。
-              <strong>Clash Verge 请用上方链接</strong>。请勿公开转发；泄露可让管理员「重置订阅」。
+              {{ t.plainHelp }}
             </p>
           </div>
         </div>
@@ -469,13 +572,13 @@ onUnmounted(() => {
       <div class="ann-popup" role="dialog" aria-modal="true">
         <div class="ann-popup-hd">
           <h3>{{ popupAnn.title }}</h3>
-          <button type="button" class="btn btn-ghost btn-sm" @click="closePopup">关闭</button>
+          <button type="button" class="btn btn-ghost btn-sm" @click="closePopup">{{ t.close }}</button>
         </div>
         <div class="ann-popup-bd">{{ popupAnn.body }}</div>
         <div class="ann-popup-ft">
-          <span v-if="popupLeft > 0" class="ann-popup-timer">{{ popupLeft }}s 后自动关闭</span>
+          <span v-if="popupLeft > 0" class="ann-popup-timer">{{ popupLeft }}{{ t.autoClose }}</span>
           <span v-else class="ann-popup-timer" />
-          <button type="button" class="btn btn-primary btn-sm" @click="closePopup">我知道了</button>
+          <button type="button" class="btn btn-primary btn-sm" @click="closePopup">{{ t.gotIt }}</button>
         </div>
       </div>
     </div>
@@ -484,11 +587,11 @@ onUnmounted(() => {
     <div v-if="showList" class="ann-list-mask" @click.self="closeList">
       <div class="ann-list" role="dialog" aria-modal="true">
         <div class="ann-list-hd">
-          <h3>公告列表</h3>
-          <button type="button" class="btn btn-ghost btn-sm" @click="closeList">关闭</button>
+          <h3>{{ t.annList }}</h3>
+          <button type="button" class="btn btn-ghost btn-sm" @click="closeList">{{ t.close }}</button>
         </div>
         <div class="ann-list-bd">
-          <div v-if="!announcements.length" class="empty" style="padding:28px 16px">暂无公告</div>
+          <div v-if="!announcements.length" class="empty" style="padding:28px 16px">{{ t.noAnn }}</div>
           <div
             v-for="a in announcements"
             :key="a.id"
@@ -498,7 +601,7 @@ onUnmounted(() => {
           >
             <div class="ann-item-title">
               <span>{{ a.title }}</span>
-              <span v-if="a.popup" class="badge ok" style="font-size:11px">弹窗</span>
+              <span v-if="a.popup" class="badge ok" style="font-size:11px">{{ t.popup }}</span>
             </div>
             <div class="ann-item-body">{{ a.body }}</div>
             <div class="ann-item-meta">{{ fmtAnnTime(a.updated_at || a.created_at) }}</div>

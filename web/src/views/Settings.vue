@@ -31,6 +31,7 @@ const form = reactive({
   panel_name: '',
   panel_subtitle: '',
   panel_favicon: '',
+  user_info_locale: 'zh',
   panel_url_set: false,
   version: '',
   admin_user: 'admin',
@@ -123,6 +124,7 @@ async function load() {
     form.panel_name = s.panel_name || 'Mieru Panel'
     form.panel_subtitle = s.panel_subtitle || ''
     form.panel_favicon = s.panel_favicon || ''
+    form.user_info_locale = s.user_info_locale === 'en' ? 'en' : 'zh'
     setBrandMeta({
       name: s.panel_name,
       subtitle: s.panel_subtitle,
@@ -399,6 +401,7 @@ function brandPayload() {
     panel_name: form.panel_name,
     panel_subtitle: form.panel_subtitle,
     panel_favicon: form.panel_favicon,
+    user_info_locale: form.user_info_locale === 'en' ? 'en' : 'zh',
   }
 }
 
@@ -408,6 +411,7 @@ function applySettingsResponse(res, { touchBrand = false, touchCF = false } = {}
     form.panel_name = res.panel_name
     form.panel_subtitle = res.panel_subtitle || ''
     form.panel_favicon = res.panel_favicon || ''
+    if (res.user_info_locale) form.user_info_locale = res.user_info_locale === 'en' ? 'en' : 'zh'
     form.panel_url_set = true
     setBrandMeta({
       name: res.panel_name,
@@ -737,6 +741,26 @@ onMounted(load)
       <div class="field" style="margin-bottom:14px">
         <label>登录页副标题</label>
         <input v-model="form.panel_subtitle" placeholder="管理节点、用户、隧道与落地计量" />
+      </div>
+      <div class="field" style="margin-bottom:14px">
+        <label>用户查询页语言</label>
+        <div class="row-actions" style="gap:8px;align-items:center;flex-wrap:wrap">
+          <button
+            type="button"
+            class="btn btn-sm"
+            :class="form.user_info_locale === 'zh' ? 'btn-primary' : 'btn-ghost'"
+            @click="form.user_info_locale = 'zh'"
+          >中文</button>
+          <button
+            type="button"
+            class="btn btn-sm"
+            :class="form.user_info_locale === 'en' ? 'btn-primary' : 'btn-ghost'"
+            @click="form.user_info_locale = 'en'"
+          >English</button>
+        </div>
+        <p class="help-text" style="margin-top:6px">
+          全局生效：用户打开查询页时整页显示所选语言。也可在「用户」页顶部一键切换。
+        </p>
       </div>
       <div class="field" style="margin-bottom:16px">
         <label>自定义图标（favicon / logo，可选）</label>

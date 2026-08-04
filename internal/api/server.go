@@ -322,6 +322,7 @@ func (s *Server) Router() *gin.Engine {
 
 		admin.GET("/settings", s.getSettings)
 		admin.PUT("/settings", s.putSettings)
+		admin.PUT("/user-info-locale", s.putUserInfoLocale)
 		admin.POST("/admin-password", s.changeAdminPassword)
 		admin.POST("/cloudflare/dns", s.cloudflareUpsertDNS)
 		admin.GET("/cloudflare/lookup", s.cloudflareLookupDNS)
@@ -3239,10 +3240,16 @@ func (s *Server) publicUserInfo(c *gin.Context) {
 	if strings.TrimSpace(brandName) == "" {
 		brandName = "Mieru"
 	}
+	locale, _ := s.store.GetSetting("user_info_locale")
+	locale = strings.ToLower(strings.TrimSpace(locale))
+	if locale != "en" {
+		locale = "zh"
+	}
 
 	c.Header("Cache-Control", "no-store, no-cache, must-revalidate")
 	c.JSON(http.StatusOK, gin.H{
-		"panel_name": brandName,
+		"panel_name":       brandName,
+		"user_info_locale": locale,
 		"username":   u.Username,
 		"status":     u.Status,
 		"expire_at":  expireStr,
@@ -3391,7 +3398,7 @@ func (s *Server) buildInstallCmd(c *gin.Context, n *model.Node) installInfo {
 func (s *Server) publicBrand(c *gin.Context) {
 	c.Header("Cache-Control", "no-store, no-cache, must-revalidate")
 	c.Header("Pragma", "no-cache")
-	m, _ := s.store.GetSettings("panel_name", "panel_subtitle", "panel_favicon")
+	m, _ := s.store.GetSettings("panel_name", "panel_subtitle", "panel_favicon", "user_info_locale")
 	name := strings.TrimSpace(m["panel_name"])
 	if name == "" {
 		name = "Mieru"
@@ -3400,17 +3407,23 @@ func (s *Server) publicBrand(c *gin.Context) {
 	if sub == "" {
 		sub = "管理节点、用户、隧道与落地计量"
 	}
+	locale := strings.ToLower(strings.TrimSpace(m["user_info_locale"]))
+	if locale != "en" {
+		locale = "zh"
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"panel_name":     name,
-		"panel_subtitle": sub,
-		"favicon_data":   strings.TrimSpace(m["panel_favicon"]),
-		"version":        s.Version,
+		"panel_name":       name,
+		"panel_subtitle":   sub,
+		"favicon_data":     strings.TrimSpace(m["panel_favicon"]),
+		"user_info_locale": locale,
+		"version":          s.Version,
 	})
 }
 
 func (s *Server) getSettings(c *gin.Context) {
 	m, err := s.store.GetSettings(
 		"panel_url", "panel_name", "panel_subtitle", "panel_favicon",
+		"user_info_locale",
 		configgen.SettingBackboneUser,
 		"cf_api_token", "cf_zone_id", "cf_proxied_default",
 	)
@@ -3431,11 +3444,16 @@ func (s *Server) getSettings(c *gin.Context) {
 	corsWide := len(s.cfg.CORSOrigins) == 1 && s.cfg.CORSOrigins[0] == "*"
 	cfTok := strings.TrimSpace(m["cf_api_token"])
 	cfZone := strings.TrimSpace(m["cf_zone_id"])
+	locale := strings.ToLower(strings.TrimSpace(m["user_info_locale"]))
+	if locale != "en" {
+		locale = "zh"
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"panel_url":          panelURL,
 		"panel_name":         name,
 		"panel_subtitle":     sub,
 		"panel_favicon":      strings.TrimSpace(m["panel_favicon"]),
+		"user_info_locale":   locale,
 		"panel_url_set":      m["panel_url"] != "",
 		"version":            s.Version,
 		"admin_user":         s.cfg.AdminUser,
@@ -3467,6 +3485,8 @@ func (s *Server) putSettings(c *gin.Context) {
 		PanelName     string `json:"panel_name"`
 		PanelSubtitle string `json:"panel_subtitle"`
 		PanelFavicon  string `json:"panel_favicon"` // data URL or empty to clear
+		// User query page language: "zh" | "en"
+		UserInfoLocale *string `json:"user_info_locale"`
 		// Cloudflare (optional). Empty cf_api_token keeps existing; "clear" removes.
 		CFAPIToken       *string `json:"cf_api_token"`
 		CFZoneID         *string `json:"cf_zone_id"`
@@ -3523,6 +3543,21 @@ func (s *Server) putSettings(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	localeOut := "zh"
+	if req.UserInfoLocale != nil {
+		loc := strings.ToLower(strings.TrimSpace(*req.UserInfoLocale))
+		if loc == "en" {
+			localeOut = "en"
+		} else {
+			localeOut = "zh"
+		}
+		if err := s.store.SetSetting("user_info_locale", localeOut); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	} else if v, _ := s.store.GetSetting("user_info_locale"); strings.ToLower(strings.TrimSpace(v)) == "en" {
+		localeOut = "en"
+	}
 	if req.CFZoneID != nil {
 		if err := s.store.SetSetting("cf_zone_id", strings.TrimSpace(*req.CFZoneID)); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -3551,15 +3586,37 @@ func (s *Server) putSettings(c *gin.Context) {
 	cfTok, _ := s.store.GetSetting("cf_api_token")
 	cfZone, _ := s.store.GetSetting("cf_zone_id")
 	c.JSON(http.StatusOK, gin.H{
-		"ok":             true,
-		"panel_url":      url,
-		"panel_name":     name,
-		"panel_subtitle": sub,
-		"panel_favicon":  fav,
-		"cf_configured":  strings.TrimSpace(cfTok) != "" && strings.TrimSpace(cfZone) != "",
-		"cf_zone_id":     strings.TrimSpace(cfZone),
-		"cf_token_set":   strings.TrimSpace(cfTok) != "",
+		"ok":               true,
+		"panel_url":        url,
+		"panel_name":       name,
+		"panel_subtitle":   sub,
+		"panel_favicon":    fav,
+		"user_info_locale": localeOut,
+		"cf_configured":    strings.TrimSpace(cfTok) != "" && strings.TrimSpace(cfZone) != "",
+		"cf_zone_id":       strings.TrimSpace(cfZone),
+		"cf_token_set":     strings.TrimSpace(cfTok) != "",
 	})
+}
+
+// putUserInfoLocale toggles the public user query page language (zh|en) without other settings.
+func (s *Server) putUserInfoLocale(c *gin.Context) {
+	var req struct {
+		Locale string `json:"user_info_locale"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
+		return
+	}
+	loc := strings.ToLower(strings.TrimSpace(req.Locale))
+	if loc != "en" {
+		loc = "zh"
+	}
+	if err := s.store.SetSetting("user_info_locale", loc); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	s.store.Audit("admin", "update_user_info_locale", "panel", loc)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "user_info_locale": loc})
 }
 
 func (s *Server) cfClient() (*cloudflare.Client, error) {

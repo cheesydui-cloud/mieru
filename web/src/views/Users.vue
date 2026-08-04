@@ -11,6 +11,8 @@ const error = ref('')
 const flash = useFlash()
 const formFlash = useFlash()
 const filter = ref('')
+const userInfoLocale = ref('zh')
+const localeBusy = ref(false)
 const statusFilter = ref('all')
 const show = ref(false)
 const mode = ref('create') // create | edit | created
@@ -779,9 +781,41 @@ async function downloadMihomo(u) {
   }
 }
 
+async function loadUserInfoLocale() {
+  try {
+    const s = await api('/api/admin/settings')
+    userInfoLocale.value = s.user_info_locale === 'en' ? 'en' : 'zh'
+  } catch {
+    /* ignore */
+  }
+}
+
+async function setUserInfoLocale(loc) {
+  const next = loc === 'en' ? 'en' : 'zh'
+  if (userInfoLocale.value === next || localeBusy.value) return
+  localeBusy.value = true
+  try {
+    const res = await api('/api/admin/user-info-locale', {
+      method: 'PUT',
+      body: JSON.stringify({ user_info_locale: next }),
+    })
+    userInfoLocale.value = res.user_info_locale === 'en' ? 'en' : next
+    flash.ok(next === 'en' ? 'Query page: English' : '查询页：中文')
+  } catch (e) {
+    flash.err(e.message)
+  } finally {
+    localeBusy.value = false
+  }
+}
+
+function toggleUserInfoLocale() {
+  setUserInfoLocale(userInfoLocale.value === 'en' ? 'zh' : 'en')
+}
+
 onMounted(() => {
   loadUsers()
   loadRates()
+  loadUserInfoLocale()
   listTimer = setInterval(loadUsers, 10000)
   rateTimer = setInterval(loadRates, 1000)
   document.addEventListener('pointerdown', onDocPointerDown, true)
@@ -886,6 +920,23 @@ onUnmounted(() => {
   <div class="panel-toolbar users-toolbar">
     <div class="toolbar-left" style="flex-wrap:wrap;gap:8px">
       <input class="input-filter" v-model="filter" placeholder="搜索用户 / 备注 / 隧道" />
+      <div class="locale-toggle" title="用户查询页显示语言（全局）">
+        <span class="muted" style="font-size:12px;margin-right:4px">查询页</span>
+        <button
+          type="button"
+          class="btn btn-sm"
+          :class="userInfoLocale === 'zh' ? 'btn-primary' : 'btn-ghost'"
+          :disabled="localeBusy"
+          @click="setUserInfoLocale('zh')"
+        >中文</button>
+        <button
+          type="button"
+          class="btn btn-sm"
+          :class="userInfoLocale === 'en' ? 'btn-primary' : 'btn-ghost'"
+          :disabled="localeBusy"
+          @click="setUserInfoLocale('en')"
+        >EN</button>
+      </div>
       <template v-if="selectedCount">
         <span class="badge">已选 {{ selectedCount }}</span>
         <button class="btn btn-ghost btn-sm" :disabled="batchBusy" @click="batchAction('enable')">启用</button>

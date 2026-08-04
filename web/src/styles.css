@@ -1629,3 +1629,17 @@ code.mono {
 .more-menu button.more-menu-danger:hover {
   background: rgba(185, 28, 28, 0.08);
 }
+
+.locale-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 8px;
+  border: 1px solid var(--border-line);
+  border-radius: 999px;
+  background: var(--bg-surface);
+}
+.locale-toggle .btn {
+  border-radius: 999px;
+  min-width: 44px;
+}
