@@ -410,6 +410,14 @@ type DashboardStats struct {
 	UnhealthyNodes int   `json:"unhealthy_nodes"`
 }
 
+// HourlyTrafficPoint is one local-hour bucket for the dashboard traffic chart (0–23).
+type HourlyTrafficPoint struct {
+	Hour  int   `json:"hour"`
+	Up    int64 `json:"up"`
+	Down  int64 `json:"down"`
+	Total int64 `json:"total"`
+}
+
 // Announcement is a panel notice shown on the public user query page.
 type Announcement struct {
 	ID      int64  `json:"id"`

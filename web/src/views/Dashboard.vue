@@ -50,6 +50,115 @@ const monthTotal = computed(() => Number(stats.value.month_total || 0))
 const monthUp = computed(() => Number(stats.value.month_up || 0))
 const monthDown = computed(() => Number(stats.value.month_down || 0))
 
+/** 24 local hours 0–23 for today's traffic curve */
+const hourlyPoints = computed(() => {
+  const raw = diag.value?.traffic_hourly
+  const base = Array.from({ length: 24 }, (_, h) => ({
+    hour: h,
+    up: 0,
+    down: 0,
+    total: 0,
+  }))
+  if (!Array.isArray(raw)) return base
+  for (const p of raw) {
+    const h = Number(p.hour)
+    if (h >= 0 && h < 24) {
+      const up = Number(p.up || 0)
+      const down = Number(p.down || 0)
+      base[h] = { hour: h, up, down, total: Number(p.total != null ? p.total : up + down) }
+    }
+  }
+  return base
+})
+
+const hourlyMax = computed(() => {
+  let m = 0
+  for (const p of hourlyPoints.value) {
+    if (p.total > m) m = p.total
+  }
+  // headroom so line doesn't touch top
+  return m > 0 ? m * 1.08 : 1
+})
+
+const chartHover = ref(null)
+
+const chartLayout = {
+  w: 720,
+  h: 200,
+  padL: 52,
+  padR: 16,
+  padT: 16,
+  padB: 28,
+}
+
+function chartX(h) {
+  const { w, padL, padR } = chartLayout
+  const inner = w - padL - padR
+  return padL + (h / 23) * inner
+}
+
+function chartY(v) {
+  const { h, padT, padB } = chartLayout
+  const inner = h - padT - padB
+  const max = hourlyMax.value || 1
+  return padT + inner * (1 - v / max)
+}
+
+const chartLinePath = computed(() => {
+  const pts = hourlyPoints.value
+  if (!pts.length) return ''
+  return pts
+    .map((p, i) => `${i === 0 ? 'M' : 'L'} ${chartX(p.hour).toFixed(2)} ${chartY(p.total).toFixed(2)}`)
+    .join(' ')
+})
+
+const chartAreaPath = computed(() => {
+  const pts = hourlyPoints.value
+  if (!pts.length) return ''
+  const { h, padB } = chartLayout
+  const baseY = h - padB
+  const line = pts
+    .map((p, i) => `${i === 0 ? 'M' : 'L'} ${chartX(p.hour).toFixed(2)} ${chartY(p.total).toFixed(2)}`)
+    .join(' ')
+  const lastX = chartX(pts[pts.length - 1].hour).toFixed(2)
+  const firstX = chartX(pts[0].hour).toFixed(2)
+  return `${line} L ${lastX} ${baseY} L ${firstX} ${baseY} Z`
+})
+
+const yTicks = computed(() => {
+  const max = hourlyMax.value
+  // 4 ticks including 0
+  const vals = [0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(max * f))
+  // de-dupe when tiny
+  const uniq = []
+  for (const v of vals) {
+    if (!uniq.length || uniq[uniq.length - 1] !== v) uniq.push(v)
+  }
+  return uniq.map((v) => ({ v, y: chartY(v), label: formatBytes(v) }))
+})
+
+const xTicks = [0, 3, 6, 9, 12, 15, 18, 21, 23]
+
+function onChartMove(ev) {
+  const svg = ev.currentTarget
+  const rect = svg.getBoundingClientRect()
+  const { w, padL, padR } = chartLayout
+  const x = ((ev.clientX - rect.left) / rect.width) * w
+  const inner = w - padL - padR
+  let h = Math.round(((x - padL) / inner) * 23)
+  if (h < 0) h = 0
+  if (h > 23) h = 23
+  chartHover.value = hourlyPoints.value[h]
+}
+
+function onChartLeave() {
+  chartHover.value = null
+}
+
+function hourLabel(h) {
+  return String(h).padStart(2, '0') + ':00'
+}
+
 const onlineCount = computed(() => nodes.value.filter((n) => n.status === 'online').length)
 const offlineCount = computed(() => Math.max(0, nodes.value.length - onlineCount.value))
 
@@ -254,6 +363,105 @@ onUnmounted(() => clearInterval(timer))
       <h3>待处理</h3>
       <div class="value">{{ issueCount }}</div>
       <div class="sub">{{ issueCount ? '点击下方列表处理' : '系统正常' }}</div>
+    </div>
+  </div>
+
+  <!-- Today hourly traffic curve -->
+  <div class="panel dash-traffic" v-if="diag">
+    <div class="panel-hd">
+      <div>
+        <h2>今日流量</h2>
+        <div class="muted" style="font-size:12px;margin-top:3px">
+          按小时 · 本地 0–23 点 · 总计 {{ formatBytes(todayTotal) }}
+        </div>
+      </div>
+      <div class="dash-chart-hover mono" v-if="chartHover">
+        <strong>{{ hourLabel(chartHover.hour) }}</strong>
+        <span>{{ formatBytes(chartHover.total) }}</span>
+        <span class="muted">↓ {{ formatBytes(chartHover.down) }} · ↑ {{ formatBytes(chartHover.up) }}</span>
+      </div>
+      <div class="muted dash-chart-hover" v-else style="font-size:12px">悬停查看各小时</div>
+    </div>
+    <div class="panel-bd dash-chart-wrap">
+      <svg
+        class="dash-chart"
+        viewBox="0 0 720 200"
+        preserveAspectRatio="none"
+        @mousemove="onChartMove"
+        @mouseleave="onChartLeave"
+        role="img"
+        aria-label="今日按小时流量曲线"
+      >
+        <!-- grid + axes -->
+        <line
+          v-for="t in yTicks"
+          :key="'yg' + t.v"
+          :x1="chartLayout.padL"
+          :x2="720 - chartLayout.padR"
+          :y1="t.y"
+          :y2="t.y"
+          class="dash-chart-grid"
+        />
+        <line
+          :x1="chartLayout.padL"
+          :y1="chartLayout.padT"
+          :x2="chartLayout.padL"
+          :y2="200 - chartLayout.padB"
+          class="dash-chart-axis"
+        />
+        <line
+          :x1="chartLayout.padL"
+          :y1="200 - chartLayout.padB"
+          :x2="720 - chartLayout.padR"
+          :y2="200 - chartLayout.padB"
+          class="dash-chart-axis"
+        />
+        <text
+          v-for="t in yTicks"
+          :key="'yl' + t.v"
+          :x="chartLayout.padL - 8"
+          :y="t.y + 3"
+          class="dash-chart-label"
+          text-anchor="end"
+        >{{ t.label }}</text>
+        <text
+          v-for="h in xTicks"
+          :key="'xl' + h"
+          :x="chartX(h)"
+          :y="200 - 8"
+          class="dash-chart-label"
+          text-anchor="middle"
+        >{{ h }}</text>
+        <!-- area + line -->
+        <path :d="chartAreaPath" class="dash-chart-area" />
+        <path :d="chartLinePath" class="dash-chart-line" fill="none" />
+        <!-- points -->
+        <circle
+          v-for="p in hourlyPoints"
+          :key="'p' + p.hour"
+          :cx="chartX(p.hour)"
+          :cy="chartY(p.total)"
+          r="2.5"
+          class="dash-chart-dot"
+          :class="{ active: chartHover && chartHover.hour === p.hour }"
+        />
+        <!-- hover guide -->
+        <template v-if="chartHover">
+          <line
+            :x1="chartX(chartHover.hour)"
+            :x2="chartX(chartHover.hour)"
+            :y1="chartLayout.padT"
+            :y2="200 - chartLayout.padB"
+            class="dash-chart-guide"
+          />
+          <circle
+            :cx="chartX(chartHover.hour)"
+            :cy="chartY(chartHover.total)"
+            r="4.5"
+            class="dash-chart-dot active"
+          />
+        </template>
+      </svg>
     </div>
   </div>
 
@@ -562,5 +770,71 @@ onUnmounted(() => clearInterval(timer))
 .dash-node-table td,
 .dash-node-table th {
   padding: 9px 12px;
+}
+
+.dash-traffic .panel-hd {
+  align-items: flex-start;
+}
+.dash-chart-hover {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+.dash-chart-hover strong {
+  color: var(--text);
+  font-weight: 650;
+}
+.dash-chart-wrap {
+  padding: 4px 12px 12px;
+}
+.dash-chart {
+  width: 100%;
+  height: 200px;
+  display: block;
+  cursor: crosshair;
+}
+.dash-chart-grid {
+  stroke: var(--border-line);
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+  opacity: 0.9;
+}
+.dash-chart-axis {
+  stroke: var(--border-strong, var(--border-line));
+  stroke-width: 1.2;
+}
+.dash-chart-label {
+  fill: var(--text-muted, var(--text-secondary));
+  font-size: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+.dash-chart-area {
+  fill: var(--accent-soft);
+}
+.dash-chart-line {
+  stroke: var(--accent);
+  stroke-width: 2.2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.dash-chart-dot {
+  fill: var(--bg-surface, #fff);
+  stroke: var(--accent);
+  stroke-width: 1.6;
+  opacity: 0.55;
+}
+.dash-chart-dot.active {
+  opacity: 1;
+  fill: var(--accent);
+  stroke: var(--accent);
+}
+.dash-chart-guide {
+  stroke: var(--accent);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  opacity: 0.45;
 }
 </style>

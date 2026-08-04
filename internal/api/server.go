@@ -1579,6 +1579,10 @@ func (s *Server) diagnose(c *gin.Context) {
 	dash, _ := s.store.Dashboard()
 	todayTotal := dash.TodayUp + dash.TodayDown
 	monthTotal := dash.MonthUp + dash.MonthDown
+	hourly, _ := s.store.TodayHourlyTraffic()
+	if hourly == nil {
+		hourly = []model.HourlyTrafficPoint{}
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"version":            s.Version,
 		"backbone_user":      bbUser,
@@ -1609,7 +1613,8 @@ func (s *Server) diagnose(c *gin.Context) {
 			"total_users":    dash.TotalUsers,
 			"active_users":   dash.ActiveUsers,
 		},
-		"topology_hint": "手机 ──mierus──► 前置(tcp_forward) ──TCP──► 落地 mita ──► 家宽出口",
+		"traffic_hourly": hourly,
+		"topology_hint":  "手机 ──mierus──► 前置(tcp_forward) ──TCP──► 落地 mita ──► 家宽出口",
 	})
 }
 

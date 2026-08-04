@@ -1113,6 +1113,54 @@ func (s *Store) Dashboard() (model.DashboardStats, error) {
 	return st, nil
 }
 
+// TodayHourlyTraffic returns 24 local-hour buckets (0–23) for the current local calendar day.
+// Traffic is stored in UTC hour keys; we map each local hour to its UTC key and sum.
+func (s *Store) TodayHourlyTraffic() ([]model.HourlyTrafficPoint, error) {
+	nowLocal := time.Now().Local()
+	dayStart := time.Date(nowLocal.Year(), nowLocal.Month(), nowLocal.Day(), 0, 0, 0, 0, nowLocal.Location())
+	dayEnd := dayStart.Add(24 * time.Hour)
+	startUTC := dayStart.UTC().Format(time.RFC3339)
+	endUTC := dayEnd.UTC().Format(time.RFC3339)
+
+	rows, err := s.db.Query(
+		`SELECT hour, COALESCE(SUM(up_bytes),0), COALESCE(SUM(down_bytes),0)
+		 FROM traffic_hourly WHERE hour >= ? AND hour < ? GROUP BY hour`,
+		startUTC, endUTC,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	byUTC := map[string][2]int64{}
+	for rows.Next() {
+		var hour string
+		var up, down int64
+		if err := rows.Scan(&hour, &up, &down); err != nil {
+			return nil, err
+		}
+		byUTC[hour] = [2]int64{up, down}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	out := make([]model.HourlyTrafficPoint, 24)
+	for h := 0; h < 24; h++ {
+		t := time.Date(dayStart.Year(), dayStart.Month(), dayStart.Day(), h, 0, 0, 0, dayStart.Location())
+		key := t.UTC().Truncate(time.Hour).Format(time.RFC3339)
+		pair := byUTC[key]
+		up, down := pair[0], pair[1]
+		out[h] = model.HourlyTrafficPoint{
+			Hour:  h,
+			Up:    up,
+			Down:  down,
+			Total: up + down,
+		}
+	}
+	return out, nil
+}
+
 func (s *Store) TodayTrafficByUser(userID int64) (up, down int64) {
 	day := time.Now().UTC().Truncate(24 * time.Hour).Format(time.RFC3339)
 	_ = s.db.QueryRow(`SELECT COALESCE(SUM(up_bytes),0), COALESCE(SUM(down_bytes),0) FROM traffic_hourly WHERE user_id=? AND hour >= ?`, userID, day).Scan(&up, &down)
