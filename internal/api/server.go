@@ -745,13 +745,31 @@ func (s *Server) listNodes(c *gin.Context) {
 		// Detect PANEL_URL drift vs settings; offline nodes get a copy-paste fix command.
 		wantPU := s.currentPanelURLSetting()
 		if wantPU != "" {
-			if no.AgentPanelURL != "" && !panelURLEqual(no.AgentPanelURL, wantPU) {
+			alreadyOK := no.AgentPanelURL != "" && panelURLEqual(no.AgentPanelURL, wantPU)
+			if alreadyOK {
+				// Agent already points at settings — don't show sticky "纠正中" badges.
+				sticky := no.PanelURLPending || no.PanelURLStatus == "pending" || no.PanelURLStatus == "error"
+				no.PanelURLMismatch = false
+				no.PanelURLPending = false
+				no.PanelURLStatus = "ok"
+				no.PanelURLError = ""
+				no.PanelURLTarget = wantPU
+				// Drop stale in-memory job so heartbeat stops re-pushing.
+				s.clearPanelURLJob(n.ID)
+				if sticky {
+					_ = s.store.HeartbeatEx(n.ID, "", "", "", map[string]string{
+						"panel_url_status": "ok",
+						"panel_url_error":  "",
+						"panel_url_target": wantPU,
+					})
+				}
+			} else if no.AgentPanelURL != "" && !panelURLEqual(no.AgentPanelURL, wantPU) {
 				no.PanelURLMismatch = true
 				if no.PanelURLTarget == "" {
 					no.PanelURLTarget = wantPU
 				}
 			}
-			// Always provide offline repair one-liner (uses stored token).
+			// Offline / mismatch repair one-liner (uses stored token).
 			if tok := strings.TrimSpace(n.AgentToken); tok != "" {
 				role := n.Role
 				if role == "" {
@@ -3348,54 +3366,16 @@ func (s *Server) buildInstallCmd(c *gin.Context, n *model.Node) installInfo {
 	if role == "" {
 		role = "exit"
 	}
+	// Agent-only one-liner (no ufw/firewall-cmd noise).
 	cmd := fmt.Sprintf(
 		"curl -fsSL https://raw.githubusercontent.com/cheesydui-cloud/mieru/main/scripts/install-agent.sh | bash -s -- --panel-url %s --node-id %s --token %s --role %s",
 		base, n.ID, n.AgentToken, role,
 	)
-	// firewall + install one-liner for operator paste
-	fw := ""
-	if n.Role == model.RoleRelay || n.Role == model.RoleEntry {
-		min, max := n.PortMin, n.PortMax
-		if min <= 0 {
-			min = n.ListenPort
-		}
-		if max <= 0 {
-			max = min
-		}
-		if min > 0 {
-			if max > min {
-				fw = fmt.Sprintf(
-					"# 防火墙放行前置端口池 %d-%d（按实际防火墙二选一）\n"+
-						"ufw allow %d:%d/tcp || true\n"+
-						"# firewall-cmd --permanent --add-port=%d-%d/tcp && firewall-cmd --reload\n",
-					min, max, min, max, min, max,
-				)
-			} else {
-				fw = fmt.Sprintf(
-					"# 防火墙放行端口 %d\nufw allow %d/tcp || true\n",
-					min, min,
-				)
-			}
-		}
-	} else if n.Role == model.RoleExit || n.Role == model.RoleHybrid {
-		p := n.MitaPrimaryPort()
-		if p > 0 {
-			fw = fmt.Sprintf(
-				"# 防火墙放行落地 mita 端口 %d（若前置经公网连落地才需要；同机房内网可跳过）\n"+
-					"ufw allow %d/tcp || true\n",
-				p, p,
-			)
-		}
-	}
-	full := cmd
-	if fw != "" {
-		full = fw + "\n# 安装 Agent\n" + cmd
-	}
-	hint := "在对应 Linux 节点上执行。含防火墙放行说明 + 安装命令。请先在「设置」填写面板地址。"
+	hint := "在对应 Linux 节点上整行粘贴执行即可安装/升级 Agent。请先在「设置」填写面板公网地址。"
 	if s.store.PanelBaseURL() == "" {
 		hint = "尚未配置面板地址，当前用浏览器访问地址生成命令。生产环境请到「设置」填写固定面板地址。"
 	}
-	return installInfo{PanelURL: base, Cmd: full, Hint: hint}
+	return installInfo{PanelURL: base, Cmd: cmd, Hint: hint}
 }
 
 // publicBrand returns panel display name for unauthenticated pages (login, title, favicon).
@@ -4305,14 +4285,15 @@ func (s *Server) agentHeartbeat(c *gin.Context) {
 			}
 		}
 	} else if wantPanel != "" && agentPanelURL != "" && panelURLEqual(agentPanelURL, wantPanel) {
-		if job := s.peekPanelURLJob(req.NodeID); job != nil && panelURLEqual(job.URL, wantPanel) {
+		// URL already correct: drop job + sticky pending/error meta.
+		if job := s.peekPanelURLJob(req.NodeID); job != nil {
 			s.clearPanelURLJob(req.NodeID)
-			_ = s.store.HeartbeatEx(req.NodeID, "", "", "", map[string]string{
-				"panel_url_status": "ok",
-				"panel_url_error":  "",
-				"panel_url_target": wantPanel,
-			})
 		}
+		_ = s.store.HeartbeatEx(req.NodeID, "", "", "", map[string]string{
+			"panel_url_status": "ok",
+			"panel_url_error":  "",
+			"panel_url_target": wantPanel,
+		})
 	}
 	// Panel URL rewrite: keep delivering until agent reports success.
 	var urlJob *panelURLJob

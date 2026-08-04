@@ -11,7 +11,7 @@
 set -euo pipefail
 
 REPO="${MIERU_REPO:-cheesydui-cloud/mieru}"
-# 默认跟随 GitHub latest；也可 MIERU_VERSION=v0.5.13 钉死版本
+# 默认跟随 GitHub latest；也可 MIERU_VERSION=v0.5.14 钉死版本
 VERSION="${MIERU_VERSION:-}"
 PREFIX="${MIERU_PREFIX:-/usr/local}"
 # Agent has its own install dir — never overwrite panel's /opt/mieru-panel
@@ -35,7 +35,7 @@ usage() {
   bash install-agent.sh --panel-url URL --node-id ID --token TOKEN [--role exit|entry|relay|hybrid]
 
 环境变量:
-  MIERU_VERSION=v0.5.13   钉死版本（默认拉 GitHub latest）
+  MIERU_VERSION=v0.5.14   钉死版本（默认拉 GitHub latest）
 EOF
 }
 
@@ -103,7 +103,7 @@ resolve_version() {
       | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1) || true
   fi
   if [[ -z "$tag" ]]; then
-    tag="v0.5.13"
+    tag="v0.5.14"
     echo "==> 无法查询 latest，回退 ${tag}"
   fi
   VERSION="$tag"
@@ -325,7 +325,7 @@ if [[ "$HB_CODE" == "200" ]]; then
 elif [[ "$HB_CODE" == "401" ]]; then
   HB_RESULT="FAIL 401 unauthorized — node_id 或 token 不匹配，请重新复制安装命令"
 elif [[ "$HB_CODE" == "000" ]]; then
-  HB_RESULT="FAIL 无法连接面板 — 检查面板地址/防火墙/安全组是否放行 8080"
+  HB_RESULT="FAIL 无法连接面板 — 检查面板地址/安全组/网络是否可达"
 else
   HB_RESULT="FAIL HTTP ${HB_CODE} body=${HB_BODY}"
 fi

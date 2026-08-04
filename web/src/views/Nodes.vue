@@ -522,7 +522,7 @@ function upgradeRowHint(n) {
     return `面板地址不一致：${from} → ${to}`
   }
   if (n.status === 'offline') {
-    return '离线：请在节点机执行「复制修复命令」改面板地址'
+    return '离线：SSH 执行「复制修复命令」或「安装 Agent」'
   }
   if (n.config_stale) {
     return `配置未生效 面板v${n.config_version}/Agent v${n.agent_config_version || '?'}`
@@ -845,7 +845,7 @@ onUnmounted(() => {
                 {{ n.panel_url_pending ? '同步中…' : '同步地址' }}
               </button>
               <button
-                v-if="n.status === 'offline' || n.panel_url_mismatch"
+                v-if="n.status === 'offline'"
                 class="btn btn-link btn-sm"
                 :disabled="!n.panel_url_fix_cmd"
                 title="复制 SSH 一键修复命令（重装 agent 指向当前面板）"
@@ -853,7 +853,7 @@ onUnmounted(() => {
               >
                 复制修复命令
               </button>
-              <button class="btn btn-link btn-sm" @click="showInstall(n.id)">安装+防火墙</button>
+              <button class="btn btn-link btn-sm" @click="showInstall(n.id)">安装 Agent</button>
               <button class="btn btn-link-danger btn-sm" @click="remove(n)">删除</button>
             </div>
           </td>
@@ -1097,22 +1097,22 @@ onUnmounted(() => {
           <dd class="mono">{{ installInfo.panel_url }}</dd>
         </div>
         <div class="field">
-          <label>安装 + 防火墙（整段复制到目标机执行）</label>
+          <label>安装 Agent（整行复制到目标机执行）</label>
           <textarea
             readonly
-            rows="8"
+            rows="3"
             class="mono"
             style="width:100%;resize:vertical;background:var(--bg-elevated);border:1px solid var(--border-line);border-radius:6px;padding:12px"
             :value="installInfo.install_cmd"
           />
           <p class="help-text" style="margin-top:8px">
-            {{ installInfo.hint || '先放行端口，再装 Agent；装完回来看节点是否在线。' }}
+            {{ installInfo.hint || '在目标 Linux 上执行安装命令；装完回来看节点是否在线。' }}
           </p>
         </div>
       </div>
       <div class="modal-ft">
         <button class="btn btn-ghost" @click="installShow = false">关闭</button>
-        <button class="btn btn-primary" @click="copy(installInfo.install_cmd)">复制安装+防火墙</button>
+        <button class="btn btn-primary" @click="copy(installInfo.install_cmd)">复制安装命令</button>
       </div>
     </div>
   </div>
