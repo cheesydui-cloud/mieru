@@ -399,8 +399,7 @@ onUnmounted(() => {
           />
           <div v-else class="brand-mark">{{ brandMarkLetter(panelTitle) }}</div>
           <div class="brand-text">
-            <strong>{{ panelTitle }}</strong>
-            <span>{{ t.accountInfo }}</span>
+            <strong class="brand-title" :title="panelTitle">{{ panelTitle }}</strong>
             <i class="brand-rule" aria-hidden="true" />
           </div>
         </div>
@@ -673,17 +672,41 @@ onUnmounted(() => {
   border-bottom: 0;
 }
 
+.user-info-top .brand {
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  max-width: calc(100% - 160px);
+}
 .user-info-top .brand-text {
   position: relative;
-  padding-bottom: 8px;
+  min-width: 0;
+  max-width: 100%;
+  gap: 0;
+  padding-bottom: 0;
+}
+/* full name on query page — no sidebar ellipsis */
+.user-info-top .brand-title {
+  display: block;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  color: var(--text);
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
+  max-width: none;
+  word-break: break-word;
 }
 .user-info-top .brand-rule {
   display: block;
-  width: 36px;
-  height: 2px;
-  margin-top: 8px;
+  width: 100%;
+  max-width: 100%;
+  height: 3px;
+  margin-top: 7px;
   background: var(--accent);
-  border-radius: 0;
+  border-radius: 1px;
 }
 .user-info-page .card,
 .user-info-page .panel {
