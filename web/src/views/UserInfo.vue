@@ -401,6 +401,7 @@ onUnmounted(() => {
           <div class="brand-text">
             <strong>{{ panelTitle }}</strong>
             <span>{{ t.accountInfo }}</span>
+            <i class="brand-rule" aria-hidden="true" />
           </div>
         </div>
         <div class="row-actions" style="align-items:center;gap:8px">
@@ -670,5 +671,26 @@ onUnmounted(() => {
 }
 .entry-row:last-child {
   border-bottom: 0;
+}
+
+.user-info-top .brand-text {
+  position: relative;
+  padding-bottom: 8px;
+}
+.user-info-top .brand-rule {
+  display: block;
+  width: 36px;
+  height: 2px;
+  margin-top: 8px;
+  background: var(--accent);
+  border-radius: 0;
+}
+.user-info-page .card,
+.user-info-page .panel {
+  border-radius: 4px;
+  box-shadow: none;
+}
+.user-info-page .ring-wrap {
+  border-radius: 4px;
 }
 </style>

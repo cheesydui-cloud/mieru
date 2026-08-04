@@ -3240,15 +3240,23 @@ func (s *Server) publicUserInfo(c *gin.Context) {
 	if strings.TrimSpace(brandName) == "" {
 		brandName = "Mieru"
 	}
+	brandNameEN, _ := s.store.GetSetting("panel_name_en")
+	brandNameEN = strings.TrimSpace(brandNameEN)
 	locale, _ := s.store.GetSetting("user_info_locale")
 	locale = strings.ToLower(strings.TrimSpace(locale))
 	if locale != "en" {
 		locale = "zh"
 	}
+	displayName := brandName
+	if locale == "en" && brandNameEN != "" {
+		displayName = brandNameEN
+	}
 
 	c.Header("Cache-Control", "no-store, no-cache, must-revalidate")
 	c.JSON(http.StatusOK, gin.H{
-		"panel_name":       brandName,
+		"panel_name":       displayName,
+		"panel_name_zh":    brandName,
+		"panel_name_en":    brandNameEN,
 		"user_info_locale": locale,
 		"username":   u.Username,
 		"status":     u.Status,
@@ -3398,11 +3406,12 @@ func (s *Server) buildInstallCmd(c *gin.Context, n *model.Node) installInfo {
 func (s *Server) publicBrand(c *gin.Context) {
 	c.Header("Cache-Control", "no-store, no-cache, must-revalidate")
 	c.Header("Pragma", "no-cache")
-	m, _ := s.store.GetSettings("panel_name", "panel_subtitle", "panel_favicon", "user_info_locale")
+	m, _ := s.store.GetSettings("panel_name", "panel_name_en", "panel_subtitle", "panel_favicon", "user_info_locale")
 	name := strings.TrimSpace(m["panel_name"])
 	if name == "" {
 		name = "Mieru"
 	}
+	nameEN := strings.TrimSpace(m["panel_name_en"])
 	sub := strings.TrimSpace(m["panel_subtitle"])
 	if sub == "" {
 		sub = "管理节点、用户、隧道与落地计量"
@@ -3413,6 +3422,7 @@ func (s *Server) publicBrand(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"panel_name":       name,
+		"panel_name_en":    nameEN,
 		"panel_subtitle":   sub,
 		"favicon_data":     strings.TrimSpace(m["panel_favicon"]),
 		"user_info_locale": locale,
@@ -3422,7 +3432,7 @@ func (s *Server) publicBrand(c *gin.Context) {
 
 func (s *Server) getSettings(c *gin.Context) {
 	m, err := s.store.GetSettings(
-		"panel_url", "panel_name", "panel_subtitle", "panel_favicon",
+		"panel_url", "panel_name", "panel_name_en", "panel_subtitle", "panel_favicon",
 		"user_info_locale",
 		configgen.SettingBackboneUser,
 		"cf_api_token", "cf_zone_id", "cf_proxied_default",
@@ -3439,6 +3449,7 @@ func (s *Server) getSettings(c *gin.Context) {
 	if name == "" {
 		name = "Mieru"
 	}
+	nameEN := strings.TrimSpace(m["panel_name_en"])
 	sub := strings.TrimSpace(m["panel_subtitle"])
 	jwtDefault := s.cfg.JWTSecret == "change-me-in-production-please" || s.cfg.JWTSecret == "change-me-in-production"
 	corsWide := len(s.cfg.CORSOrigins) == 1 && s.cfg.CORSOrigins[0] == "*"
@@ -3451,6 +3462,7 @@ func (s *Server) getSettings(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"panel_url":          panelURL,
 		"panel_name":         name,
+		"panel_name_en":      nameEN,
 		"panel_subtitle":     sub,
 		"panel_favicon":      strings.TrimSpace(m["panel_favicon"]),
 		"user_info_locale":   locale,
@@ -3483,6 +3495,7 @@ func (s *Server) putSettings(c *gin.Context) {
 	var req struct {
 		PanelURL      string `json:"panel_url"`
 		PanelName     string `json:"panel_name"`
+		PanelNameEN   string `json:"panel_name_en"`
 		PanelSubtitle string `json:"panel_subtitle"`
 		PanelFavicon  string `json:"panel_favicon"` // data URL or empty to clear
 		// User query page language: "zh" | "en"
@@ -3516,6 +3529,14 @@ func (s *Server) putSettings(c *gin.Context) {
 		name = string(rn[:32])
 	}
 	if err := s.store.SetSetting("panel_name", name); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	nameEN := strings.Join(strings.Fields(strings.TrimSpace(req.PanelNameEN)), " ")
+	if rn := []rune(nameEN); len(rn) > 48 {
+		nameEN = string(rn[:48])
+	}
+	if err := s.store.SetSetting("panel_name_en", nameEN); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -3589,6 +3610,7 @@ func (s *Server) putSettings(c *gin.Context) {
 		"ok":               true,
 		"panel_url":        url,
 		"panel_name":       name,
+		"panel_name_en":    nameEN,
 		"panel_subtitle":   sub,
 		"panel_favicon":    fav,
 		"user_info_locale": localeOut,

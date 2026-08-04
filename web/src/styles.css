@@ -13,7 +13,7 @@
   --text-muted: #8b93a0;
   --accent: #0f766e;
   --accent-hover: #0d5f59;
-  --accent-soft: rgba(15, 118, 110, 0.09);
+  --accent-soft: rgba(15, 118, 110, 0.06);
   --link: #0f766e;
   --link-hover: #0d5f59;
   --success: #15803d;
@@ -23,11 +23,11 @@
   --danger: #b91c1c;
   --danger-soft: #fef2f2;
   --info: #0f766e;
-  --radius: 8px;
-  --radius-sm: 6px;
+  --radius: 4px;
+  --radius-sm: 3px;
   --shadow: none;
-  --shadow-md: 0 10px 28px rgba(15, 23, 42, 0.10);
-  --font: "Inter", "PingFang SC", "HarmonyOS Sans", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  --shadow-md: none;
+  --font: "SF Pro Text", "PingFang SC", "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
   --mono: "SF Mono", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --sidebar: 228px;
   --topbar-h: 52px;
@@ -91,7 +91,7 @@ button, input, select, textarea {
   --mark-s: 36px;
   width: var(--mark-s);
   height: var(--mark-s);
-  border-radius: calc(var(--mark-s) * 0.146); /* ≈ side / (φ²·3) → soft 5.25px */
+  border-radius: 3px; /* utilitarian mark, not soft product logo */
   background: var(--accent);
   border: 1px solid var(--accent-hover);
   box-shadow: none;
@@ -787,7 +787,7 @@ table.data a.name-link:hover {
   gap: 5px;
   height: 22px;
   padding: 0 8px;
-  border-radius: 4px;
+  border-radius: 3px;
   font-size: 12px;
   border: 1px solid var(--border);
   color: var(--text-secondary);
@@ -839,7 +839,7 @@ table.data a.name-link:hover {
   width: min(400px, 100%);
   background: var(--bg-surface);
   border: 1px solid var(--border-line);
-  border-radius: 8px;
+  border-radius: 4px;
   padding: 32px 28px;
   box-shadow: var(--shadow-md);
 }
@@ -894,7 +894,7 @@ table.data a.name-link:hover {
   width: min(560px, 100%);
   background: var(--bg-surface);
   border: 1px solid var(--border-line);
-  border-radius: 8px;
+  border-radius: 4px;
   box-shadow: var(--shadow-md);
 }
 
@@ -952,7 +952,7 @@ table.data a.name-link:hover {
   width: 100%;
   margin-top: 10px;
   padding: 9px 12px;
-  border-radius: 8px;
+  border-radius: 4px;
   font-size: 13px;
   font-weight: 550;
   line-height: 1.45;
@@ -1188,7 +1188,7 @@ code.mono {
   z-index: 1200;
   background: #fff;
   border: 1px solid var(--border-line);
-  border-radius: 8px;
+  border-radius: 4px;
   min-width: 128px;
   box-shadow: 0 10px 28px rgba(15, 23, 42, 0.14);
   padding: 4px 0;
@@ -1276,7 +1276,7 @@ code.mono {
 .stat-chip {
   border: 1px solid var(--border-line);
   background: var(--bg-surface);
-  border-radius: 999px;
+  border-radius: 3px;
   padding: 6px 12px;
   font-size: 12.5px;
   color: var(--text-secondary);
@@ -1391,7 +1391,7 @@ code.mono {
   width: min(440px, 100%);
   background: var(--bg-surface, #fff);
   border: 1px solid var(--border-line, #e2e8f0);
-  border-radius: 14px;
+  border-radius: 4px;
   box-shadow: 0 20px 50px rgba(15, 23, 42, 0.2);
   overflow: hidden;
 }
@@ -1445,7 +1445,7 @@ code.mono {
   max-height: min(80vh, 640px);
   background: var(--bg-surface, #fff);
   border: 1px solid var(--border-line, #e2e8f0);
-  border-radius: 14px;
+  border-radius: 4px;
   box-shadow: 0 20px 50px rgba(15, 23, 42, 0.18);
   display: flex;
   flex-direction: column;
@@ -1636,10 +1636,61 @@ code.mono {
   gap: 4px;
   padding: 2px 4px 2px 8px;
   border: 1px solid var(--border-line);
-  border-radius: 999px;
+  border-radius: 3px;
   background: var(--bg-surface);
 }
 .locale-toggle .btn {
-  border-radius: 999px;
+  border-radius: 3px;
   min-width: 44px;
+}
+
+/* ops-flat v0.5.21 — less product/AI chrome, same layout */
+.panel,
+.card,
+.modal,
+.more-menu,
+.ann-popup,
+.ann-list {
+  box-shadow: none !important;
+}
+.panel-hd h2 {
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.btn {
+  border-radius: var(--radius-sm);
+  font-weight: 500;
+}
+.btn-primary {
+  box-shadow: none;
+}
+.stat-chips .stat-chip,
+.locale-toggle,
+.page-tabs .page-tab {
+  border-radius: 3px;
+}
+.brand strong {
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.sidebar .nav a {
+  border-radius: 3px;
+}
+.action-feedback {
+  border-radius: 3px;
+}
+.dash-chart-area {
+  fill: rgba(15, 118, 110, 0.08);
+}
+.dash-chart-line {
+  stroke-width: 1.75;
+}
+.dash-chart-dot {
+  r: 2;
+}
+input,
+select,
+textarea,
+.input-filter {
+  border-radius: var(--radius-sm);
 }

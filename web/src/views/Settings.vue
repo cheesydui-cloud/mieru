@@ -29,6 +29,7 @@ const corsWide = ref(false)
 const form = reactive({
   panel_url: '',
   panel_name: '',
+  panel_name_en: '',
   panel_subtitle: '',
   panel_favicon: '',
   user_info_locale: 'zh',
@@ -122,6 +123,7 @@ async function load() {
     ])
     form.panel_url = s.panel_url || ''
     form.panel_name = s.panel_name || 'Mieru Panel'
+    form.panel_name_en = s.panel_name_en || ''
     form.panel_subtitle = s.panel_subtitle || ''
     form.panel_favicon = s.panel_favicon || ''
     form.user_info_locale = s.user_info_locale === 'en' ? 'en' : 'zh'
@@ -399,6 +401,7 @@ function brandPayload() {
   return {
     panel_url: form.panel_url,
     panel_name: form.panel_name,
+    panel_name_en: form.panel_name_en || '',
     panel_subtitle: form.panel_subtitle,
     panel_favicon: form.panel_favicon,
     user_info_locale: form.user_info_locale === 'en' ? 'en' : 'zh',
@@ -409,6 +412,7 @@ function applySettingsResponse(res, { touchBrand = false, touchCF = false } = {}
   if (touchBrand) {
     form.panel_url = res.panel_url
     form.panel_name = res.panel_name
+    form.panel_name_en = res.panel_name_en || ''
     form.panel_subtitle = res.panel_subtitle || ''
     form.panel_favicon = res.panel_favicon || ''
     if (res.user_info_locale) form.user_info_locale = res.user_info_locale === 'en' ? 'en' : 'zh'
@@ -733,9 +737,16 @@ onMounted(load)
       </div>
       <div class="field" style="margin-bottom:14px">
         <label>面板名称</label>
-        <input v-model="form.panel_name" placeholder="例如：微动传媒" />
+        <input v-model="form.panel_name" placeholder="例如：专线控制台" />
         <p class="help-text" style="margin-top:6px">
-          显示在左侧栏、登录页与浏览器标签。默认图标字母固定为 M。
+          显示在左侧栏、登录页与浏览器标签。默认图标字母固定为 M。自定义名称不会随语言自动翻译。
+        </p>
+      </div>
+      <div class="field" style="margin-bottom:14px">
+        <label>英文面板名称（可选）</label>
+        <input v-model="form.panel_name_en" placeholder="e.g. Dedicated Line Console" />
+        <p class="help-text" style="margin-top:6px">
+          查询页语言为 English 时使用；留空则英文模式下仍显示中文名称。
         </p>
       </div>
       <div class="field" style="margin-bottom:14px">
