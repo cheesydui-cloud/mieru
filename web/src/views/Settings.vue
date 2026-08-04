@@ -23,7 +23,6 @@ const migFile = ref(null)
 const migPreview = ref(null)
 const audit = ref([])
 const auditQ = ref('')
-const auditAction = ref('')
 const securityHints = ref([])
 const jwtDefault = ref(false)
 const corsWide = ref(false)
@@ -49,25 +48,76 @@ const pw = reactive({
   username: '',
 })
 
+const AUDIT_NOISE = new Set([
+  'login_fail',
+  'auto_rebuild',
+  'auto_rebuild_fail',
+  'login',
+])
+
+const actionLabel = {
+  rebuild_all: '重建配置',
+  auto_rebuild: '自动重建',
+  'node.upgrade': '升级节点',
+  'node.upgrade_all': '全部升级',
+  'node.sync_panel_url': '同步面板地址',
+  'node.sync_panel_url_all': '全部同步地址',
+  create_node: '新建节点',
+  update_node: '更新节点',
+  delete_node: '删除节点',
+  create_user: '开户',
+  delete_user: '删除用户',
+  renew_user: '续期',
+  add_traffic: '加流量',
+  toggle_user: '启停用户',
+  reset_password: '重置密码',
+  reset_sub: '重置订阅',
+  batch_users: '批量用户',
+  create_route: '新建隧道',
+  update_settings: '更新设置',
+  export_backup: '导出备份',
+  export_migration: '导出迁移包',
+  import_migration: '导入迁移包',
+  change_password: '改密码',
+  login: '登录',
+  login_fail: '登录失败',
+  create_announcement: '发公告',
+  update_announcement: '改公告',
+  delete_announcement: '删公告',
+}
+
+function fmtAction(a) {
+  const raw = String(a || '')
+  return actionLabel[raw] || raw
+}
+
+function fmtDetail(d) {
+  const s = String(d || '').trim()
+  if (!s || s === '—') return '—'
+  if (s.length > 72) return s.slice(0, 70) + '…'
+  return s
+}
+
 const filteredAudit = computed(() => {
   let list = audit.value || []
   const q = auditQ.value.trim().toLowerCase()
-  const act = auditAction.value.trim().toLowerCase()
-  if (act) list = list.filter((a) => String(a.action || '').toLowerCase().includes(act))
-  if (q) {
+  // Hide routine noise unless user is searching
+  if (!q) {
+    list = list.filter((a) => !AUDIT_NOISE.has(String(a.action || '')))
+  } else {
     list = list.filter((a) => {
-      const hay = `${a.actor || ''} ${a.action || ''} ${a.target || ''} ${a.detail || ''}`.toLowerCase()
+      const hay = `${a.actor || ''} ${a.action || ''} ${fmtAction(a.action)} ${a.target || ''} ${a.detail || ''}`.toLowerCase()
       return hay.includes(q)
     })
   }
-  return list
+  return list.slice(0, 50)
 })
 
 async function load() {
   try {
     const [s, logs] = await Promise.all([
       api('/api/admin/settings'),
-      api('/api/admin/audit?limit=200').catch(() => []),
+      api('/api/admin/audit?limit=80').catch(() => []),
     ])
     form.panel_url = s.panel_url || ''
     form.panel_name = s.panel_name || 'Mieru Panel'
@@ -977,22 +1027,20 @@ onMounted(load)
       <div>
         <h2>操作审计</h2>
         <div class="muted" style="font-size:12px;margin-top:3px">
-          最近 200 条 · 支持关键词 / 动作过滤
+          重要操作 · 默认隐藏登录失败 / 启动自动重建
         </div>
       </div>
       <button class="btn btn-ghost btn-sm" @click="load">刷新</button>
     </div>
     <div class="panel-bd">
       <div class="panel-toolbar" style="padding:12px 16px 0;gap:8px;flex-wrap:wrap">
-        <input class="input-filter" v-model="auditQ" placeholder="搜索 操作者/动作/对象/详情" />
-        <input class="input-filter" v-model="auditAction" placeholder="动作含… 如 rebuild" style="min-width:140px" />
+        <input class="input-filter" v-model="auditQ" placeholder="搜索…" />
       </div>
       <table class="data" v-if="filteredAudit.length">
         <thead>
           <tr>
             <th>时间</th>
-            <th>操作者</th>
-            <th>动作</th>
+            <th>操作</th>
             <th>对象</th>
             <th>详情</th>
           </tr>
@@ -1000,14 +1048,16 @@ onMounted(load)
         <tbody>
           <tr v-for="a in filteredAudit" :key="a.id">
             <td class="mono" style="font-size:12px;white-space:nowrap">{{ fmtTime(a.created_at) }}</td>
-            <td>{{ a.actor }}</td>
-            <td class="mono">{{ a.action }}</td>
-            <td class="mono" style="font-size:12px">{{ a.target }}</td>
-            <td class="muted" style="font-size:12px">{{ a.detail || '—' }}</td>
+            <td>
+              <div>{{ fmtAction(a.action) }}</div>
+              <div class="muted" style="font-size:11px">{{ a.actor }}</div>
+            </td>
+            <td class="mono" style="font-size:12px">{{ a.target && a.target !== '*' ? a.target : '—' }}</td>
+            <td class="muted" style="font-size:12px" :title="a.detail || ''">{{ fmtDetail(a.detail) }}</td>
           </tr>
         </tbody>
       </table>
-      <div v-else class="empty">{{ audit.length ? '无匹配记录' : '暂无审计记录' }}</div>
+      <div v-else class="empty">{{ audit.length ? '无匹配记录（可搜索 login / rebuild 查看隐藏项）' : '暂无审计记录' }}</div>
     </div>
   </div>
 </template>

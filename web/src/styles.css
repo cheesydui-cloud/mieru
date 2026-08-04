@@ -92,8 +92,8 @@ button, input, select, textarea {
   width: var(--mark-s);
   height: var(--mark-s);
   border-radius: calc(var(--mark-s) * 0.146); /* ≈ side / (φ²·3) → soft 5.25px */
-  background: #0f172a;
-  border: 1px solid rgba(15, 23, 42, 0.9);
+  background: var(--accent);
+  border: 1px solid var(--accent-hover);
   box-shadow: none;
   display: grid;
   place-items: center;

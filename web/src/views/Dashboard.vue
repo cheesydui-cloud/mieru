@@ -46,6 +46,9 @@ const stats = computed(() => diag.value?.stats || {})
 const todayTotal = computed(() => Number(stats.value.today_total || 0))
 const todayUp = computed(() => Number(stats.value.today_up || 0))
 const todayDown = computed(() => Number(stats.value.today_down || 0))
+const monthTotal = computed(() => Number(stats.value.month_total || 0))
+const monthUp = computed(() => Number(stats.value.month_up || 0))
+const monthDown = computed(() => Number(stats.value.month_down || 0))
 
 const onlineCount = computed(() => nodes.value.filter((n) => n.status === 'online').length)
 const offlineCount = computed(() => Math.max(0, nodes.value.length - onlineCount.value))
@@ -219,8 +222,18 @@ onUnmounted(() => clearInterval(timer))
     </div>
   </div>
 
-  <!-- 4 primary KPIs -->
+  <!-- 4 primary KPIs: 总流量 · 今日 · 节点 · 待处理 -->
   <div class="grid-stats dash-kpi" v-if="diag">
+    <div class="card clickable" :class="monthTotal ? 'card-ok' : ''" @click="router.push('/users')">
+      <h3>总流量</h3>
+      <div class="value" style="font-size:20px">{{ formatBytes(monthTotal) }}</div>
+      <div class="sub">本月 · 每月 1 日 0 点重置 · ↓ {{ formatBytes(monthDown) }} · ↑ {{ formatBytes(monthUp) }}</div>
+    </div>
+    <div class="card clickable" @click="router.push('/users')">
+      <h3>今日流量</h3>
+      <div class="value" style="font-size:20px">{{ formatBytes(todayTotal) }}</div>
+      <div class="sub">↓ {{ formatBytes(todayDown) }} · ↑ {{ formatBytes(todayUp) }}</div>
+    </div>
     <div
       class="card clickable"
       :class="offlineCount === 0 && nodes.length ? 'card-ok' : offlineCount ? 'card-warn' : ''"
@@ -232,16 +245,6 @@ onUnmounted(() => clearInterval(timer))
       </div>
       <div class="sub" v-if="offlineCount">{{ offlineCount }} 离线</div>
       <div class="sub" v-else>全部在线</div>
-    </div>
-    <div class="card clickable" @click="router.push('/users')">
-      <h3>今日流量</h3>
-      <div class="value" style="font-size:20px">{{ formatBytes(todayTotal) }}</div>
-      <div class="sub">↓ {{ formatBytes(todayDown) }} · ↑ {{ formatBytes(todayUp) }}</div>
-    </div>
-    <div class="card clickable" @click="router.push('/routes')">
-      <h3>启用隧道</h3>
-      <div class="value">{{ diag.enabled_routes || 0 }}</div>
-      <div class="sub">{{ tunnelEdges.length }} 条拓扑边</div>
     </div>
     <div
       class="card clickable"

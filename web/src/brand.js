@@ -66,7 +66,7 @@ export function setFaviconFromName(_name = brand.name) {
     const ctx = canvas.getContext('2d')
     if (!ctx) return
     const r = Math.round(size / (phi * 4)) // ≈ 10
-    ctx.fillStyle = '#0f172a'
+    ctx.fillStyle = '#0f766e'
     ctx.beginPath()
     ctx.moveTo(r, 0)
     ctx.arcTo(size, 0, size, size, r)

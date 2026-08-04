@@ -405,6 +405,8 @@ type DashboardStats struct {
 	TotalUsers     int   `json:"total_users"`
 	TodayUp        int64 `json:"today_up"`
 	TodayDown      int64 `json:"today_down"`
+	MonthUp        int64 `json:"month_up"`
+	MonthDown      int64 `json:"month_down"`
 	UnhealthyNodes int   `json:"unhealthy_nodes"`
 }
 

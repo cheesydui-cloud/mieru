@@ -1578,6 +1578,7 @@ func (s *Server) diagnose(c *gin.Context) {
 
 	dash, _ := s.store.Dashboard()
 	todayTotal := dash.TodayUp + dash.TodayDown
+	monthTotal := dash.MonthUp + dash.MonthDown
 	c.JSON(http.StatusOK, gin.H{
 		"version":            s.Version,
 		"backbone_user":      bbUser,
@@ -1602,6 +1603,9 @@ func (s *Server) diagnose(c *gin.Context) {
 			"today_up":       dash.TodayUp,
 			"today_down":     dash.TodayDown,
 			"today_total":    todayTotal,
+			"month_up":       dash.MonthUp,
+			"month_down":     dash.MonthDown,
+			"month_total":    monthTotal,
 			"total_users":    dash.TotalUsers,
 			"active_users":   dash.ActiveUsers,
 		},

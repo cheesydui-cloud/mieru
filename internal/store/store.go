@@ -1103,8 +1103,13 @@ func (s *Store) Dashboard() (model.DashboardStats, error) {
 	_ = s.db.QueryRow(`SELECT COUNT(1) FROM nodes WHERE status IN (?,?)`, model.StatusOffline, model.StatusDegraded).Scan(&st.UnhealthyNodes)
 	_ = s.db.QueryRow(`SELECT COUNT(1) FROM users`).Scan(&st.TotalUsers)
 	_ = s.db.QueryRow(`SELECT COUNT(1) FROM users WHERE status=?`, model.StatusActive).Scan(&st.ActiveUsers)
+	// Day boundary: UTC midnight (same as historical today stats).
 	day := time.Now().UTC().Truncate(24 * time.Hour).Format(time.RFC3339)
 	_ = s.db.QueryRow(`SELECT COALESCE(SUM(up_bytes),0), COALESCE(SUM(down_bytes),0) FROM traffic_hourly WHERE hour >= ?`, day).Scan(&st.TodayUp, &st.TodayDown)
+	// Month-to-date: local calendar month (resets at local 00:00 on the 1st).
+	nowLocal := time.Now().Local()
+	monthStart := time.Date(nowLocal.Year(), nowLocal.Month(), 1, 0, 0, 0, 0, nowLocal.Location()).UTC().Format(time.RFC3339)
+	_ = s.db.QueryRow(`SELECT COALESCE(SUM(up_bytes),0), COALESCE(SUM(down_bytes),0) FROM traffic_hourly WHERE hour >= ?`, monthStart).Scan(&st.MonthUp, &st.MonthDown)
 	return st, nil
 }
 
