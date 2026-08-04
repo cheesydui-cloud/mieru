@@ -20,6 +20,10 @@ const installInfo = ref(null)
 const created = ref(null)
 const editingId = ref('')
 const saving = ref(false)
+const batchOpen = ref(false)
+const moreId = ref(null)
+const moreMenuStyle = ref({})
+const moreNode = computed(() => (nodes.value || []).find((n) => n.id === moreId.value) || null)
 
 const form = reactive({
   name: '',
@@ -501,33 +505,82 @@ function upgradeLabel(n) {
 }
 
 function upgradeRowHint(n) {
-  // Only show actionable / in-progress states.
-  // "已升至 vX" is redundant with the Agent column version.
+  // Short row meta only — long text goes to title tooltip / install modal.
   const st = n.upgrade_status || ''
-  if (st === 'error' && n.upgrade_error) return n.upgrade_error
-  if (st === 'pending' || n.upgrade_pending) {
-    return n.upgrade_target ? `排队 → v${n.upgrade_target}` : '升级排队中'
-  }
-  if (st === 'running') {
-    return n.upgrade_target ? `升级中 → v${n.upgrade_target}` : '升级中…'
-  }
+  if (st === 'error' && n.upgrade_error) return '升级失败'
+  if (st === 'pending' || n.upgrade_pending) return '升级排队'
+  if (st === 'running') return '升级中'
   const pu = n.panel_url_status || ''
-  if (pu === 'error' && n.panel_url_error) return `面板地址: ${n.panel_url_error}`
-  if (pu === 'pending' || n.panel_url_pending) {
-    return n.panel_url_target ? `纠正面板地址 → ${n.panel_url_target}` : '纠正面板地址中…'
-  }
-  if (n.panel_url_mismatch) {
-    const from = n.agent_panel_url || '旧地址'
-    const to = n.panel_url_target || '设置中的面板地址'
-    return `面板地址不一致：${from} → ${to}`
-  }
-  if (n.status === 'offline') {
-    return '离线：SSH 执行「复制修复命令」或「安装 Agent」'
-  }
-  if (n.config_stale) {
-    return `配置未生效 面板v${n.config_version}/Agent v${n.agent_config_version || '?'}`
-  }
+  if (pu === 'error') return '地址同步失败'
+  if (pu === 'pending' || n.panel_url_pending) return '同步地址中'
+  if (n.panel_url_mismatch) return '面板地址不一致'
+  if (n.apply_error) return '配置应用失败'
+  if (n.config_stale) return '配置未生效'
   return ''
+}
+
+function rowHintTone(n) {
+  const h = upgradeRowHint(n)
+  if (!h) return ''
+  if (h.includes('失败') || h.includes('不一致')) return 'err'
+  return 'warn'
+}
+
+function closeMore() {
+  moreId.value = null
+  moreMenuStyle.value = {}
+}
+
+function toggleMore(n, e) {
+  e?.stopPropagation?.()
+  if (moreId.value === n.id) {
+    closeMore()
+    return
+  }
+  moreId.value = n.id
+  batchOpen.value = false
+  const el = e?.currentTarget
+  if (!el?.getBoundingClientRect) {
+    moreMenuStyle.value = { position: 'fixed', right: '16px', top: '80px', zIndex: 1200 }
+    return
+  }
+  const rect = el.getBoundingClientRect()
+  const menuH = 220
+  const menuW = 148
+  const pad = 8
+  const openUp = rect.bottom + menuH + pad > window.innerHeight && rect.top > menuH + pad
+  let left = rect.right - menuW
+  if (left < pad) left = pad
+  if (left + menuW > window.innerWidth - pad) left = window.innerWidth - menuW - pad
+  const style = {
+    position: 'fixed',
+    left: `${Math.round(left)}px`,
+    zIndex: 1200,
+    minWidth: `${menuW}px`,
+  }
+  if (openUp) {
+    style.top = 'auto'
+    style.bottom = `${Math.round(window.innerHeight - rect.top + 4)}px`
+  } else {
+    style.top = `${Math.round(rect.bottom + 4)}px`
+    style.bottom = 'auto'
+  }
+  moreMenuStyle.value = style
+}
+
+function onDocPointerDown(e) {
+  const t = e.target
+  if (moreId.value != null) {
+    if (!t?.closest?.('.more-menu-float') && !t?.closest?.('.more-trigger')) closeMore()
+  }
+  if (batchOpen.value) {
+    if (!t?.closest?.('.dropdown')) batchOpen.value = false
+  }
+}
+
+function onWinReposition() {
+  if (moreId.value != null) closeMore()
+  batchOpen.value = false
 }
 
 function upgradeBusy(n) {
@@ -687,9 +740,15 @@ onMounted(() => {
   if (t === 'front' || t === 'exit') tab.value = t
   load()
   refreshTimer = setInterval(load, 5000)
+  document.addEventListener('pointerdown', onDocPointerDown, true)
+  window.addEventListener('resize', onWinReposition)
+  window.addEventListener('scroll', onWinReposition, true)
 })
 onUnmounted(() => {
   if (refreshTimer) clearInterval(refreshTimer)
+  document.removeEventListener('pointerdown', onDocPointerDown, true)
+  window.removeEventListener('resize', onWinReposition)
+  window.removeEventListener('scroll', onWinReposition, true)
 })
 </script>
 
@@ -701,6 +760,41 @@ onUnmounted(() => {
     :class="flash.kind"
     @click="flash.clear()"
   >{{ flash.msg }}</div>
+
+  <Teleport to="body">
+    <div
+      v-if="moreId != null && moreNode"
+      class="more-menu more-menu-float"
+      :style="moreMenuStyle"
+      @click.stop
+    >
+      <button type="button" @click="openEdit(moreNode); closeMore()">编辑</button>
+      <button type="button" @click="showInstall(moreNode.id); closeMore()">安装 Agent</button>
+      <button
+        type="button"
+        :disabled="upgradeBusy(moreNode) || moreNode.status === 'offline'"
+        @click="pushUpgrade(moreNode); closeMore()"
+      >
+        {{ upgradeLabel(moreNode) }}
+      </button>
+      <button
+        type="button"
+        :disabled="moreNode.status === 'offline' || moreNode.panel_url_pending"
+        @click="syncPanelURL(moreNode); closeMore()"
+      >
+        {{ moreNode.panel_url_pending ? '同步中…' : '同步地址' }}
+      </button>
+      <button
+        v-if="moreNode.status === 'offline'"
+        type="button"
+        :disabled="!moreNode.panel_url_fix_cmd"
+        @click="copyPanelURLFix(moreNode); closeMore()"
+      >
+        复制修复命令
+      </button>
+      <button type="button" class="danger" @click="remove(moreNode); closeMore()">删除</button>
+    </div>
+  </Teleport>
 
   <div class="page-tabs">
     <button class="page-tab" :class="{ active: tab === 'all' }" type="button" @click="setTab('all')">
@@ -715,49 +809,46 @@ onUnmounted(() => {
   </div>
 
   <div class="panel-toolbar">
-    <input class="input-filter" v-model="filter" />
+    <input class="input-filter" v-model="filter" placeholder="搜索名称 / IP / 域名" />
     <div class="row-actions">
-      <button class="btn btn-ghost btn-sm" @click="pushUpgradeAll" title="向所有在线节点推送 Agent 升级">全部升级 Agent</button>
-      <button class="btn btn-ghost btn-sm" @click="syncPanelURLAll" title="向在线节点自动下发设置中的面板地址（改 env 并重启）；离线节点请复制修复命令">同步面板地址</button>
-      <button
-        class="btn btn-ghost btn-sm"
-        @click="rebuild"
-        title="应急：强制重新生成并 bump 全部节点配置。面板启动/升级、开户改隧道、到期超流已自动重建"
-      >
-        重建配置
-      </button>
+      <div class="dropdown">
+        <button class="btn btn-ghost btn-sm" type="button" @click="batchOpen = !batchOpen">
+          批量 ▾
+        </button>
+        <div v-if="batchOpen" class="dropdown-menu" @click.stop>
+          <button type="button" @click="batchOpen = false; pushUpgradeAll()">全部升级 Agent</button>
+          <button type="button" @click="batchOpen = false; syncPanelURLAll()">同步面板地址</button>
+          <button type="button" @click="batchOpen = false; rebuild()">重建配置</button>
+        </div>
+      </div>
       <button class="btn btn-primary btn-sm" @click="openCreate">新增节点</button>
     </div>
   </div>
-  <p class="help-text" style="margin-top:-6px">
-    <strong>前置</strong> = 商家入口（端口<strong>段</strong>，如 10401–10499，每条隧道占一个）·
-    <strong>落地</strong> = 家宽 mita（单端口）。
-    点<strong>升级</strong>可远程推送 Agent。
-  </p>
 
   <div class="table-wrap">
     <table class="data" v-if="tabNodes.length">
       <thead>
         <tr>
           <th>名称</th>
-          <th>类型</th>
+          <th>角色</th>
           <th>状态</th>
-          <th>公网 / 接入</th>
-          <th>端口 / 池</th>
+          <th>接入</th>
+          <th>端口</th>
           <th>区域</th>
           <th>Agent</th>
-          <th>操作</th>
+          <th style="width:72px"></th>
         </tr>
       </thead>
       <tbody>
         <tr v-for="n in tabNodes" :key="n.id" :class="{ 'row-warn': n.no_heartbeat || n.config_stale }">
           <td>
             <div class="name-link">{{ n.name }}</div>
-            <div class="muted mono" style="font-size:11px">{{ n.id }}</div>
-            <div v-if="n.apply_error" class="apply-err" :title="n.apply_error">
-              {{ n.apply_error }}
-            </div>
-            <div v-if="upgradeRowHint(n)" class="apply-err" :title="upgradeRowHint(n)">
+            <div
+              v-if="upgradeRowHint(n)"
+              class="row-meta"
+              :class="rowHintTone(n)"
+              :title="n.apply_error || n.upgrade_error || n.panel_url_error || upgradeRowHint(n)"
+            >
               {{ upgradeRowHint(n) }}
             </div>
           </td>
@@ -769,42 +860,16 @@ onUnmounted(() => {
               <span class="dot"></span>{{ statusLabel(n.status) }}
             </span>
             <div
-              class="muted"
-              style="font-size:11px;margin-top:3px"
-              :style="n.no_heartbeat ? { color: 'var(--danger)', fontWeight: 600 } : {}"
+              class="row-meta"
+              :class="n.no_heartbeat ? 'err' : ''"
+              :title="heartbeatLabel(n)"
             >
               {{ heartbeatLabel(n) }}
             </div>
-            <div
-              v-if="n.role === 'exit' || n.role === 'hybrid'"
-              class="muted"
-              :title="n.metering_hint || ''"
-              :style="{
-                fontSize: '11px',
-                marginTop: '2px',
-                color: n.traffic_reporting ? 'var(--success)' : 'var(--warning)',
-              }"
-            >
-              {{ meteringLabel(n) }}
-            </div>
           </td>
           <td class="mono" style="font-size:12px">
-            <div>{{ n.public_ip || '—' }}</div>
-            <div v-if="n.hostname" class="muted" style="word-break:break-all">{{ n.hostname }}</div>
-            <div v-else class="muted" style="opacity:0.45">未设置域名</div>
-            <div class="muted" v-if="n.private_ip">内网 {{ n.private_ip }}</div>
-            <div
-              v-if="n.agent_panel_url"
-              class="muted"
-              :style="{
-                marginTop: '2px',
-                wordBreak: 'break-all',
-                color: n.panel_url_mismatch ? 'var(--warning)' : undefined,
-              }"
-              :title="'Agent 当前 PANEL_URL'"
-            >
-              Agent→ {{ n.agent_panel_url }}
-            </div>
+            <div>{{ n.hostname || n.public_ip || '—' }}</div>
+            <div v-if="n.hostname && n.public_ip" class="row-meta">{{ n.public_ip }}</div>
           </td>
           <td class="mono">{{ portLabel(n) }}</td>
           <td>{{ n.region || '—' }}</td>
@@ -813,48 +878,21 @@ onUnmounted(() => {
               {{ n.agent_version ? 'v' + n.agent_version : '—' }}
               <span
                 v-if="needsUpgrade(n) && n.agent_version"
-                class="badge"
-                style="margin-left:4px;font-size:10px;background:#fef3c7;color:#92400e"
+                class="badge warn"
+                style="margin-left:4px;font-size:10px"
                 title="面板版本更新"
               >可升</span>
-            </div>
-            <div v-if="n.config_stale" class="muted" style="font-size:11px;color:var(--warning)">
-              配置未生效
             </div>
           </td>
           <td>
             <div class="row-actions">
               <button class="btn btn-link btn-sm" @click="openEdit(n)">编辑</button>
               <button
-                class="btn btn-link btn-sm"
-                :disabled="upgradeBusy(n) || n.status === 'offline'"
-                :title="
-                  n.upgrade_error ||
-                  (n.status === 'offline' ? '节点离线，无法推送' : '远程升级到面板同版本')
-                "
-                @click="pushUpgrade(n)"
-              >
-                {{ upgradeLabel(n) }}
-              </button>
-              <button
-                class="btn btn-link btn-sm"
-                :disabled="n.status === 'offline' || n.panel_url_pending"
-                :title="n.panel_url_error || '下发当前面板地址并重启 agent（仅在线）'"
-                @click="syncPanelURL(n)"
-              >
-                {{ n.panel_url_pending ? '同步中…' : '同步地址' }}
-              </button>
-              <button
-                v-if="n.status === 'offline'"
-                class="btn btn-link btn-sm"
-                :disabled="!n.panel_url_fix_cmd"
-                title="复制 SSH 一键修复命令（重装 agent 指向当前面板）"
-                @click="copyPanelURLFix(n)"
-              >
-                复制修复命令
-              </button>
-              <button class="btn btn-link btn-sm" @click="showInstall(n.id)">安装 Agent</button>
-              <button class="btn btn-link-danger btn-sm" @click="remove(n)">删除</button>
+                type="button"
+                class="btn btn-ghost btn-sm btn-icon more-trigger"
+                title="更多"
+                @click="toggleMore(n, $event)"
+              >⋯</button>
             </div>
           </td>
         </tr>
@@ -1045,13 +1083,7 @@ onUnmounted(() => {
           </div>
           <div class="field" style="margin-top:4px">
             <label>一键安装 Agent（目标 Linux）</label>
-            <textarea
-              readonly
-              rows="4"
-              class="mono"
-              style="width:100%;resize:vertical;background:var(--bg-elevated);border:1px solid var(--border-line);border-radius:6px;padding:12px"
-              :value="created.install_cmd"
-            />
+            <textarea readonly rows="3" class="code-block" :value="created.install_cmd" />
           </div>
           <div class="row-actions">
             <button class="btn btn-primary btn-sm" @click="copy(created.install_cmd)">复制安装命令</button>
@@ -1098,13 +1130,7 @@ onUnmounted(() => {
         </div>
         <div class="field">
           <label>安装 Agent（整行复制到目标机执行）</label>
-          <textarea
-            readonly
-            rows="3"
-            class="mono"
-            style="width:100%;resize:vertical;background:var(--bg-elevated);border:1px solid var(--border-line);border-radius:6px;padding:12px"
-            :value="installInfo.install_cmd"
-          />
+          <textarea readonly rows="3" class="code-block" :value="installInfo.install_cmd" />
           <p class="help-text" style="margin-top:8px">
             {{ installInfo.hint || '在目标 Linux 上执行安装命令；装完回来看节点是否在线。' }}
           </p>
@@ -1119,22 +1145,7 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.apply-err {
-  margin-top: 4px;
-  max-width: 280px;
-  font-size: 11px;
-  line-height: 1.35;
-  color: #92400e;
-  background: #fffbeb;
-  border: 1px solid #f59e0b;
-  border-radius: 4px;
-  padding: 3px 7px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: help;
-}
 .row-warn td {
-  background: #fffbeb33;
+  background: rgba(245, 158, 11, 0.06);
 }
 </style>

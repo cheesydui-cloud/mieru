@@ -10,11 +10,12 @@ export const brand = reactive({
   loaded: false,
 })
 
-export function brandMarkLetter(name = brand.name) {
-  const s = String(name || DEFAULT_NAME).trim()
-  if (!s) return 'M'
-  const m = s.match(/[\u4e00-\u9fffA-Za-z0-9]/)
-  return (m ? m[0] : s[0]).toUpperCase()
+/**
+ * Console mark letter. Product identity is always "M" (Mieru),
+ * not the panel display name's first CJK char (e.g. 专).
+ */
+export function brandMarkLetter(_name = brand.name) {
+  return 'M'
 }
 
 export function applyDocumentBrand(name = brand.name, faviconData = brand.faviconData) {
@@ -50,18 +51,22 @@ function setFaviconURL(url) {
   }
 }
 
-/** Canvas favicon so tab icon shows panel name initial (not generic globe). */
-export function setFaviconFromName(name = brand.name) {
+/**
+ * Canvas favicon: square mark with letter "M".
+ * Golden ratio: font size ≈ size/φ; corner radius ≈ size/(φ·4).
+ */
+export function setFaviconFromName(_name = brand.name) {
   try {
-    const letter = brandMarkLetter(name)
+    const letter = 'M'
     const size = 64
+    const phi = 1.618
     const canvas = document.createElement('canvas')
     canvas.width = size
     canvas.height = size
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-    const r = 12
-    ctx.fillStyle = '#1a2332'
+    const r = Math.round(size / (phi * 4)) // ≈ 10
+    ctx.fillStyle = '#0f172a'
     ctx.beginPath()
     ctx.moveTo(r, 0)
     ctx.arcTo(size, 0, size, size, r)
@@ -71,10 +76,12 @@ export function setFaviconFromName(name = brand.name) {
     ctx.closePath()
     ctx.fill()
     ctx.fillStyle = '#ffffff'
-    ctx.font = `700 ${letter.length > 1 ? 28 : 34}px Inter, "PingFang SC", system-ui, sans-serif`
+    const fontPx = Math.round(size / phi) // ≈ 40
+    ctx.font = `650 ${fontPx}px Inter, system-ui, sans-serif`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
-    ctx.fillText(letter, size / 2, size / 2 + 1)
+    // optical vertical center (slightly above mid for capital M)
+    ctx.fillText(letter, size / 2, size / 2 + size * 0.02)
 
     setFaviconURL(canvas.toDataURL('image/png'))
   } catch {

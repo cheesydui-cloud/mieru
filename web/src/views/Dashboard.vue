@@ -224,7 +224,7 @@ onUnmounted(() => clearInterval(timer))
     >
       <h3>配置未生效</h3>
       <div class="value">{{ stats.config_stale || 0 }}</div>
-      <div class="sub">desired &gt; agent applied</div>
+      <div class="sub">节点配置</div>
     </div>
     <div
       class="card clickable"
@@ -233,7 +233,7 @@ onUnmounted(() => clearInterval(timer))
     >
       <h3>流量上报沉默落地</h3>
       <div class="value">{{ stats.traffic_silent || 0 }}</div>
-      <div class="sub">exit 近期无 /api/agent/traffic</div>
+      <div class="sub">落地计量</div>
     </div>
   </div>
 
@@ -245,7 +245,7 @@ onUnmounted(() => clearInterval(timer))
     >
       <h3>3 天内到期</h3>
       <div class="value">{{ stats.expiring_soon || 0 }}</div>
-      <div class="sub">点此去用户续期</div>
+      <div class="sub">用户</div>
     </div>
     <div
       class="card clickable"
@@ -254,12 +254,12 @@ onUnmounted(() => clearInterval(timer))
     >
       <h3>已超流量</h3>
       <div class="value">{{ stats.over_quota || 0 }}</div>
-      <div class="sub">需加流量或停用</div>
+      <div class="sub">用户</div>
     </div>
     <div class="card clickable" @click="router.push('/users')">
       <h3>已到期用户</h3>
       <div class="value">{{ stats.expired_users || 0 }}</div>
-      <div class="sub">状态 expired</div>
+      <div class="sub">用户</div>
     </div>
     <div
       class="card"
@@ -278,8 +278,7 @@ onUnmounted(() => clearInterval(timer))
       <div>
         <h2>隧道拓扑</h2>
         <div class="muted" style="font-size:12px;margin-top:3px">
-          {{ diag?.topology_hint || '手机 → 前置 → 落地 mita → 家宽' }}
-          · 按真实隧道画边，不是堆全部节点
+          {{ diag?.topology_hint || '前置 → 落地' }}
         </div>
       </div>
       <div class="row-actions">

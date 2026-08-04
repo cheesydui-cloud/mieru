@@ -59,7 +59,7 @@ onMounted(() => {
 <template>
   <div class="login-page">
     <div class="login-card">
-      <div class="brand" style="padding: 0 0 16px; border: none; min-height: auto">
+      <div class="login-brand-row">
         <div class="brand-mark">
           <img
             v-if="brand.faviconData"
@@ -67,11 +67,9 @@ onMounted(() => {
             alt=""
             style="width:100%;height:100%;object-fit:cover;border-radius:inherit"
           />
-          <template v-else>{{ mark }}</template>
+          <template v-else>M</template>
         </div>
-        <div class="brand-text">
-          <strong>{{ brand.name || 'Mieru' }} 控制台</strong>
-        </div>
+        <strong>{{ brand.name || 'Mieru' }}</strong>
       </div>
       <h1>登录</h1>
       <p>{{ subtitle }}</p>

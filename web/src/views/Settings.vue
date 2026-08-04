@@ -681,7 +681,7 @@ onMounted(load)
         <label>面板名称</label>
         <input v-model="form.panel_name" placeholder="例如：微动传媒" />
         <p class="help-text" style="margin-top:6px">
-          显示在左侧栏、登录页、浏览器标签标题与图标首字。
+          显示在左侧栏、登录页与浏览器标签。默认图标字母固定为 M。
         </p>
       </div>
       <div class="field" style="margin-bottom:14px">
@@ -701,7 +701,7 @@ onMounted(load)
               alt=""
               style="width:100%;height:100%;object-fit:cover"
             />
-            <span v-else>{{ (form.panel_name || 'M').slice(0, 1) }}</span>
+            <span v-else>M</span>
           </div>
           <input type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp" @change="onFaviconFile" />
           <button v-if="form.panel_favicon" type="button" class="btn btn-ghost btn-sm" @click="clearFavicon">

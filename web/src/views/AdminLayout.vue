@@ -25,15 +25,15 @@ const title = computed(() => {
 const mark = computed(() => brandMarkLetter(brand.name))
 
 const navMain = [
-  { name: 'dashboard', to: '/', label: '总览', hint: '拓扑与健康', icon: 'grid' },
-  { name: 'users', to: '/users', label: '用户', hint: '开户与配额', icon: 'users' },
-  { name: 'routes', to: '/routes', label: '隧道', hint: '前置 → 落地', icon: 'route' },
-  { name: 'nodes', to: '/nodes', label: '节点', hint: 'Agent 与端口', icon: 'server' },
+  { name: 'dashboard', to: '/', label: '总览', icon: 'grid' },
+  { name: 'users', to: '/users', label: '用户', icon: 'users' },
+  { name: 'routes', to: '/routes', label: '隧道', icon: 'route' },
+  { name: 'nodes', to: '/nodes', label: '节点', icon: 'server' },
 ]
 
 const navSystem = [
-  { name: 'settings', to: '/settings', label: '设置', hint: '品牌 · CF · 安全', icon: 'settings' },
-  { name: 'announcements', to: '/announcements', label: '公告', hint: '查询页通知', icon: 'megaphone' },
+  { name: 'settings', to: '/settings', label: '设置', icon: 'settings' },
+  { name: 'announcements', to: '/announcements', label: '公告', icon: 'megaphone' },
 ]
 
 function logout() {
@@ -101,7 +101,7 @@ onUnmounted(() => {
         </div>
         <div class="brand-text">
           <strong :title="brand.name">{{ brand.name || 'Mieru' }}</strong>
-          <span>管理控制台</span>
+          <span>Console</span>
         </div>
         <button
           type="button"
@@ -127,10 +127,7 @@ onUnmounted(() => {
               @click="closeNav"
             >
               <span class="nav-ico" :data-icon="item.icon" aria-hidden="true" />
-              <span class="nav-copy">
-                <span class="nav-label">{{ item.label }}</span>
-                <span class="nav-hint">{{ item.hint }}</span>
-              </span>
+              <span class="nav-label">{{ item.label }}</span>
             </router-link>
           </nav>
         </div>
@@ -147,27 +144,20 @@ onUnmounted(() => {
               @click="closeNav"
             >
               <span class="nav-ico" :data-icon="item.icon" aria-hidden="true" />
-              <span class="nav-copy">
-                <span class="nav-label">{{ item.label }}</span>
-                <span class="nav-hint">{{ item.hint }}</span>
-              </span>
+              <span class="nav-label">{{ item.label }}</span>
             </router-link>
           </nav>
         </div>
       </div>
 
       <div class="sidebar-foot">
-        <div class="sidebar-foot-card">
-          <div class="sidebar-foot-kicker">链路</div>
-          <div class="sidebar-foot-title">手机 → 前置 → 家宽</div>
-        </div>
         <div class="sidebar-account">
           <div class="sidebar-account-meta">
             <span class="sidebar-account-name" :title="user || 'admin'">{{ user || 'admin' }}</span>
             <span v-if="version" class="sidebar-ver mono">{{ version }}</span>
           </div>
           <button type="button" class="btn btn-ghost btn-sm sidebar-logout" @click="logout" title="退出登录">
-            退出登录
+            退出
           </button>
         </div>
       </div>
