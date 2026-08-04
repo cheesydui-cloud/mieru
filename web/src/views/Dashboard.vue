@@ -6,7 +6,6 @@ import { api, formatBytes, statusBadge } from '../api'
 
 const router = useRouter()
 const diag = ref(null)
-const routes = ref([])
 const flash = useFlash()
 const rebuilding = ref(false)
 const rebuildStatus = ref(null)
@@ -14,13 +13,11 @@ let timer
 
 async function load() {
   try {
-    const [d, rs, rb] = await Promise.all([
+    const [d, rb] = await Promise.all([
       api('/api/admin/diagnose'),
-      api('/api/admin/routes'),
       api('/api/admin/rebuild-status').catch(() => null),
     ])
     diag.value = d
-    routes.value = Array.isArray(rs) ? rs : []
     rebuildStatus.value = d?.rebuild || rb || null
     flash.clear()
   } catch (e) {
@@ -28,19 +25,13 @@ async function load() {
   }
 }
 
-function fmtRebuild(rb) {
-  if (!rb || !rb.at) return '尚未记录'
+function fmtRebuildShort(rb) {
+  if (!rb || !rb.at) return '尚未重建'
   const age = typeof rb.age_sec === 'number' ? rb.age_sec : null
-  let when = rb.at
-  try {
-    when = new Date(rb.at).toLocaleString()
-  } catch {
-    /* keep */
-  }
-  const ageTxt = age != null ? (age < 60 ? `${age}s 前` : `${Math.round(age / 60)} 分前`) : ''
+  const ageTxt =
+    age == null ? '' : age < 60 ? `${age}s 前` : age < 3600 ? `${Math.round(age / 60)} 分前` : `${Math.round(age / 3600)} 小时前`
   const st = rb.ok === false ? '失败' : '成功'
-  const reason = rb.reason ? ` · ${rb.reason}` : ''
-  return `${st} · ${when}${ageTxt ? ' · ' + ageTxt : ''}${reason}`
+  return ageTxt ? `${st} · ${ageTxt}` : st
 }
 
 const nodes = computed(() => diag.value?.nodes || [])
@@ -57,21 +48,16 @@ const todayUp = computed(() => Number(stats.value.today_up || 0))
 const todayDown = computed(() => Number(stats.value.today_down || 0))
 
 const onlineCount = computed(() => nodes.value.filter((n) => n.status === 'online').length)
-const issueCount = computed(() => {
-  let n = (diag.value?.global_issue_items || diag.value?.global_issues || []).length
-  for (const node of nodes.value) n += (node.issue_items || node.issues || []).length
-  return n
-})
+const offlineCount = computed(() => Math.max(0, nodes.value.length - onlineCount.value))
 
 const allIssueItems = computed(() => {
   const items = []
   for (const it of diag.value?.global_issue_items || []) {
     items.push(it)
   }
-  // fallback for plain strings
   if (!items.length) {
     for (const t of diag.value?.global_issues || []) {
-      items.push({ text: t, href: '/', kind: 'global' })
+      items.push({ text: t, href: '/nodes', kind: 'global' })
     }
   }
   for (const node of nodes.value) {
@@ -79,7 +65,7 @@ const allIssueItems = computed(() => {
       for (const it of node.issue_items) {
         items.push({
           ...it,
-          text: `[${node.name}] ${it.text}`,
+          text: `${node.name}：${it.text}`,
         })
       }
     } else {
@@ -90,18 +76,52 @@ const allIssueItems = computed(() => {
             : node.role === 'relay' || node.role === 'entry'
               ? '/nodes?tab=front'
               : '/nodes'
-        items.push({ text: `[${node.name}] ${t}`, href, kind: 'node', node_id: node.id })
+        items.push({ text: `${node.name}：${t}`, href, kind: 'node', node_id: node.id })
       }
     }
   }
   return items
 })
 
-function nodeTone(n) {
-  if ((n.issues || []).length) return n.status === 'online' ? 'warn' : 'err'
-  if (n.status === 'online') return 'ok'
-  if (n.status === 'degraded') return 'warn'
-  return 'err'
+const issueCount = computed(() => allIssueItems.value.length)
+
+/** Compact alert chips — only non-zero counts, clickable */
+const alertChips = computed(() => {
+  const s = stats.value || {}
+  const chips = []
+  if (offlineCount.value > 0) {
+    chips.push({ key: 'offline', label: '离线节点', value: offlineCount.value, to: '/nodes', tone: 'err' })
+  }
+  if (s.agent_behind > 0) {
+    chips.push({ key: 'behind', label: 'Agent 可升', value: s.agent_behind, to: '/nodes', tone: 'warn' })
+  }
+  if (s.config_stale > 0) {
+    chips.push({ key: 'stale', label: '配置未生效', value: s.config_stale, to: '/nodes', tone: 'warn' })
+  }
+  if (s.traffic_silent > 0) {
+    chips.push({
+      key: 'silent',
+      label: '计量沉默',
+      value: s.traffic_silent,
+      to: { path: '/nodes', query: { tab: 'exit' } },
+      tone: 'warn',
+    })
+  }
+  if (s.expiring_soon > 0) {
+    chips.push({ key: 'expiring', label: '3 天内到期', value: s.expiring_soon, to: '/users', tone: 'warn' })
+  }
+  if (s.over_quota > 0) {
+    chips.push({ key: 'quota', label: '已超流量', value: s.over_quota, to: '/users', tone: 'warn' })
+  }
+  if (s.expired_users > 0) {
+    chips.push({ key: 'expired', label: '已到期', value: s.expired_users, to: '/users', tone: 'err' })
+  }
+  return chips
+})
+
+function roleLabel(role) {
+  const m = { relay: '前置', entry: '前置', exit: '落地', hybrid: '混合' }
+  return m[role] || role || '—'
 }
 
 function statusLabel(s) {
@@ -109,23 +129,6 @@ function statusLabel(s) {
   if (s === 'degraded') return '异常'
   if (s === 'offline') return '离线'
   return s || '未知'
-}
-
-function pluginSummary(n) {
-  const ps = n.plugins || []
-  if (!ps.length) return '—'
-  return ps
-    .map((p) => {
-      const t = p.type || '?'
-      if (t === 'tcp_forward') {
-        return `tcp_forward :${p.listen_port || '?'} → ${p.target_host || p.exit_id || '?'}:${p.target_port || '?'}`
-      }
-      if (t === 'mita_server') return `mita :${p.listen_port || p.port_min || '?'}`
-      if (t === 'socks_in') return `socks :${p.listen_port || '?'}`
-      if (t === 'mieru_client') return `mieru → ${p.server || '?'}:${p.port || '?'}`
-      return t
-    })
-    .join(' · ')
 }
 
 function healthLabel(h) {
@@ -151,11 +154,16 @@ function goIssue(it) {
   if (it?.href) router.push(it.href)
 }
 
-function goRoute(id) {
+function goRoute() {
   router.push('/routes')
 }
 
+function goChip(chip) {
+  if (chip?.to) router.push(chip.to)
+}
+
 async function rebuild() {
+  if (!confirm('强制重建全部节点配置？平时改配置/升级已会自动下发。')) return
   rebuilding.value = true
   try {
     const res = await api('/api/admin/rebuild', { method: 'POST' })
@@ -177,129 +185,114 @@ onUnmounted(() => clearInterval(timer))
 </script>
 
 <template>
-
-  <div class="page-tabs">
-    <div class="page-tab active">拓扑健康</div>
+  <div
+    v-if="flash.msg"
+    class="action-feedback page-action-feedback"
+    :class="flash.kind"
+    @click="flash.clear()"
+  >
+    {{ flash.msg }}
   </div>
 
-  <div class="grid-stats grid-stats-5" v-if="diag">
-    <div class="card" :class="onlineCount === nodes.length && nodes.length ? 'card-ok' : ''">
+  <!-- Top toolbar -->
+  <div class="dash-toolbar">
+    <div class="dash-toolbar-left">
+      <h2 class="dash-title">总览</h2>
+      <span class="muted dash-sub">
+        {{ fronts.length }} 前置 · {{ exits.length }} 落地 · {{ diag?.enabled_routes || 0 }} 隧道
+      </span>
+    </div>
+    <div class="row-actions">
+      <span class="muted" style="font-size:12px" :title="fmtRebuildShort(rebuildStatus)">
+        重建 {{ fmtRebuildShort(rebuildStatus) }}
+      </span>
+      <button class="btn btn-ghost btn-sm" type="button" @click="load">刷新</button>
+      <button
+        class="btn btn-ghost btn-sm"
+        type="button"
+        :disabled="rebuilding"
+        title="应急手动重建"
+        @click="rebuild"
+      >
+        {{ rebuilding ? '重建中…' : '重建配置' }}
+      </button>
+    </div>
+  </div>
+
+  <!-- 4 primary KPIs -->
+  <div class="grid-stats dash-kpi" v-if="diag">
+    <div
+      class="card clickable"
+      :class="offlineCount === 0 && nodes.length ? 'card-ok' : offlineCount ? 'card-warn' : ''"
+      @click="router.push('/nodes')"
+    >
       <h3>节点在线</h3>
-      <div class="value">{{ onlineCount }}<span class="slash"> / {{ nodes.length }}</span></div>
+      <div class="value">
+        {{ onlineCount }}<span class="slash"> / {{ nodes.length }}</span>
+      </div>
+      <div class="sub" v-if="offlineCount">{{ offlineCount }} 离线</div>
+      <div class="sub" v-else>全部在线</div>
     </div>
-    <div class="card">
-      <h3>前置 / 落地</h3>
-      <div class="value">{{ fronts.length }}<span class="slash"> / {{ exits.length }}</span></div>
-      <div class="sub">relay·entry / exit·hybrid</div>
-    </div>
-    <div class="card">
-      <h3>启用隧道</h3>
-      <div class="value">{{ diag.enabled_routes || 0 }}</div>
-    </div>
-    <div class="card clickable" :class="todayTotal ? 'card-ok' : ''" @click="router.push('/users')">
-      <h3>当日总流量</h3>
+    <div class="card clickable" @click="router.push('/users')">
+      <h3>今日流量</h3>
       <div class="value" style="font-size:20px">{{ formatBytes(todayTotal) }}</div>
       <div class="sub">↓ {{ formatBytes(todayDown) }} · ↑ {{ formatBytes(todayUp) }}</div>
     </div>
-    <div class="card" :class="issueCount ? 'card-warn' : 'card-ok'">
-      <h3>待处理问题</h3>
+    <div class="card clickable" @click="router.push('/routes')">
+      <h3>启用隧道</h3>
+      <div class="value">{{ diag.enabled_routes || 0 }}</div>
+      <div class="sub">{{ tunnelEdges.length }} 条拓扑边</div>
+    </div>
+    <div
+      class="card clickable"
+      :class="issueCount ? 'card-warn' : 'card-ok'"
+      @click="issueCount ? null : router.push('/nodes')"
+    >
+      <h3>待处理</h3>
       <div class="value">{{ issueCount }}</div>
+      <div class="sub">{{ issueCount ? '点击下方列表处理' : '系统正常' }}</div>
     </div>
   </div>
 
-  <div class="grid-stats" v-if="diag" style="grid-template-columns: repeat(3, 1fr)">
-    <div
-      class="card clickable"
-      :class="stats.agent_behind ? 'card-warn' : 'card-ok'"
-      @click="router.push('/nodes')"
+  <!-- Alert chips: only when something needs attention -->
+  <div v-if="alertChips.length" class="dash-alerts">
+    <button
+      v-for="c in alertChips"
+      :key="c.key"
+      type="button"
+      class="dash-alert-chip"
+      :class="c.tone"
+      @click="goChip(c)"
     >
-      <h3>Agent 版本落后</h3>
-      <div class="value">{{ stats.agent_behind || 0 }}</div>
-      <div class="sub">面板 {{ stats.panel_version || diag.version || '—' }}</div>
-    </div>
-    <div
-      class="card clickable"
-      :class="stats.config_stale ? 'card-warn' : 'card-ok'"
-      @click="router.push('/nodes')"
-    >
-      <h3>配置未生效</h3>
-      <div class="value">{{ stats.config_stale || 0 }}</div>
-      <div class="sub">节点配置</div>
-    </div>
-    <div
-      class="card clickable"
-      :class="stats.traffic_silent ? 'card-warn' : 'card-ok'"
-      @click="router.push({ path: '/nodes', query: { tab: 'exit' } })"
-    >
-      <h3>流量上报沉默落地</h3>
-      <div class="value">{{ stats.traffic_silent || 0 }}</div>
-      <div class="sub">落地计量</div>
-    </div>
+      <strong>{{ c.value }}</strong>
+      <span>{{ c.label }}</span>
+    </button>
   </div>
 
-  <div class="grid-stats" v-if="diag" style="grid-template-columns: repeat(4, 1fr)">
-    <div
-      class="card clickable"
-      :class="stats.expiring_soon ? 'card-warn' : ''"
-      @click="router.push('/users')"
-    >
-      <h3>3 天内到期</h3>
-      <div class="value">{{ stats.expiring_soon || 0 }}</div>
-      <div class="sub">用户</div>
+  <!-- Issues panel: only when non-empty -->
+  <div v-if="allIssueItems.length" class="panel dash-issues">
+    <div class="panel-hd">
+      <h2>待处理问题</h2>
+      <span class="badge warn">{{ allIssueItems.length }}</span>
     </div>
-    <div
-      class="card clickable"
-      :class="stats.over_quota ? 'card-warn' : ''"
-      @click="router.push('/users')"
-    >
-      <h3>已超流量</h3>
-      <div class="value">{{ stats.over_quota || 0 }}</div>
-      <div class="sub">用户</div>
-    </div>
-    <div class="card clickable" @click="router.push('/users')">
-      <h3>已到期用户</h3>
-      <div class="value">{{ stats.expired_users || 0 }}</div>
-      <div class="sub">用户</div>
-    </div>
-    <div
-      class="card"
-      :class="rebuildStatus && rebuildStatus.ok === false ? 'card-warn' : rebuildStatus?.at ? 'card-ok' : ''"
-    >
-      <h3>最近重建</h3>
-      <div class="value" style="font-size:14px;line-height:1.35;margin-top:4px">
-        {{ fmtRebuild(rebuildStatus) }}
-      </div>
-      <div class="sub" v-if="rebuildStatus?.error" style="color:var(--danger)">{{ rebuildStatus.error }}</div>
-    </div>
+    <ul class="dash-issue-list">
+      <li
+        v-for="(iss, i) in allIssueItems"
+        :key="'i' + i"
+        class="dash-issue-item"
+        @click="goIssue(iss)"
+      >
+        <span class="dash-issue-text">{{ iss.text }}</span>
+        <span v-if="iss.href" class="muted dash-issue-go">查看</span>
+      </li>
+    </ul>
   </div>
 
+  <!-- Tunnel topology -->
   <div class="panel">
     <div class="panel-hd">
-      <div>
-        <h2>隧道拓扑</h2>
-        <div class="muted" style="font-size:12px;margin-top:3px">
-          {{ diag?.topology_hint || '前置 → 落地' }}
-        </div>
-      </div>
-      <div class="row-actions">
-        <button class="btn btn-ghost btn-sm" @click="load">刷新</button>
-        <div class="action-bar">
-        <button
-          class="btn btn-ghost btn-sm"
-          :disabled="rebuilding"
-          @click="rebuild"
-          title="应急手动重建；平时改配置/升级已自动下发"
-        >
-          {{ rebuilding ? '重建中…' : '重建配置' }}
-        </button>
-        <div
-          v-if="flash.msg"
-          class="action-feedback"
-          :class="flash.kind"
-          @click="flash.clear()"
-        >{{ flash.msg }}</div>
-      </div>
-      </div>
+      <h2>隧道拓扑</h2>
+      <button class="btn btn-ghost btn-sm" type="button" @click="router.push('/routes')">管理隧道</button>
     </div>
 
     <div v-if="tunnelEdges.length" class="topo-edges">
@@ -310,7 +303,10 @@ onUnmounted(() => clearInterval(timer))
         :class="edgeTone(e)"
         @click="goRoute(e.route_id)"
       >
-        <div class="te-name">{{ e.name }}</div>
+        <div class="te-row">
+          <div class="te-name">{{ e.name }}</div>
+          <span class="badge" :class="healthClass(e.health)">{{ healthLabel(e.health) }}</span>
+        </div>
         <div class="te-path mono">
           <span>{{ e.front_name || '前置' }}</span>
           <span class="muted">
@@ -321,148 +317,247 @@ onUnmounted(() => clearInterval(timer))
           <span class="muted">mita {{ e.exit_port || '?' }}</span>
         </div>
         <div class="te-meta">
-          <span class="badge" :class="healthClass(e.health)">{{ healthLabel(e.health) }}</span>
           <span class="muted">用户 {{ e.user_count || 0 }}</span>
         </div>
       </div>
     </div>
     <div v-else class="empty">
-      还没有启用隧道。先建<strong>前置</strong>和<strong>落地</strong>，再绑隧道。
-      <div style="margin-top:12px" class="row-actions">
-        <button class="btn btn-primary btn-sm" @click="router.push('/nodes')">去节点</button>
-        <button class="btn btn-ghost btn-sm" @click="router.push('/routes')">去隧道</button>
+      还没有启用隧道
+      <div class="row-actions" style="margin-top:12px;justify-content:center">
+        <button class="btn btn-primary btn-sm" type="button" @click="router.push('/nodes')">去节点</button>
+        <button class="btn btn-ghost btn-sm" type="button" @click="router.push('/routes')">去隧道</button>
       </div>
     </div>
-
-    <ul v-if="allIssueItems.length" class="issue-list">
-      <li
-        v-for="(iss, i) in allIssueItems"
-        :key="'i' + i"
-        class="issue-click"
-        @click="goIssue(iss)"
-      >
-        {{ iss.text }}
-        <span v-if="iss.href" class="muted" style="margin-left:6px">→</span>
-      </li>
-    </ul>
   </div>
 
-  <div class="panel">
+  <!-- Compact node health (slim, not a full ops table) -->
+  <div class="panel" v-if="nodes.length">
     <div class="panel-hd">
-      <h2>节点明细</h2>
-      <span class="muted" style="font-size:12px">8s 自动刷新</span>
+      <h2>节点状态</h2>
+      <button class="btn btn-ghost btn-sm" type="button" @click="router.push('/nodes')">全部节点</button>
     </div>
     <div class="panel-bd">
-      <table class="data" v-if="nodes.length">
+      <table class="data dash-node-table">
         <thead>
           <tr>
             <th>名称</th>
             <th>角色</th>
             <th>状态</th>
-            <th>地址 / 端口</th>
-            <th>Agent / 配置</th>
-            <th>计量</th>
-            <th>问题</th>
+            <th>地址</th>
+            <th>Agent</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="n in nodes" :key="n.id">
+          <tr
+            v-for="n in nodes"
+            :key="n.id"
+            class="route-row"
+            @click="
+              router.push(
+                n.role === 'exit' || n.role === 'hybrid'
+                  ? { path: '/nodes', query: { tab: 'exit' } }
+                  : n.role === 'relay' || n.role === 'entry'
+                    ? { path: '/nodes', query: { tab: 'front' } }
+                    : '/nodes',
+              )
+            "
+          >
             <td>
               <div class="name-link">{{ n.name }}</div>
-              <div class="muted mono" style="font-size:11px">{{ n.id }}</div>
             </td>
-            <td><span class="badge">{{ n.role }}</span></td>
+            <td><span class="badge">{{ roleLabel(n.role) }}</span></td>
             <td>
               <span class="badge" :class="statusBadge(n.status)">
                 <span class="dot"></span>{{ statusLabel(n.status) }}
               </span>
-              <div
-                v-if="n.no_heartbeat"
-                class="muted"
-                style="font-size:11px;color:var(--danger);margin-top:2px"
-              >
-                未心跳/超时
-              </div>
             </td>
             <td class="mono" style="font-size:12px">
               {{ n.dial_host || n.public_ip || '—' }}
               <span v-if="n.public_port">:{{ n.public_port }}</span>
-              <span v-if="n.mita_port" class="muted"> · mita {{ n.mita_port }}</span>
             </td>
             <td class="mono" style="font-size:12px">
-              <div>{{ n.agent_version ? 'v' + n.agent_version : '—' }}</div>
-              <div class="muted" style="font-size:11px">
-                cfg v{{ n.config_version
-                }}<template v-if="n.agent_config_version"> / 已应用 v{{ n.agent_config_version }}</template>
-                <span v-if="n.config_stale" style="color:var(--warning)"> · 未生效</span>
-                <span v-if="n.version_behind" style="color:var(--warning)"> · 版本落后</span>
-              </div>
-            </td>
-            <td style="font-size:12px">
-              <template v-if="n.role === 'exit' || n.role === 'hybrid'">
-                <span :style="{ color: n.traffic_reporting ? 'var(--success)' : 'var(--warning)' }">
-                  {{ n.metering_hint || (n.traffic_reporting ? '计量正常' : '未上报') }}
-                </span>
-              </template>
-              <span v-else class="muted">—</span>
-            </td>
-            <td>
-              <template v-if="(n.issues || []).length">
-                <div
-                  v-for="(iss, i) in n.issues"
-                  :key="i"
-                  class="issue-click muted"
-                  style="font-size:11px;color:var(--danger);line-height:1.4"
-                  @click="
-                    router.push(
-                      n.role === 'exit' || n.role === 'hybrid'
-                        ? { path: '/nodes', query: { tab: 'exit' } }
-                        : { path: '/nodes', query: { tab: 'front' } },
-                    )
-                  "
-                >
-                  {{ iss }}
-                </div>
-              </template>
-              <span v-else class="badge ok">正常</span>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <div v-else class="empty">暂无节点</div>
-    </div>
-  </div>
-
-  <div class="panel" v-if="routes.length">
-    <div class="panel-hd">
-      <h2>隧道</h2>
-      <button class="btn btn-ghost btn-sm" @click="router.push('/routes')">管理隧道</button>
-    </div>
-    <div class="panel-bd">
-      <table class="data">
-        <thead>
-          <tr>
-            <th>名称</th>
-            <th>路径</th>
-            <th>健康</th>
-            <th>用户</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="r in routes" :key="r.id" class="route-row" @click="router.push('/routes')">
-            <td class="name-link">{{ r.name }}</td>
-            <td class="mono" style="font-size:12px">
-              {{ r.path_summary || (r.front_host && r.front_port ? r.front_host + ':' + r.front_port : '—') }}
-            </td>
-            <td>
-              <span class="badge" :class="healthClass(r.last_probe_health || r.health)">
-                {{ healthLabel(r.last_probe_health || r.health) }}
+              {{ n.agent_version ? 'v' + n.agent_version : '—' }}
+              <span v-if="n.config_stale || n.version_behind" class="row-meta warn">
+                {{ n.config_stale ? '配置未生效' : '可升级' }}
               </span>
             </td>
-            <td class="num">{{ r.user_count || 0 }}</td>
           </tr>
         </tbody>
       </table>
     </div>
   </div>
 </template>
+
+<style scoped>
+.dash-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 2px;
+}
+.dash-toolbar-left {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+.dash-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+.dash-sub {
+  font-size: 12.5px;
+}
+.dash-kpi {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+@media (max-width: 1100px) {
+  .dash-kpi {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 560px) {
+  .dash-kpi {
+    grid-template-columns: 1fr;
+  }
+}
+
+.dash-alerts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.dash-alert-chip {
+  appearance: none;
+  border: 1px solid var(--border-line);
+  background: var(--bg-surface);
+  border-radius: 999px;
+  padding: 6px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.dash-alert-chip strong {
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  color: var(--text);
+}
+.dash-alert-chip:hover {
+  background: var(--bg-hover);
+}
+.dash-alert-chip.warn {
+  border-color: rgba(180, 83, 9, 0.28);
+  background: var(--warning-soft);
+}
+.dash-alert-chip.warn strong {
+  color: var(--warning);
+}
+.dash-alert-chip.err {
+  border-color: rgba(185, 28, 28, 0.28);
+  background: var(--danger-soft);
+}
+.dash-alert-chip.err strong {
+  color: var(--danger);
+}
+
+.dash-issues .panel-hd {
+  align-items: center;
+}
+.dash-issue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.dash-issue-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 16px;
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text);
+}
+.dash-issue-item:first-child {
+  border-top: 0;
+}
+.dash-issue-item:hover {
+  background: var(--bg-hover);
+}
+.dash-issue-text {
+  min-width: 0;
+  line-height: 1.45;
+  word-break: break-word;
+}
+.dash-issue-go {
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.topo-edges {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px 16px;
+}
+.topo-edge {
+  border: 1px solid var(--border-line);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  background: var(--bg-surface);
+  cursor: pointer;
+  display: grid;
+  gap: 6px;
+}
+.topo-edge:hover {
+  background: var(--bg-hover);
+}
+.topo-edge.ok {
+  border-color: rgba(21, 128, 61, 0.28);
+}
+.topo-edge.warn {
+  border-color: rgba(180, 83, 9, 0.32);
+}
+.topo-edge.err {
+  border-color: rgba(185, 28, 28, 0.32);
+}
+.te-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.te-name {
+  font-weight: 650;
+  font-size: 13.5px;
+}
+.te-path {
+  font-size: 12.5px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.te-arrow {
+  font-weight: 700;
+  color: var(--text-muted);
+}
+.te-meta {
+  font-size: 12px;
+}
+
+.dash-node-table td,
+.dash-node-table th {
+  padding: 9px 12px;
+}
+</style>
