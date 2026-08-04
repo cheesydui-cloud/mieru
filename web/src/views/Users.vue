@@ -385,8 +385,8 @@ function toggleMore(u, e) {
     return
   }
   const rect = el.getBoundingClientRect()
-  const menuH = 96
-  const menuW = 128
+  const menuH = 280
+  const menuW = 140
   const pad = 8
   const openUp = rect.bottom + menuH + pad > window.innerHeight && rect.top > menuH + pad
   let left = rect.right - menuW
@@ -813,13 +813,18 @@ onUnmounted(() => {
       :style="moreMenuStyle"
       @click.stop
     >
-      <button type="button" @click="copyUserInfo(moreUser); closeMore()">复制查询页</button>
+      <button type="button" @click="openEdit(moreUser); closeMore()">编辑</button>
+      <button type="button" @click="openRenew(moreUser); closeMore()">续期</button>
+      <button type="button" @click="toggle(moreUser); closeMore()">
+        {{ moreUser.status === 'disabled' ? '启用' : '停用' }}
+      </button>
       <button type="button" @click="openMultiplier(moreUser); closeMore()">
         倍率设置{{ moreUser.display_multiplier && moreUser.display_multiplier !== 1 ? ` · ×${moreUser.display_multiplier}` : '' }}
       </button>
       <button type="button" @click="openAddTraffic(moreUser); closeMore()">加流量</button>
       <button type="button" @click="resetPw(moreUser.id); closeMore()">重置密码</button>
       <button type="button" @click="resetSub(moreUser)">重置订阅</button>
+      <button type="button" class="more-menu-danger" @click="remove(moreUser); closeMore()">删除</button>
     </div>
   </Teleport>
 
@@ -990,12 +995,7 @@ onUnmounted(() => {
               <td class="col-ops">
                 <div class="row-actions user-ops">
                   <button class="btn btn-link btn-sm" @click="openSub(u)">扫码</button>
-                  <button class="btn btn-link btn-sm" @click="openEdit(u)">编辑</button>
-                  <button class="btn btn-link btn-sm" @click="openRenew(u)">续期</button>
-                  <button class="btn btn-link btn-sm" @click="toggle(u)">
-                    {{ u.status === 'disabled' ? '启用' : '停用' }}
-                  </button>
-                  <button class="btn btn-link-danger btn-sm" @click="remove(u)">删除</button>
+                  <button class="btn btn-link btn-sm" @click="copyUserInfo(u)">复制查询页</button>
                   <button
                     type="button"
                     class="btn btn-link btn-sm more-trigger"

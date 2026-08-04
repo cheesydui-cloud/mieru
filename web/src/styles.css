@@ -1589,3 +1589,43 @@ code.mono {
   font-size: 18px;
   font-weight: 650;
 }
+
+
+/* Slim topbar: only mobile menu toggle; hide empty chrome on desktop */
+.topbar-slim {
+  justify-content: flex-start;
+  border-bottom: none;
+  background: transparent;
+  min-height: 0;
+  height: auto;
+  padding: 0;
+}
+.topbar-slim .topbar-left {
+  padding: 0;
+}
+@media (min-width: 901px) {
+  .topbar-slim {
+    display: none;
+  }
+  .main > .content {
+    /* reclaim former topbar space slightly */
+    padding-top: 16px;
+  }
+}
+@media (max-width: 900px) {
+  .topbar-slim {
+    display: flex;
+    align-items: center;
+    height: 48px;
+    padding: 0 10px;
+    border-bottom: 1px solid var(--border-line);
+    background: var(--bg-surface);
+  }
+}
+
+.more-menu button.more-menu-danger {
+  color: var(--danger, #b91c1c);
+}
+.more-menu button.more-menu-danger:hover {
+  background: rgba(185, 28, 28, 0.08);
+}

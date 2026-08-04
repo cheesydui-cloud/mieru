@@ -164,19 +164,11 @@ onUnmounted(() => {
     </aside>
 
     <div class="main">
-      <header class="topbar">
+      <header class="topbar topbar-slim">
         <div class="topbar-left">
           <button type="button" class="btn btn-ghost btn-sm nav-toggle" @click="toggleNav" aria-label="菜单">
             ☰
           </button>
-          <div class="topbar-user">
-            <span class="topbar-name">{{ user || 'admin' }}</span>
-            <span class="topbar-sep">·</span>
-            <span class="topbar-page">{{ title }}</span>
-          </div>
-        </div>
-        <div class="topbar-actions">
-          <!-- 版本号 / 退出登录已移至左侧栏底部 -->
         </div>
       </header>
       <main class="content">
