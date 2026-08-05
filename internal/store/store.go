@@ -155,6 +155,18 @@ CREATE TABLE IF NOT EXISTS announcements (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS client_files (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL DEFAULT '',
+  filename TEXT NOT NULL DEFAULT '',
+  stored_name TEXT NOT NULL DEFAULT '',
+  size INTEGER NOT NULL DEFAULT 0,
+  content_type TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -179,6 +191,17 @@ CREATE TABLE IF NOT EXISTS settings (
   body TEXT NOT NULL DEFAULT '',
   enabled INTEGER NOT NULL DEFAULT 1,
   popup INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+)`,
+		`CREATE TABLE IF NOT EXISTS client_files (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL DEFAULT '',
+  filename TEXT NOT NULL DEFAULT '',
+  stored_name TEXT NOT NULL DEFAULT '',
+  size INTEGER NOT NULL DEFAULT 0,
+  content_type TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 )`,
@@ -1045,6 +1068,152 @@ func (s *Store) UpdateAnnouncement(a *model.Announcement) error {
 func (s *Store) DeleteAnnouncement(id int64) error {
 	_, err := s.db.Exec(`DELETE FROM announcements WHERE id=?`, id)
 	return err
+}
+
+// ---------- Client files (query-page downloads) ----------
+
+func scanClientFile(sc interface {
+	Scan(dest ...any) error
+}) (model.ClientFile, error) {
+	var f model.ClientFile
+	var en int
+	var c, u string
+	if err := sc.Scan(&f.ID, &f.Title, &f.Filename, &f.StoredName, &f.Size, &f.ContentType, &en, &c, &u); err != nil {
+		return f, err
+	}
+	f.Enabled = en != 0
+	if t := parseTime(c); t != nil {
+		f.CreatedAt = *t
+	}
+	if t := parseTime(u); t != nil {
+		f.UpdatedAt = *t
+	}
+	return f, nil
+}
+
+func (s *Store) ListClientFiles() ([]model.ClientFile, error) {
+	rows, err := s.db.Query(`SELECT id, title, filename, stored_name, size, content_type, enabled, created_at, updated_at FROM client_files ORDER BY id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]model.ClientFile, 0)
+	for rows.Next() {
+		f, err := scanClientFile(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// ListPublicClientFiles returns enabled files for the query page (newest first).
+func (s *Store) ListPublicClientFiles() ([]model.ClientFile, error) {
+	rows, err := s.db.Query(`SELECT id, title, filename, stored_name, size, content_type, enabled, created_at, updated_at FROM client_files WHERE enabled=1 ORDER BY id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]model.ClientFile, 0)
+	for rows.Next() {
+		f, err := scanClientFile(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetClientFile(id int64) (*model.ClientFile, error) {
+	row := s.db.QueryRow(`SELECT id, title, filename, stored_name, size, content_type, enabled, created_at, updated_at FROM client_files WHERE id=?`, id)
+	f, err := scanClientFile(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &f, nil
+}
+
+func (s *Store) CreateClientFile(f *model.ClientFile) error {
+	ts := now()
+	f.Title = strings.TrimSpace(f.Title)
+	f.Filename = strings.TrimSpace(f.Filename)
+	f.StoredName = strings.TrimSpace(f.StoredName)
+	f.ContentType = strings.TrimSpace(f.ContentType)
+	if f.Title == "" {
+		f.Title = f.Filename
+	}
+	if f.Title == "" {
+		return fmt.Errorf("标题不能为空")
+	}
+	if f.Filename == "" || f.StoredName == "" {
+		return fmt.Errorf("文件无效")
+	}
+	if len([]rune(f.Title)) > 120 {
+		return fmt.Errorf("标题过长（最多 120 字）")
+	}
+	if f.Size < 0 {
+		f.Size = 0
+	}
+	res, err := s.db.Exec(
+		`INSERT INTO client_files(title, filename, stored_name, size, content_type, enabled, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?)`,
+		f.Title, f.Filename, f.StoredName, f.Size, f.ContentType, boolToInt(f.Enabled), ts, ts,
+	)
+	if err != nil {
+		return err
+	}
+	id, _ := res.LastInsertId()
+	f.ID = id
+	if t := parseTime(ts); t != nil {
+		f.CreatedAt = *t
+		f.UpdatedAt = *t
+	}
+	return nil
+}
+
+func (s *Store) UpdateClientFile(f *model.ClientFile) error {
+	f.Title = strings.TrimSpace(f.Title)
+	if f.Title == "" {
+		return fmt.Errorf("标题不能为空")
+	}
+	if len([]rune(f.Title)) > 120 {
+		return fmt.Errorf("标题过长（最多 120 字）")
+	}
+	ts := now()
+	res, err := s.db.Exec(
+		`UPDATE client_files SET title=?, enabled=?, updated_at=? WHERE id=?`,
+		f.Title, boolToInt(f.Enabled), ts, f.ID,
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("文件不存在")
+	}
+	if t := parseTime(ts); t != nil {
+		f.UpdatedAt = *t
+	}
+	return nil
+}
+
+// DeleteClientFile removes the DB row and returns stored_name so the caller can unlink the file.
+func (s *Store) DeleteClientFile(id int64) (storedName string, err error) {
+	cur, err := s.GetClientFile(id)
+	if err != nil {
+		return "", err
+	}
+	if cur == nil {
+		return "", fmt.Errorf("文件不存在")
+	}
+	if _, err := s.db.Exec(`DELETE FROM client_files WHERE id=?`, id); err != nil {
+		return "", err
+	}
+	return cur.StoredName, nil
 }
 
 func (s *Store) SetAnnouncementPopup(id int64, popup bool) error {

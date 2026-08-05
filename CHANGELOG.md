@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.5.24
+
+### 查询页客户文件下载
+- 管理端新增 **客户文件** 页：上传 / 启用停用 / 删除（单文件上限 50MB）。
+- 文件存于 `PANEL_DATA/client-files`，元数据入库 `client_files`。
+- 用户查询页展示启用文件列表，可直接下载（全局共享，无需登录）。
+- 公开 API：`GET /api/files`、`GET /api/files/:id/download`。
+
 ## v0.5.23
 
 ### 总览参考式流量看板

@@ -23,6 +23,9 @@ const popupLeft = ref(60)
 let popupTimer = null
 let popupTick = null
 
+// Client files (public query page downloads)
+const clientFiles = ref([])
+
 function clearPopupTimers() {
   if (popupTimer) {
     clearTimeout(popupTimer)
@@ -98,6 +101,32 @@ async function loadAnnouncements({ autoPopup = false } = {}) {
   }
 }
 
+async function loadClientFiles() {
+  try {
+    const res = await fetch('/api/files', {
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+    })
+    if (!res.ok) return
+    const data = await res.json()
+    clientFiles.value = Array.isArray(data?.items) ? data.items : []
+  } catch {
+    /* ignore */
+  }
+}
+
+function downloadClientFile(f) {
+  if (!f) return
+  const url = f.download_url || `/api/files/${f.id}/download`
+  const a = document.createElement('a')
+  a.href = url
+  a.download = f.filename || f.title || 'download'
+  a.rel = 'noopener'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+}
+
 const UI_I18N = {
   zh: {
     accountInfo: '账号信息',
@@ -139,6 +168,9 @@ const UI_I18N = {
     annList: '公告列表',
     noAnn: '暂无公告',
     popup: '弹窗',
+    files: '文件下载',
+    noFiles: '暂无文件',
+    download: '下载',
     invalidLink: '链接无效',
     loadFail: '加载失败',
     copied: '已复制',
@@ -188,6 +220,9 @@ const UI_I18N = {
     annList: 'Notices',
     noAnn: 'No notices',
     popup: 'Popup',
+    files: 'Downloads',
+    noFiles: 'No files',
+    download: 'Download',
     invalidLink: 'Invalid link',
     loadFail: 'Failed to load',
     copied: 'Copied',
@@ -358,7 +393,7 @@ onMounted(async () => {
   }
   document.title = `${panelTitle.value} · ${t.value.titleSuffix}`
   document.documentElement.lang = locale.value === 'en' ? 'en' : 'zh-CN'
-  await Promise.all([load(), loadAnnouncements({ autoPopup: true })])
+  await Promise.all([load(), loadAnnouncements({ autoPopup: true }), loadClientFiles()])
   // status/rate refresh; share/QR stable so no need every tick
   timer = setInterval(async () => {
     try {
@@ -472,6 +507,30 @@ onUnmounted(() => {
               <dt v-if="info.note">{{ t.note }}</dt>
               <dd v-if="info.note">{{ info.note }}</dd>
             </dl>
+          </div>
+        </div>
+
+        <div v-if="clientFiles.length" class="panel">
+          <div class="panel-hd">
+            <h2>{{ t.files }}</h2>
+          </div>
+          <div class="panel-bd" style="padding: 0">
+            <div
+              v-for="f in clientFiles"
+              :key="f.id"
+              class="file-row"
+            >
+              <div class="file-meta">
+                <div class="file-title">{{ f.title || f.filename }}</div>
+                <div class="file-sub muted mono">
+                  {{ f.filename }}
+                  <span v-if="f.size"> · {{ formatBytes(f.size) }}</span>
+                </div>
+              </div>
+              <button type="button" class="btn btn-primary btn-sm" @click="downloadClientFile(f)">
+                {{ t.download }}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -715,5 +774,31 @@ onUnmounted(() => {
 }
 .user-info-page .ring-wrap {
   border-radius: 4px;
+}
+.file-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border, #e2e8f0);
+}
+.file-row:last-child {
+  border-bottom: 0;
+}
+.file-meta {
+  min-width: 0;
+  flex: 1;
+}
+.file-title {
+  font-weight: 600;
+  font-size: 14px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+.file-sub {
+  margin-top: 3px;
+  font-size: 12px;
+  word-break: break-all;
 }
 </style>

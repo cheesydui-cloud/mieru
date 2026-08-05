@@ -429,3 +429,16 @@ type Announcement struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
+
+// ClientFile is an admin-uploaded file downloadable from the public query page.
+type ClientFile struct {
+	ID          int64     `json:"id"`
+	Title       string    `json:"title"`        // display name on query page
+	Filename    string    `json:"filename"`     // original upload name
+	StoredName  string    `json:"-"`            // on-disk uuid name
+	Size        int64     `json:"size"`         // bytes
+	ContentType string    `json:"content_type"` // mime
+	Enabled     bool      `json:"enabled"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}

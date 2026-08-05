@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -263,6 +264,9 @@ func (s *Server) Router() *gin.Engine {
 	r.GET("/api/u/:token", s.publicUserInfo)
 	// Public announcements for user query page (no auth)
 	r.GET("/api/announcements", s.publicAnnouncements)
+	// Public client files for query page (no auth; global list)
+	r.GET("/api/files", s.publicClientFiles)
+	r.GET("/api/files/:id/download", s.publicDownloadClientFile)
 	r.POST("/api/auth/login", s.login)
 
 	agent := r.Group("/api/agent")
@@ -335,6 +339,11 @@ func (s *Server) Router() *gin.Engine {
 		admin.PUT("/announcements/:id", s.updateAnnouncement)
 		admin.DELETE("/announcements/:id", s.deleteAnnouncement)
 		admin.POST("/announcements/:id/popup", s.setAnnouncementPopup)
+
+		admin.GET("/files", s.listClientFiles)
+		admin.POST("/files", s.uploadClientFile)
+		admin.PUT("/files/:id", s.updateClientFile)
+		admin.DELETE("/files/:id", s.deleteClientFile)
 	}
 
 	portal := r.Group("/api/me")
@@ -4859,4 +4868,204 @@ func (s *Server) setAnnouncementPopup(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, cur)
+}
+
+// ---------- Client files (query-page downloads) ----------
+
+const maxClientFileSize = 50 << 20 // 50 MiB
+
+func (s *Server) clientFilesDir() string {
+	dir := filepath.Join(s.cfg.DataDir, "client-files")
+	_ = os.MkdirAll(dir, 0o755)
+	return dir
+}
+
+func (s *Server) publicClientFiles(c *gin.Context) {
+	list, err := s.store.ListPublicClientFiles()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	items := make([]gin.H, 0, len(list))
+	for _, f := range list {
+		items = append(items, gin.H{
+			"id":           f.ID,
+			"title":        f.Title,
+			"filename":     f.Filename,
+			"size":         f.Size,
+			"content_type": f.ContentType,
+			"created_at":   f.CreatedAt,
+			"updated_at":   f.UpdatedAt,
+			"download_url": fmt.Sprintf("/api/files/%d/download", f.ID),
+		})
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, gin.H{"items": items})
+}
+
+func (s *Server) publicDownloadClientFile(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	f, err := s.store.GetClientFile(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if f == nil || !f.Enabled {
+		c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在"})
+		return
+	}
+	pathOnDisk := filepath.Join(s.clientFilesDir(), f.StoredName)
+	// prevent path escape even though stored name is uuid
+	if !strings.HasPrefix(filepath.Clean(pathOnDisk), filepath.Clean(s.clientFilesDir())+string(os.PathSeparator)) &&
+		filepath.Clean(pathOnDisk) != filepath.Clean(s.clientFilesDir()) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在"})
+		return
+	}
+	if st, err := os.Stat(pathOnDisk); err != nil || st.IsDir() {
+		c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在"})
+		return
+	}
+	name := f.Filename
+	if name == "" {
+		name = f.Title
+	}
+	if name == "" {
+		name = "download"
+	}
+	c.Header("Cache-Control", "no-store")
+	c.FileAttachment(pathOnDisk, name)
+}
+
+func (s *Server) listClientFiles(c *gin.Context) {
+	list, err := s.store.ListClientFiles()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, list)
+}
+
+func (s *Server) uploadClientFile(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxClientFileSize+1<<20)
+	file, hdr, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择文件（字段名 file）"})
+		return
+	}
+	defer file.Close()
+	if hdr.Size > maxClientFileSize {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "文件过大（上限 50MB）"})
+		return
+	}
+	origName := filepath.Base(strings.TrimSpace(hdr.Filename))
+	if origName == "" || origName == "." || origName == ".." {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "文件名无效"})
+		return
+	}
+	title := strings.TrimSpace(c.PostForm("title"))
+	if title == "" {
+		title = origName
+	}
+	en := true
+	if v := strings.TrimSpace(c.PostForm("enabled")); v == "0" || strings.EqualFold(v, "false") {
+		en = false
+	}
+	ct := hdr.Header.Get("Content-Type")
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+	stored := uuid.NewString()
+	dir := s.clientFilesDir()
+	dest := filepath.Join(dir, stored)
+	out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法写入文件: " + err.Error()})
+		return
+	}
+	n, copyErr := io.Copy(out, io.LimitReader(file, maxClientFileSize+1))
+	_ = out.Close()
+	if copyErr != nil {
+		_ = os.Remove(dest)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "写入失败: " + copyErr.Error()})
+		return
+	}
+	if n > maxClientFileSize {
+		_ = os.Remove(dest)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "文件过大（上限 50MB）"})
+		return
+	}
+	rec := &model.ClientFile{
+		Title:       title,
+		Filename:    origName,
+		StoredName:  stored,
+		Size:        n,
+		ContentType: ct,
+		Enabled:     en,
+	}
+	if err := s.store.CreateClientFile(rec); err != nil {
+		_ = os.Remove(dest)
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	s.store.Audit("admin", "upload_client_file", fmt.Sprintf("%d", rec.ID), origName)
+	c.JSON(http.StatusOK, rec)
+}
+
+func (s *Server) updateClientFile(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	var req struct {
+		Title   string `json:"title"`
+		Enabled *bool  `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
+		return
+	}
+	cur, err := s.store.GetClientFile(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if cur == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "文件不存在"})
+		return
+	}
+	if strings.TrimSpace(req.Title) != "" {
+		cur.Title = req.Title
+	}
+	if req.Enabled != nil {
+		cur.Enabled = *req.Enabled
+	}
+	if err := s.store.UpdateClientFile(cur); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	s.store.Audit("admin", "update_client_file", fmt.Sprintf("%d", id), cur.Title)
+	c.JSON(http.StatusOK, cur)
+}
+
+func (s *Server) deleteClientFile(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	stored, err := s.store.DeleteClientFile(id)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if stored != "" {
+		_ = os.Remove(filepath.Join(s.clientFilesDir(), filepath.Base(stored)))
+	}
+	s.store.Audit("admin", "delete_client_file", fmt.Sprintf("%d", id), stored)
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

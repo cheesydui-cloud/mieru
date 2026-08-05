@@ -18,6 +18,7 @@ const title = computed(() => {
     nodes: '节点',
     settings: '设置',
     announcements: '公告',
+    files: '客户文件',
   }
   return map[route.name] || '控制台'
 })
@@ -34,6 +35,7 @@ const navMain = [
 const navSystem = [
   { name: 'settings', to: '/settings', label: '设置', icon: 'settings' },
   { name: 'announcements', to: '/announcements', label: '公告', icon: 'megaphone' },
+  { name: 'files', to: '/files', label: '客户文件', icon: 'file' },
 ]
 
 function logout() {
