@@ -510,30 +510,6 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div v-if="clientFiles.length" class="panel">
-          <div class="panel-hd">
-            <h2>{{ t.files }}</h2>
-          </div>
-          <div class="panel-bd" style="padding: 0">
-            <div
-              v-for="f in clientFiles"
-              :key="f.id"
-              class="file-row"
-            >
-              <div class="file-meta">
-                <div class="file-title">{{ f.title || f.filename }}</div>
-                <div class="file-sub muted mono">
-                  {{ f.filename }}
-                  <span v-if="f.size"> · {{ formatBytes(f.size) }}</span>
-                </div>
-              </div>
-              <button type="button" class="btn btn-primary btn-sm" @click="downloadClientFile(f)">
-                {{ t.download }}
-              </button>
-            </div>
-          </div>
-        </div>
-
         <div class="panel">
           <div class="panel-hd">
             <h2>{{ t.scanNode }}</h2>
@@ -621,6 +597,30 @@ onUnmounted(() => {
             <p class="muted" style="margin: 10px 0 0; font-size: 12px; line-height: 1.5">
               {{ t.plainHelp }}
             </p>
+          </div>
+        </div>
+
+        <div v-if="clientFiles.length" class="panel">
+          <div class="panel-hd">
+            <h2>{{ t.files }}</h2>
+          </div>
+          <div class="panel-bd" style="padding: 0">
+            <div
+              v-for="f in clientFiles"
+              :key="f.id"
+              class="file-row"
+            >
+              <div class="file-meta">
+                <div class="file-title">{{ f.title || f.filename }}</div>
+                <div class="file-sub muted mono">
+                  {{ f.filename }}
+                  <span v-if="f.size"> · {{ formatBytes(f.size) }}</span>
+                </div>
+              </div>
+              <button type="button" class="btn btn-primary btn-sm" @click="downloadClientFile(f)">
+                {{ t.download }}
+              </button>
+            </div>
           </div>
         </div>
       </template>
