@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.5.25
+
+### 客户文件上传修复（413）
+- 管理端改为 **分片上传**（512KB/片），绕过 Nginx 默认 `client_max_body_size 1m` 导致的 `Request Entity Too Large`。
+- 新增 API：`POST /api/admin/files/upload/init`、`PUT .../chunk`、`POST .../complete`。
+- 上传弹窗显示进度百分比。
+
 ## v0.5.24
 
 ### 查询页客户文件下载

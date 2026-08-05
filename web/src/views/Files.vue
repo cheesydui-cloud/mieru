@@ -21,6 +21,7 @@ const form = reactive({
 const fileInput = ref(null)
 const pickedName = ref('')
 const pickedSize = ref(0)
+const uploadPct = ref(0)
 
 const sorted = computed(() => list.value || [])
 
@@ -40,8 +41,106 @@ function resetUpload() {
   form.enabled = true
   pickedName.value = ''
   pickedSize.value = 0
+  uploadPct.value = 0
   if (fileInput.value) fileInput.value.value = ''
   formFlash.clear()
+}
+
+function authHeaders(extra = {}) {
+  const headers = { ...extra }
+  const token = getToken()
+  if (token) headers.Authorization = `Bearer ${token}`
+  return headers
+}
+
+async function readJSON(res) {
+  const text = await res.text()
+  let data = null
+  try {
+    data = text ? JSON.parse(text) : null
+  } catch {
+    data = null
+  }
+  return { text, data }
+}
+
+/** Chunked upload: each request stays under reverse-proxy 1MB body limits. */
+async function uploadChunked(file) {
+  const initRes = await fetch('/api/admin/files/upload/init', {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({
+      filename: file.name,
+      title: form.title.trim() || file.name,
+      size: file.size,
+      content_type: file.type || 'application/octet-stream',
+      enabled: !!form.enabled,
+    }),
+  })
+  const init = await readJSON(initRes)
+  if (!initRes.ok) {
+    if (initRes.status === 413) {
+      throw new Error('前置代理限制了请求大小（413）。请升级面板后使用分片上传，或在 Nginx 设置 client_max_body_size 64m;')
+    }
+    throw new Error((init.data && init.data.error) || init.text || initRes.statusText || '初始化上传失败')
+  }
+  const uploadId = init.data?.upload_id
+  let chunkSize = Number(init.data?.chunk_size) || 512 * 1024
+  if (chunkSize < 64 * 1024) chunkSize = 512 * 1024
+  if (chunkSize > 900 * 1024) chunkSize = 512 * 1024
+  if (!uploadId) throw new Error('初始化上传失败：无 upload_id')
+
+  let offset = 0
+  try {
+    while (offset < file.size) {
+      const end = Math.min(offset + chunkSize, file.size)
+      const blob = file.slice(offset, end)
+      const chunkRes = await fetch(
+        `/api/admin/files/upload/${encodeURIComponent(uploadId)}/chunk?offset=${offset}`,
+        {
+          method: 'PUT',
+          headers: authHeaders({ 'Content-Type': 'application/octet-stream' }),
+          body: blob,
+        },
+      )
+      const chunk = await readJSON(chunkRes)
+      if (!chunkRes.ok) {
+        if (chunkRes.status === 413) {
+          throw new Error('前置代理限制了请求大小（413）。请在 Nginx 增加 client_max_body_size 64m; 后重试')
+        }
+        throw new Error((chunk.data && chunk.data.error) || chunk.text || chunkRes.statusText || '分片上传失败')
+      }
+      const received = Number(chunk.data?.received)
+      if (Number.isFinite(received) && received > offset) {
+        offset = received
+      } else {
+        offset = end
+      }
+      uploadPct.value = Math.min(99, Math.round((offset / file.size) * 100))
+    }
+
+    const doneRes = await fetch(`/api/admin/files/upload/${encodeURIComponent(uploadId)}/complete`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: '{}',
+    })
+    const done = await readJSON(doneRes)
+    if (!doneRes.ok) {
+      throw new Error((done.data && done.data.error) || done.text || doneRes.statusText || '完成上传失败')
+    }
+    uploadPct.value = 100
+    return done.data
+  } catch (e) {
+    try {
+      await fetch(`/api/admin/files/upload/${encodeURIComponent(uploadId)}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      })
+    } catch {
+      /* ignore abort errors */
+    }
+    throw e
+  }
 }
 
 function openUpload() {
@@ -105,30 +204,11 @@ async function doUpload() {
     return
   }
   uploading.value = true
+  uploadPct.value = 0
   formFlash.clear()
   try {
-    const fd = new FormData()
-    fd.append('file', f)
-    if (form.title.trim()) fd.append('title', form.title.trim())
-    fd.append('enabled', form.enabled ? '1' : '0')
-    const headers = {}
-    const token = getToken()
-    if (token) headers.Authorization = `Bearer ${token}`
-    const res = await fetch('/api/admin/files', {
-      method: 'POST',
-      headers,
-      body: fd,
-    })
-    const text = await res.text()
-    let data = null
-    try {
-      data = text ? JSON.parse(text) : null
-    } catch {
-      data = null
-    }
-    if (!res.ok) {
-      throw new Error((data && data.error) || res.statusText || '上传失败')
-    }
+    // Always chunked: works behind nginx default client_max_body_size 1m
+    await uploadChunked(f)
     formFlash.ok('已上传')
     await load()
     setTimeout(() => closeUpload(), 600)
@@ -281,6 +361,21 @@ onMounted(load)
           <input type="checkbox" v-model="form.enabled" />
           启用（停用后查询页不显示）
         </label>
+        <div v-if="uploading" class="muted" style="font-size: 12px; margin-top: 10px">
+          上传中 {{ uploadPct }}%
+          <div
+            style="margin-top: 6px; height: 6px; background: #e2e8f0; border-radius: 3px; overflow: hidden"
+          >
+            <div
+              :style="{
+                width: uploadPct + '%',
+                height: '100%',
+                background: 'var(--accent, #0f766e)',
+                transition: 'width 0.15s linear',
+              }"
+            />
+          </div>
+        </div>
       </div>
       <div class="modal-ft" style="justify-content: space-between; align-items: center">
         <div
@@ -296,7 +391,7 @@ onMounted(load)
         <div class="row-actions">
           <button type="button" class="btn btn-ghost" :disabled="uploading" @click="closeUpload">取消</button>
           <button type="button" class="btn btn-primary" :disabled="uploading" @click="doUpload">
-            {{ uploading ? '上传中…' : '上传' }}
+            {{ uploading ? `上传中 ${uploadPct}%` : '上传' }}
           </button>
         </div>
       </div>

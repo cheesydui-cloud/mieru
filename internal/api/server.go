@@ -79,6 +79,10 @@ type Server struct {
 	panelURLMu   sync.Mutex
 	panelURLJobs map[string]*panelURLJob // nodeID -> job
 
+	// chunked client-file uploads (bypass reverse-proxy body limits)
+	uploadMu      sync.Mutex
+	pendingUpload map[string]*pendingClientUpload // uploadID -> session
+
 	// login rate limit (per IP)
 	loginMu   sync.Mutex
 	loginFail map[string]*loginAttempt
@@ -114,20 +118,34 @@ type probeSnap struct {
 	Health string
 }
 
+// pendingClientUpload is a multi-chunk admin upload session (stored under DataDir/client-files/tmp).
+type pendingClientUpload struct {
+	ID          string
+	Filename    string
+	Title       string
+	ContentType string
+	Enabled     bool
+	Size        int64
+	Received    int64
+	Path        string
+	CreatedAt   time.Time
+}
+
 func New(cfg config.PanelConfig, st *store.Store) *Server {
 	return &Server{
-		cfg:          cfg,
-		store:        st,
-		jwt:          auth.NewTokenManager(cfg.JWTSecret),
-		gen:          &configgen.Builder{Store: st},
-		Version:      "dev",
-		dialWait:     map[string]map[string]chan dialResult{},
-		dialJobs:     map[string][]dialJob{},
-		upgradeJobs:  map[string]*upgradeJob{},
-		panelURLJobs: map[string]*panelURLJob{},
-		loginFail:    map[string]*loginAttempt{},
-		lastTraffic:  map[string]time.Time{},
-		lastProbe:    map[int64]probeSnap{},
+		cfg:           cfg,
+		store:         st,
+		jwt:           auth.NewTokenManager(cfg.JWTSecret),
+		gen:           &configgen.Builder{Store: st},
+		Version:       "dev",
+		dialWait:      map[string]map[string]chan dialResult{},
+		dialJobs:      map[string][]dialJob{},
+		upgradeJobs:   map[string]*upgradeJob{},
+		panelURLJobs:  map[string]*panelURLJob{},
+		pendingUpload: map[string]*pendingClientUpload{},
+		loginFail:     map[string]*loginAttempt{},
+		lastTraffic:   map[string]time.Time{},
+		lastProbe:     map[int64]probeSnap{},
 	}
 }
 
@@ -224,6 +242,8 @@ func applyOfflineStatus(n *model.Node, now time.Time) {
 func (s *Server) Router() *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
+	// Default is 32 MiB; keep headroom for single-shot multipart uploads.
+	r.MaxMultipartMemory = 64 << 20
 	r.Use(gin.Recovery(), gin.Logger())
 
 	c := cors.Config{
@@ -342,6 +362,11 @@ func (s *Server) Router() *gin.Engine {
 
 		admin.GET("/files", s.listClientFiles)
 		admin.POST("/files", s.uploadClientFile)
+		// Chunked upload (preferred): survives nginx default client_max_body_size 1m
+		admin.POST("/files/upload/init", s.initClientFileUpload)
+		admin.PUT("/files/upload/:id/chunk", s.chunkClientFileUpload)
+		admin.POST("/files/upload/:id/complete", s.completeClientFileUpload)
+		admin.DELETE("/files/upload/:id", s.abortClientFileUpload)
 		admin.PUT("/files/:id", s.updateClientFile)
 		admin.DELETE("/files/:id", s.deleteClientFile)
 	}
@@ -4873,11 +4898,295 @@ func (s *Server) setAnnouncementPopup(c *gin.Context) {
 // ---------- Client files (query-page downloads) ----------
 
 const maxClientFileSize = 50 << 20 // 50 MiB
+// maxClientFileChunk keeps each request under typical nginx client_max_body_size 1m.
+const maxClientFileChunk = 512 << 10 // 512 KiB
 
 func (s *Server) clientFilesDir() string {
 	dir := filepath.Join(s.cfg.DataDir, "client-files")
 	_ = os.MkdirAll(dir, 0o755)
 	return dir
+}
+
+func (s *Server) clientFilesTmpDir() string {
+	dir := filepath.Join(s.clientFilesDir(), "tmp")
+	_ = os.MkdirAll(dir, 0o755)
+	return dir
+}
+
+func (s *Server) purgeStaleUploadsLocked() {
+	cutoff := time.Now().Add(-2 * time.Hour)
+	for id, u := range s.pendingUpload {
+		if u == nil || u.CreatedAt.Before(cutoff) {
+			if u != nil && u.Path != "" {
+				_ = os.Remove(u.Path)
+			}
+			delete(s.pendingUpload, id)
+		}
+	}
+}
+
+func (s *Server) takePendingUpload(id string) *pendingClientUpload {
+	s.uploadMu.Lock()
+	defer s.uploadMu.Unlock()
+	s.purgeStaleUploadsLocked()
+	return s.pendingUpload[id]
+}
+
+func (s *Server) initClientFileUpload(c *gin.Context) {
+	var req struct {
+		Filename    string `json:"filename"`
+		Title       string `json:"title"`
+		Size        int64  `json:"size"`
+		ContentType string `json:"content_type"`
+		Enabled     *bool  `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad request"})
+		return
+	}
+	name := filepath.Base(strings.TrimSpace(req.Filename))
+	if name == "" || name == "." || name == ".." {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "文件名无效"})
+		return
+	}
+	if req.Size <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "文件大小无效"})
+		return
+	}
+	if req.Size > maxClientFileSize {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "文件过大（上限 50MB）"})
+		return
+	}
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		title = name
+	}
+	if len([]rune(title)) > 120 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "标题过长（最多 120 字）"})
+		return
+	}
+	en := true
+	if req.Enabled != nil {
+		en = *req.Enabled
+	}
+	ct := strings.TrimSpace(req.ContentType)
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+	id := uuid.NewString()
+	tmpPath := filepath.Join(s.clientFilesTmpDir(), id+".part")
+	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法创建临时文件: " + err.Error()})
+		return
+	}
+	_ = f.Close()
+
+	s.uploadMu.Lock()
+	s.purgeStaleUploadsLocked()
+	s.pendingUpload[id] = &pendingClientUpload{
+		ID:          id,
+		Filename:    name,
+		Title:       title,
+		ContentType: ct,
+		Enabled:     en,
+		Size:        req.Size,
+		Received:    0,
+		Path:        tmpPath,
+		CreatedAt:   time.Now(),
+	}
+	s.uploadMu.Unlock()
+
+	c.JSON(http.StatusOK, gin.H{
+		"upload_id":   id,
+		"chunk_size":  maxClientFileChunk,
+		"max_size":    maxClientFileSize,
+		"filename":    name,
+		"title":       title,
+		"size":        req.Size,
+	})
+}
+
+func (s *Server) chunkClientFileUpload(c *gin.Context) {
+	id := strings.TrimSpace(c.Param("id"))
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid upload id"})
+		return
+	}
+	offStr := c.Query("offset")
+	offset, err := strconv.ParseInt(offStr, 10, 64)
+	if err != nil || offset < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid offset"})
+		return
+	}
+	sess := s.takePendingUpload(id)
+	if sess == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "上传会话不存在或已过期，请重新上传"})
+		return
+	}
+	// Body limit slightly above chunk size for safety.
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxClientFileChunk+64*1024)
+
+	s.uploadMu.Lock()
+	cur := s.pendingUpload[id]
+	if cur == nil {
+		s.uploadMu.Unlock()
+		c.JSON(http.StatusNotFound, gin.H{"error": "上传会话不存在或已过期，请重新上传"})
+		return
+	}
+	if offset != cur.Received {
+		got := cur.Received
+		s.uploadMu.Unlock()
+		c.JSON(http.StatusConflict, gin.H{"error": "offset 不匹配", "received": got, "expected_offset": got})
+		return
+	}
+	if offset >= cur.Size {
+		s.uploadMu.Unlock()
+		c.JSON(http.StatusBadRequest, gin.H{"error": "文件已传完"})
+		return
+	}
+	remain := cur.Size - offset
+	limit := int64(maxClientFileChunk)
+	if remain < limit {
+		limit = remain
+	}
+	path := cur.Path
+	s.uploadMu.Unlock()
+
+	f, err := os.OpenFile(path, os.O_WRONLY, 0o644)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法打开临时文件: " + err.Error()})
+		return
+	}
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		_ = f.Close()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "seek 失败: " + err.Error()})
+		return
+	}
+	n, copyErr := io.Copy(f, io.LimitReader(c.Request.Body, limit+1))
+	_ = f.Close()
+	if copyErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "读取分片失败: " + copyErr.Error()})
+		return
+	}
+	if n > limit {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "分片过大"})
+		return
+	}
+	if n == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "空分片"})
+		return
+	}
+
+	s.uploadMu.Lock()
+	cur = s.pendingUpload[id]
+	if cur == nil {
+		s.uploadMu.Unlock()
+		c.JSON(http.StatusNotFound, gin.H{"error": "上传会话不存在或已过期，请重新上传"})
+		return
+	}
+	if offset != cur.Received {
+		got := cur.Received
+		s.uploadMu.Unlock()
+		c.JSON(http.StatusConflict, gin.H{"error": "offset 不匹配", "received": got})
+		return
+	}
+	cur.Received += n
+	received := cur.Received
+	total := cur.Size
+	s.uploadMu.Unlock()
+
+	c.JSON(http.StatusOK, gin.H{
+		"received": received,
+		"size":     total,
+		"done":     received >= total,
+	})
+}
+
+func (s *Server) completeClientFileUpload(c *gin.Context) {
+	id := strings.TrimSpace(c.Param("id"))
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid upload id"})
+		return
+	}
+	s.uploadMu.Lock()
+	sess := s.pendingUpload[id]
+	if sess == nil {
+		s.uploadMu.Unlock()
+		c.JSON(http.StatusNotFound, gin.H{"error": "上传会话不存在或已过期，请重新上传"})
+		return
+	}
+	if sess.Received != sess.Size {
+		got, want := sess.Received, sess.Size
+		s.uploadMu.Unlock()
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("文件未传完（%d/%d）", got, want)})
+		return
+	}
+	delete(s.pendingUpload, id)
+	s.uploadMu.Unlock()
+
+	// move temp -> final uuid name
+	stored := uuid.NewString()
+	dest := filepath.Join(s.clientFilesDir(), stored)
+	if err := os.Rename(sess.Path, dest); err != nil {
+		// cross-device fallback
+		if err2 := copyFile(sess.Path, dest); err2 != nil {
+			_ = os.Remove(sess.Path)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "保存文件失败: " + err2.Error()})
+			return
+		}
+		_ = os.Remove(sess.Path)
+	}
+	// verify size
+	if st, err := os.Stat(dest); err != nil || st.Size() != sess.Size {
+		_ = os.Remove(dest)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "文件大小校验失败"})
+		return
+	}
+	rec := &model.ClientFile{
+		Title:       sess.Title,
+		Filename:    sess.Filename,
+		StoredName:  stored,
+		Size:        sess.Size,
+		ContentType: sess.ContentType,
+		Enabled:     sess.Enabled,
+	}
+	if err := s.store.CreateClientFile(rec); err != nil {
+		_ = os.Remove(dest)
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	s.store.Audit("admin", "upload_client_file", fmt.Sprintf("%d", rec.ID), sess.Filename+" (chunked)")
+	c.JSON(http.StatusOK, rec)
+}
+
+func (s *Server) abortClientFileUpload(c *gin.Context) {
+	id := strings.TrimSpace(c.Param("id"))
+	s.uploadMu.Lock()
+	sess := s.pendingUpload[id]
+	delete(s.pendingUpload, id)
+	s.uploadMu.Unlock()
+	if sess != nil && sess.Path != "" {
+		_ = os.Remove(sess.Path)
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(out, in)
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
 
 func (s *Server) publicClientFiles(c *gin.Context) {
