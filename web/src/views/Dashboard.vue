@@ -76,19 +76,21 @@ const hourlyMax = computed(() => {
   for (const p of hourlyPoints.value) {
     if (p.total > m) m = p.total
   }
-  // headroom so line doesn't touch top
-  return m > 0 ? m * 1.08 : 1
+  // nice headroom; when empty still show a readable axis
+  if (m <= 0) return 4 * 1024 * 1024 * 1024 // 4 GiB placeholder scale like clean empty charts
+  return m * 1.15
 })
 
 const chartHover = ref(null)
+const chartTip = ref({ x: 0, y: 0, show: false })
 
 const chartLayout = {
-  w: 720,
-  h: 200,
-  padL: 52,
-  padR: 16,
-  padT: 16,
-  padB: 28,
+  w: 960,
+  h: 280,
+  padL: 48,
+  padR: 18,
+  padT: 18,
+  padB: 36,
 }
 
 function chartX(h) {
@@ -101,7 +103,7 @@ function chartY(v) {
   const { h, padT, padB } = chartLayout
   const inner = h - padT - padB
   const max = hourlyMax.value || 1
-  return padT + inner * (1 - v / max)
+  return padT + inner * (1 - Math.min(v, max) / max)
 }
 
 const chartLinePath = computed(() => {
@@ -127,9 +129,7 @@ const chartAreaPath = computed(() => {
 
 const yTicks = computed(() => {
   const max = hourlyMax.value
-  // 4 ticks including 0
   const vals = [0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(max * f))
-  // de-dupe when tiny
   const uniq = []
   for (const v of vals) {
     if (!uniq.length || uniq[uniq.length - 1] !== v) uniq.push(v)
@@ -137,30 +137,49 @@ const yTicks = computed(() => {
   return uniq.map((v) => ({ v, y: chartY(v), label: formatBytes(v) }))
 })
 
-const xTicks = [0, 3, 6, 9, 12, 15, 18, 21, 23]
-
-function onChartMove(ev) {
-  const svg = ev.currentTarget
-  const rect = svg.getBoundingClientRect()
-  const { w, padL, padR } = chartLayout
-  const x = ((ev.clientX - rect.left) / rect.width) * w
-  const inner = w - padL - padR
-  let h = Math.round(((x - padL) / inner) * 23)
-  if (h < 0) h = 0
-  if (h > 23) h = 23
-  chartHover.value = hourlyPoints.value[h]
-}
-
-function onChartLeave() {
-  chartHover.value = null
-}
+// every hour label like reference 00:00 … 23:00
+const xTicks = Array.from({ length: 24 }, (_, h) => h)
 
 function hourLabel(h) {
   return String(h).padStart(2, '0') + ':00'
 }
 
+function onChartMove(ev) {
+  const svg = ev.currentTarget
+  const rect = svg.getBoundingClientRect()
+  const { w, padL, padR, padT } = chartLayout
+  const x = ((ev.clientX - rect.left) / rect.width) * w
+  const inner = w - padL - padR
+  let h = Math.round(((x - padL) / inner) * 23)
+  if (h < 0) h = 0
+  if (h > 23) h = 23
+  const pt = hourlyPoints.value[h]
+  chartHover.value = pt
+  // tip position in SVG coords, keep inside
+  let tipX = chartX(h)
+  let tipY = chartY(pt.total) - 12
+  if (tipY < padT + 56) tipY = chartY(pt.total) + 56
+  if (tipX < padL + 90) tipX = padL + 90
+  if (tipX > w - padR - 90) tipX = w - padR - 90
+  chartTip.value = { x: tipX, y: tipY, show: true }
+}
+
+function onChartLeave() {
+  chartHover.value = null
+  chartTip.value = { x: 0, y: 0, show: false }
+}
+
 const onlineCount = computed(() => nodes.value.filter((n) => n.status === 'online').length)
 const offlineCount = computed(() => Math.max(0, nodes.value.length - onlineCount.value))
+
+const monthBarPct = computed(() => {
+  if (!monthTotal.value) return 0
+  return Math.min(100, Math.round((todayTotal.value / monthTotal.value) * 100))
+})
+const onlinePct = computed(() => {
+  if (!nodes.value.length) return 0
+  return Math.round((onlineCount.value / nodes.value.length) * 100)
+})
 
 const allIssueItems = computed(() => {
   const items = []
@@ -331,89 +350,119 @@ onUnmounted(() => clearInterval(timer))
     </div>
   </div>
 
-  <!-- 4 primary KPIs: 总流量 · 今日 · 节点 · 待处理 -->
-  <div class="grid-stats dash-kpi" v-if="diag">
-    <div class="card clickable" :class="monthTotal ? 'card-ok' : ''" @click="router.push('/users')">
-      <h3>总流量</h3>
-      <div class="value" style="font-size:20px">{{ formatBytes(monthTotal) }}</div>
-      <div class="sub">本月 · 每月 1 日 0 点重置 · ↓ {{ formatBytes(monthDown) }} · ↑ {{ formatBytes(monthUp) }}</div>
-    </div>
-    <div class="card clickable" @click="router.push('/users')">
-      <h3>今日流量</h3>
-      <div class="value" style="font-size:20px">{{ formatBytes(todayTotal) }}</div>
-      <div class="sub">↓ {{ formatBytes(todayDown) }} · ↑ {{ formatBytes(todayUp) }}</div>
-    </div>
-    <div
-      class="card clickable"
-      :class="offlineCount === 0 && nodes.length ? 'card-ok' : offlineCount ? 'card-warn' : ''"
-      @click="router.push('/nodes')"
-    >
-      <h3>节点在线</h3>
-      <div class="value">
-        {{ onlineCount }}<span class="slash"> / {{ nodes.length }}</span>
+  <!-- KPI row (reference-style clean cards) -->
+  <div class="dash-kpi" v-if="diag">
+    <button type="button" class="kpi-card" @click="router.push('/users')">
+      <div class="kpi-top">
+        <span class="kpi-label">总流量</span>
+        <span class="kpi-ico teal" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 18V6M10 18V10M16 18V8M20 18H3"/></svg>
+        </span>
       </div>
-      <div class="sub" v-if="offlineCount">{{ offlineCount }} 离线</div>
-      <div class="sub" v-else>全部在线</div>
-    </div>
-    <div
-      class="card clickable"
-      :class="issueCount ? 'card-warn' : 'card-ok'"
-      @click="issueCount ? null : router.push('/nodes')"
-    >
-      <h3>待处理</h3>
-      <div class="value">{{ issueCount }}</div>
-      <div class="sub">{{ issueCount ? '点击下方列表处理' : '系统正常' }}</div>
-    </div>
+      <div class="kpi-value">{{ formatBytes(monthTotal) }}</div>
+      <div class="kpi-foot">
+        <span>本月 · 每月 1 日 0 点重置</span>
+      </div>
+      <div class="kpi-bar"><i :style="{ width: Math.min(100, monthBarPct || 8) + '%' }" /></div>
+      <div class="kpi-meta">↓ {{ formatBytes(monthDown) }} · ↑ {{ formatBytes(monthUp) }}</div>
+    </button>
+
+    <button type="button" class="kpi-card" @click="router.push('/users')">
+      <div class="kpi-top">
+        <span class="kpi-label">今日流量</span>
+        <span class="kpi-ico mint" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 16l5-5 4 4 7-8"/><path d="M14 7h6v6"/></svg>
+        </span>
+      </div>
+      <div class="kpi-value">{{ formatBytes(todayTotal) }}</div>
+      <div class="kpi-foot">
+        <span>↓ {{ formatBytes(todayDown) }} · ↑ {{ formatBytes(todayUp) }}</span>
+        <span class="kpi-chip">今日</span>
+      </div>
+      <div class="kpi-bar"><i :style="{ width: (todayTotal ? 72 : 6) + '%' }" /></div>
+    </button>
+
+    <button type="button" class="kpi-card" @click="router.push('/nodes')">
+      <div class="kpi-top">
+        <span class="kpi-label">节点在线</span>
+        <span class="kpi-ico violet" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3.5" y="4" width="7" height="7" rx="1.5"/><rect x="13.5" y="4" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/></svg>
+        </span>
+      </div>
+      <div class="kpi-value">{{ onlineCount }}<span class="kpi-slash"> / {{ nodes.length }}</span></div>
+      <div class="kpi-foot">
+        <span>{{ offlineCount ? offlineCount + ' 离线' : '全部在线' }}</span>
+      </div>
+      <div class="kpi-bar"><i :style="{ width: onlinePct + '%' }" /></div>
+    </button>
+
+    <button type="button" class="kpi-card" :class="{ warn: issueCount }" @click="issueCount ? null : router.push('/nodes')">
+      <div class="kpi-top">
+        <span class="kpi-label">待处理</span>
+        <span class="kpi-ico sand" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 8v5"/><circle cx="12" cy="16.5" r="0.9" fill="currentColor" stroke="none"/><path d="M10.2 4.8h3.6L20 18.2H4L10.2 4.8z"/></svg>
+        </span>
+      </div>
+      <div class="kpi-value">{{ issueCount }}</div>
+      <div class="kpi-foot">
+        <span>{{ issueCount ? '点击下方列表处理' : '系统正常' }}</span>
+      </div>
+      <div class="kpi-bar"><i :style="{ width: issueCount ? Math.min(100, 20 + issueCount * 12) + '%' : '8%' }" /></div>
+    </button>
   </div>
 
-  <!-- Today hourly traffic curve -->
+  <!-- 24h traffic chart -->
   <div class="panel dash-traffic" v-if="diag">
-    <div class="panel-hd">
-      <div>
-        <h2>今日流量</h2>
-        <div class="muted" style="font-size:12px;margin-top:3px">
-          按小时 · 本地 0–23 点 · 总计 {{ formatBytes(todayTotal) }}
-        </div>
+    <div class="panel-hd dash-traffic-hd">
+      <div class="dash-traffic-title">
+        <span class="dash-traffic-dot" aria-hidden="true" />
+        <h2>24小时流量统计</h2>
       </div>
-      <div class="dash-chart-hover mono" v-if="chartHover">
-        <strong>{{ hourLabel(chartHover.hour) }}</strong>
-        <span>{{ formatBytes(chartHover.total) }}</span>
-        <span class="muted">↓ {{ formatBytes(chartHover.down) }} · ↑ {{ formatBytes(chartHover.up) }}</span>
-      </div>
-      <div class="muted dash-chart-hover" v-else style="font-size:12px">悬停查看各小时</div>
+      <div class="muted" style="font-size:12px">本地 0–23 点 · 今日合计 {{ formatBytes(todayTotal) }}</div>
     </div>
     <div class="panel-bd dash-chart-wrap">
       <svg
         class="dash-chart"
-        viewBox="0 0 720 200"
+        :viewBox="`0 0 ${chartLayout.w} ${chartLayout.h}`"
         preserveAspectRatio="none"
         @mousemove="onChartMove"
         @mouseleave="onChartLeave"
         role="img"
         aria-label="今日按小时流量曲线"
       >
-        <!-- grid + axes -->
+        <!-- horizontal grid -->
         <line
           v-for="t in yTicks"
           :key="'yg' + t.v"
           :x1="chartLayout.padL"
-          :x2="720 - chartLayout.padR"
+          :x2="chartLayout.w - chartLayout.padR"
           :y1="t.y"
           :y2="t.y"
           class="dash-chart-grid"
         />
+        <!-- vertical grid every hour -->
+        <line
+          v-for="h in xTicks"
+          :key="'xg' + h"
+          :x1="chartX(h)"
+          :x2="chartX(h)"
+          :y1="chartLayout.padT"
+          :y2="chartLayout.h - chartLayout.padB"
+          class="dash-chart-vgrid"
+        />
+        <!-- axes -->
         <line
           :x1="chartLayout.padL"
           :y1="chartLayout.padT"
           :x2="chartLayout.padL"
-          :y2="200 - chartLayout.padB"
+          :y2="chartLayout.h - chartLayout.padB"
           class="dash-chart-axis"
         />
         <line
           :x1="chartLayout.padL"
-          :y1="200 - chartLayout.padB"
-          :x2="720 - chartLayout.padR"
-          :y2="200 - chartLayout.padB"
+          :y1="chartLayout.h - chartLayout.padB"
+          :x2="chartLayout.w - chartLayout.padR"
+          :y2="chartLayout.h - chartLayout.padB"
           class="dash-chart-axis"
         />
         <text
@@ -428,40 +477,54 @@ onUnmounted(() => clearInterval(timer))
           v-for="h in xTicks"
           :key="'xl' + h"
           :x="chartX(h)"
-          :y="200 - 8"
-          class="dash-chart-label"
+          :y="chartLayout.h - 10"
+          class="dash-chart-xlabel"
           text-anchor="middle"
-        >{{ h }}</text>
-        <!-- area + line -->
+        >{{ hourLabel(h) }}</text>
         <path :d="chartAreaPath" class="dash-chart-area" />
         <path :d="chartLinePath" class="dash-chart-line" fill="none" />
-        <!-- points -->
         <circle
           v-for="p in hourlyPoints"
           :key="'p' + p.hour"
           :cx="chartX(p.hour)"
           :cy="chartY(p.total)"
-          r="2.5"
-          class="dash-chart-dot"
-          :class="{ active: chartHover && chartHover.hour === p.hour }"
+          r="0"
+          class="dash-chart-hit"
         />
-        <!-- hover guide -->
         <template v-if="chartHover">
           <line
             :x1="chartX(chartHover.hour)"
             :x2="chartX(chartHover.hour)"
             :y1="chartLayout.padT"
-            :y2="200 - chartLayout.padB"
+            :y2="chartLayout.h - chartLayout.padB"
             class="dash-chart-guide"
           />
           <circle
             :cx="chartX(chartHover.hour)"
             :cy="chartY(chartHover.total)"
-            r="4.5"
-            class="dash-chart-dot active"
+            r="5"
+            class="dash-chart-focus"
+          />
+          <circle
+            :cx="chartX(chartHover.hour)"
+            :cy="chartY(chartHover.total)"
+            r="2.5"
+            class="dash-chart-focus-core"
           />
         </template>
       </svg>
+      <div
+        v-if="chartTip.show && chartHover"
+        class="dash-chart-tip"
+        :style="{
+          left: (chartTip.x / chartLayout.w * 100) + '%',
+          top: (chartTip.y / chartLayout.h * 100) + '%',
+        }"
+      >
+        <div>时间: {{ hourLabel(chartHover.hour) }}</div>
+        <div class="tip-val">流量: {{ formatBytes(chartHover.total) }}</div>
+        <div class="tip-sub">↓ {{ formatBytes(chartHover.down) }} · ↑ {{ formatBytes(chartHover.up) }}</div>
+      </div>
     </div>
   </div>
 
@@ -624,19 +687,6 @@ onUnmounted(() => clearInterval(timer))
 .dash-sub {
   font-size: 12.5px;
 }
-.dash-kpi {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-@media (max-width: 1100px) {
-  .dash-kpi {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-@media (max-width: 560px) {
-  .dash-kpi {
-    grid-template-columns: 1fr;
-  }
-}
 
 .dash-alerts {
   display: flex;
@@ -772,69 +822,222 @@ onUnmounted(() => clearInterval(timer))
   padding: 9px 12px;
 }
 
-.dash-traffic .panel-hd {
-  align-items: flex-start;
+
+
+/* ── Dashboard KPI + 24h chart (reference-inspired, teal ops) ── */
+.dash-kpi {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 4px 0 12px;
 }
-.dash-chart-hover {
+@media (max-width: 1100px) {
+  .dash-kpi { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) {
+  .dash-kpi { grid-template-columns: 1fr; }
+}
+.kpi-card {
+  appearance: none;
+  text-align: left;
+  border: 1px solid var(--border-line);
+  background: var(--bg-surface);
+  border-radius: 12px;
+  padding: 16px 16px 14px;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+  min-height: 132px;
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  font-size: 12.5px;
-  color: var(--text-secondary);
+  flex-direction: column;
+  gap: 6px;
 }
-.dash-chart-hover strong {
+.kpi-card:hover {
+  border-color: var(--border-strong);
+  background: #fff;
+}
+.kpi-card.warn {
+  border-color: rgba(180, 83, 9, 0.28);
+}
+.kpi-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.kpi-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.kpi-ico {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+.kpi-ico.teal { background: rgba(15, 118, 110, 0.12); color: #0f766e; }
+.kpi-ico.mint { background: rgba(21, 128, 61, 0.12); color: #15803d; }
+.kpi-ico.violet { background: rgba(15, 118, 110, 0.10); color: #0f766e; }
+.kpi-ico.sand { background: rgba(180, 83, 9, 0.12); color: #b45309; }
+.kpi-value {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
   color: var(--text);
+  line-height: 1.15;
+  margin-top: 2px;
+}
+.kpi-slash {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.kpi-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+.kpi-chip {
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-line);
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+.kpi-bar {
+  height: 4px;
+  border-radius: 999px;
+  background: #eef1f4;
+  overflow: hidden;
+  margin-top: 4px;
+}
+.kpi-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #0f766e 0%, #2dd4bf 100%);
+}
+.kpi-meta {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.dash-traffic {
+  margin-bottom: 12px;
+  border-radius: 12px;
+  overflow: hidden;
+}
+.dash-traffic-hd {
+  align-items: center;
+}
+.dash-traffic-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.dash-traffic-title h2 {
+  margin: 0;
+  font-size: 14.5px;
   font-weight: 650;
 }
+.dash-traffic-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background:
+    conic-gradient(var(--accent) 0 70%, #dbe4ea 0);
+  box-shadow: inset 0 0 0 2px #fff;
+  flex-shrink: 0;
+}
 .dash-chart-wrap {
-  padding: 4px 12px 12px;
+  position: relative;
+  padding: 4px 10px 14px;
 }
 .dash-chart {
   width: 100%;
-  height: 200px;
+  height: 280px;
   display: block;
   cursor: crosshair;
 }
 .dash-chart-grid {
-  stroke: var(--border-line);
+  stroke: #e8ecf0;
   stroke-width: 1;
-  stroke-dasharray: 3 4;
-  opacity: 0.9;
+  stroke-dasharray: 4 4;
+}
+.dash-chart-vgrid {
+  stroke: #eef1f4;
+  stroke-width: 1;
+  stroke-dasharray: 3 5;
 }
 .dash-chart-axis {
-  stroke: var(--border-strong, var(--border-line));
-  stroke-width: 1.2;
+  stroke: #d5dbe3;
+  stroke-width: 1;
 }
 .dash-chart-label {
-  fill: var(--text-muted, var(--text-secondary));
+  fill: #98a2b3;
   font-size: 10px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-family: var(--mono);
+}
+.dash-chart-xlabel {
+  fill: #98a2b3;
+  font-size: 9px;
+  font-family: var(--mono);
 }
 .dash-chart-area {
-  fill: var(--accent-soft);
+  fill: rgba(15, 118, 110, 0.08);
 }
 .dash-chart-line {
-  stroke: var(--accent);
-  stroke-width: 2.2;
+  stroke: #0f766e;
+  stroke-width: 2;
   stroke-linejoin: round;
   stroke-linecap: round;
 }
-.dash-chart-dot {
-  fill: var(--bg-surface, #fff);
-  stroke: var(--accent);
-  stroke-width: 1.6;
-  opacity: 0.55;
-}
-.dash-chart-dot.active {
-  opacity: 1;
-  fill: var(--accent);
-  stroke: var(--accent);
-}
 .dash-chart-guide {
-  stroke: var(--accent);
+  stroke: #94a3b8;
   stroke-width: 1;
   stroke-dasharray: 3 3;
-  opacity: 0.45;
+}
+.dash-chart-focus {
+  fill: #fff;
+  stroke: #0f766e;
+  stroke-width: 2;
+}
+.dash-chart-focus-core {
+  fill: #0f766e;
+  stroke: none;
+}
+.dash-chart-tip {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  pointer-events: none;
+  background: #fff;
+  border: 1px solid var(--border-line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+  font-size: 12.5px;
+  color: var(--text);
+  min-width: 128px;
+  z-index: 3;
+  line-height: 1.45;
+}
+.dash-chart-tip .tip-val {
+  color: #0f766e;
+  font-weight: 600;
+  margin-top: 2px;
+}
+.dash-chart-tip .tip-sub {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  margin-top: 2px;
 }
 </style>
