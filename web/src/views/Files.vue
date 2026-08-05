@@ -199,8 +199,8 @@ async function doUpload() {
     formFlash.err('请选择文件')
     return
   }
-  if (f.size > 50 * 1024 * 1024) {
-    formFlash.err('文件过大（上限 50MB）')
+  if (f.size > 500 * 1024 * 1024) {
+    formFlash.err('文件过大（上限 500MB）')
     return
   }
   uploading.value = true
@@ -289,7 +289,7 @@ onMounted(load)
       <div>
         <h2>客户文件</h2>
         <div class="muted" style="font-size: 12px; margin-top: 3px">
-          上传后展示在用户查询页，客户可直接下载（全局共享，上限 50MB/文件）
+          上传后展示在用户查询页，客户可直接下载（全局共享，上限 500MB/文件）
         </div>
       </div>
       <div class="row-actions">

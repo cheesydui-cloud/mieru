@@ -4897,7 +4897,7 @@ func (s *Server) setAnnouncementPopup(c *gin.Context) {
 
 // ---------- Client files (query-page downloads) ----------
 
-const maxClientFileSize = 50 << 20 // 50 MiB
+const maxClientFileSize = 500 << 20 // 500 MiB
 // maxClientFileChunk keeps each request under typical nginx client_max_body_size 1m.
 const maxClientFileChunk = 512 << 10 // 512 KiB
 
@@ -4954,7 +4954,7 @@ func (s *Server) initClientFileUpload(c *gin.Context) {
 		return
 	}
 	if req.Size > maxClientFileSize {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "文件过大（上限 50MB）"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "文件过大（上限 500MB）"})
 		return
 	}
 	title := strings.TrimSpace(req.Title)
@@ -5267,7 +5267,7 @@ func (s *Server) uploadClientFile(c *gin.Context) {
 	}
 	defer file.Close()
 	if hdr.Size > maxClientFileSize {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "文件过大（上限 50MB）"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "文件过大（上限 500MB）"})
 		return
 	}
 	origName := filepath.Base(strings.TrimSpace(hdr.Filename))
@@ -5304,7 +5304,7 @@ func (s *Server) uploadClientFile(c *gin.Context) {
 	}
 	if n > maxClientFileSize {
 		_ = os.Remove(dest)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "文件过大（上限 50MB）"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "文件过大（上限 500MB）"})
 		return
 	}
 	rec := &model.ClientFile{
