@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.5.29
+
+### 出口强制 IPv4 落地（修 gai 无效）
+- `gai.conf` 对 Go 写的 mita **无效**，双栈仍会出 IPv6。
+- 出口 apply 时额外安装 **nft/ip6tables**：拦截 IPv6 出站（保留 lo 与 NDP），迫使 mita 回退 IPv4。
+- 配置未变、mita 已 RUNNING 时也会重装该规则（升级 agent 后重建/心跳 apply 即生效）。
+
 ## v0.5.28
 
 ### 出口默认优先 IPv4

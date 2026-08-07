@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -61,8 +62,10 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 		return err
 	}
 
-	// Exit default: prefer IPv4 when resolving dual-stack destinations.
-	// Operators can disable with prefer_ipv4=false in plugin config (future UI).
+	// Exit default: force IPv4 egress on dual-stack VPS.
+	// gai.conf alone is NOT enough — mita is Go and often ignores glibc order.
+	// We block IPv6 outbound (except lo) so dials fall back to IPv4.
+	// Disable with prefer_ipv4=false in plugin config (future UI).
 	preferIPv4 := true
 	if v, ok := cfg["prefer_ipv4"].(bool); ok {
 		preferIPv4 = v
@@ -150,13 +153,17 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 		return fmt.Errorf("mita daemon: %w", err)
 	}
 
-	// If desired config bytes match last apply and mita is already RUNNING,
-	// do not stop/start — that drops every live client session.
-	if prev, err := os.ReadFile(cfgPath); err == nil && string(prev) == string(raw) {
-		status, _ := rt.MitaCmd("status")
-		if strings.Contains(strings.ToUpper(strings.TrimSpace(status)), "RUNNING") {
-			return nil
-		}
+// If desired config bytes match last apply and mita is already RUNNING,
+		// do not stop/start — that drops every live client session.
+		// Still re-apply IPv4 egress policy (nft/gai) in case agent was upgraded.
+		if prev, err := os.ReadFile(cfgPath); err == nil && string(prev) == string(raw) {
+			status, _ := rt.MitaCmd("status")
+			if strings.Contains(strings.ToUpper(strings.TrimSpace(status)), "RUNNING") {
+				if preferIPv4 {
+					ensurePreferIPv4()
+				}
+				return nil
+			}
 		// Config same but not running — just start.
 		if _, startErr := rt.MitaCmd("start"); startErr == nil {
 			for i := 0; i < 10; i++ {
@@ -325,10 +332,16 @@ func parseUserNamesFromGetUsers(out string) []string {
 	return names
 }
 
-// ensurePreferIPv4 makes dual-stack exit nodes prefer A/IPv4 when connecting out.
-// Writes /etc/gai.conf precedence (glibc getaddrinfo). Idempotent; best-effort.
-// Does not disable IPv6 — only changes address selection order.
+// ensurePreferIPv4 forces IPv4 egress on dual-stack exits.
+// 1) gai.conf IPv4 precedence (helps glibc tools)
+// 2) nft/ip6tables: drop IPv6 outbound except loopback (helps Go mita)
+// Idempotent; best-effort. Requires root (normal for agent systemd).
 func ensurePreferIPv4() {
+	ensureGAIPreferIPv4()
+	ensureBlockIPv6Outbound()
+}
+
+func ensureGAIPreferIPv4() {
 	const path = "/etc/gai.conf"
 	const mark = "# mieru-panel: prefer IPv4 for dual-stack destinations"
 	const block = mark + "\n" +
@@ -339,7 +352,6 @@ func ensurePreferIPv4() {
 	if err == nil && strings.Contains(string(b), mark) {
 		return
 	}
-	// Append (create if missing). Need root; agent usually runs as root under systemd.
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		log.Printf("[mita_server] prefer_ipv4: cannot write %s: %v (skip)", path, err)
@@ -353,7 +365,61 @@ func ensurePreferIPv4() {
 		log.Printf("[mita_server] prefer_ipv4: write %s: %v", path, err)
 		return
 	}
-	log.Printf("[mita_server] prefer_ipv4: wrote %s (IPv4 preferred for dual-stack)", path)
+	log.Printf("[mita_server] prefer_ipv4: wrote %s", path)
+}
+
+func ensureBlockIPv6Outbound() {
+	// Prefer nftables (Ubuntu 22+). Table is ours so re-apply is idempotent.
+	if _, err := exec.LookPath("nft"); err == nil {
+		// delete old table if any, then load clean rules
+		_ = exec.Command("nft", "delete", "table", "ip6", "mieru_ipv4_egress").Run()
+		rules := `table ip6 mieru_ipv4_egress {
+  chain output {
+    type filter hook output priority 0; policy accept;
+    oif "lo" accept
+    # allow ICMPv6 NDP so local IPv6 link stays healthy if present
+    icmpv6 type { nd-router-solicit, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept
+    # drop all other IPv6 egress → dual-stack apps fall back to IPv4
+    drop
+  }
+}
+`
+		cmd := exec.Command("nft", "-f", "-")
+		cmd.Stdin = strings.NewReader(rules)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			log.Printf("[mita_server] prefer_ipv4: nft ip6 block failed: %v (%s)", err, strings.TrimSpace(string(out)))
+		} else {
+			log.Printf("[mita_server] prefer_ipv4: nft table ip6 mieru_ipv4_egress installed (IPv6 egress blocked)")
+			return
+		}
+	}
+
+	// Fallback: ip6tables (legacy)
+	if _, err := exec.LookPath("ip6tables"); err != nil {
+		log.Printf("[mita_server] prefer_ipv4: no nft/ip6tables; cannot block IPv6 egress")
+		return
+	}
+	// Flush our chain if exists, recreate
+	_ = exec.Command("ip6tables", "-D", "OUTPUT", "-j", "MIERU_IPV4_EGRESS").Run()
+	_ = exec.Command("ip6tables", "-F", "MIERU_IPV4_EGRESS").Run()
+	_ = exec.Command("ip6tables", "-X", "MIERU_IPV4_EGRESS").Run()
+	if out, err := exec.Command("ip6tables", "-N", "MIERU_IPV4_EGRESS").CombinedOutput(); err != nil {
+		// chain may already exist after partial fail
+		log.Printf("[mita_server] prefer_ipv4: ip6tables -N: %v (%s)", err, strings.TrimSpace(string(out)))
+	}
+	run := func(args ...string) {
+		if out, err := exec.Command("ip6tables", args...).CombinedOutput(); err != nil {
+			log.Printf("[mita_server] prefer_ipv4: ip6tables %v: %v (%s)", args, err, strings.TrimSpace(string(out)))
+		}
+	}
+	run("-A", "MIERU_IPV4_EGRESS", "-o", "lo", "-j", "ACCEPT")
+	run("-A", "MIERU_IPV4_EGRESS", "-p", "ipv6-icmp", "--icmpv6-type", "router-solicitation", "-j", "ACCEPT")
+	run("-A", "MIERU_IPV4_EGRESS", "-p", "ipv6-icmp", "--icmpv6-type", "router-advertisement", "-j", "ACCEPT")
+	run("-A", "MIERU_IPV4_EGRESS", "-p", "ipv6-icmp", "--icmpv6-type", "neighbour-solicitation", "-j", "ACCEPT")
+	run("-A", "MIERU_IPV4_EGRESS", "-p", "ipv6-icmp", "--icmpv6-type", "neighbour-advertisement", "-j", "ACCEPT")
+	run("-A", "MIERU_IPV4_EGRESS", "-j", "DROP")
+	run("-I", "OUTPUT", "1", "-j", "MIERU_IPV4_EGRESS")
+	log.Printf("[mita_server] prefer_ipv4: ip6tables MIERU_IPV4_EGRESS installed (IPv6 egress blocked)")
 }
 
 // extractUsers builds mita user objects.
