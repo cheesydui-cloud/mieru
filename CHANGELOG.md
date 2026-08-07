@@ -1,11 +1,19 @@
 # Changelog
 
+## v0.5.30
+
+### 紧急恢复：撤销 IPv6 出站拦截
+- **回滚 v0.5.29**：不再安装 nft/ip6tables 拦截 IPv6 出站（该规则会导致双栈出口整机代理不可用）。
+- 出口 agent apply 时**自动清理**遗留规则：`nft table ip6 mieru_ipv4_egress`、`ip6tables MIERU_IPV4_EGRESS`。
+- 仅保留无害的 `/etc/gai.conf` 软偏好；真正强制 IPv4 需改用仅 IPv4 的出口机或等 mita 原生支持。
+
 ## v0.5.29
 
 ### 出口强制 IPv4 落地（修 gai 无效）
 - `gai.conf` 对 Go 写的 mita **无效**，双栈仍会出 IPv6。
 - 出口 apply 时额外安装 **nft/ip6tables**：拦截 IPv6 出站（保留 lo 与 NDP），迫使 mita 回退 IPv4。
 - 配置未变、mita 已 RUNNING 时也会重装该规则（升级 agent 后重建/心跳 apply 即生效）。
+- **已知问题**：部分双栈环境禁止 V6 后整网不通；请升级 **v0.5.30** 自动清理。
 
 ## v0.5.28
 
