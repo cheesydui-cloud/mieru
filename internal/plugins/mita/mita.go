@@ -61,6 +61,16 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 		return err
 	}
 
+	// Exit default: prefer IPv4 when resolving dual-stack destinations.
+	// Operators can disable with prefer_ipv4=false in plugin config (future UI).
+	preferIPv4 := true
+	if v, ok := cfg["prefer_ipv4"].(bool); ok {
+		preferIPv4 = v
+	}
+	if preferIPv4 {
+		ensurePreferIPv4()
+	}
+
 	port := toInt(cfg["listen_port"])
 	if port <= 0 {
 		port = 10001
@@ -313,6 +323,37 @@ func parseUserNamesFromGetUsers(out string) []string {
 		}
 	}
 	return names
+}
+
+// ensurePreferIPv4 makes dual-stack exit nodes prefer A/IPv4 when connecting out.
+// Writes /etc/gai.conf precedence (glibc getaddrinfo). Idempotent; best-effort.
+// Does not disable IPv6 — only changes address selection order.
+func ensurePreferIPv4() {
+	const path = "/etc/gai.conf"
+	const mark = "# mieru-panel: prefer IPv4 for dual-stack destinations"
+	const block = mark + "\n" +
+		"# See RFC 3484 / man gai.conf. Higher precedence wins for destination selection.\n" +
+		"precedence :ffff:0:0/96  100\n"
+
+	b, err := os.ReadFile(path)
+	if err == nil && strings.Contains(string(b), mark) {
+		return
+	}
+	// Append (create if missing). Need root; agent usually runs as root under systemd.
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		log.Printf("[mita_server] prefer_ipv4: cannot write %s: %v (skip)", path, err)
+		return
+	}
+	defer f.Close()
+	if len(b) > 0 && !strings.HasSuffix(string(b), "\n") {
+		_, _ = f.WriteString("\n")
+	}
+	if _, err := f.WriteString("\n" + block); err != nil {
+		log.Printf("[mita_server] prefer_ipv4: write %s: %v", path, err)
+		return
+	}
+	log.Printf("[mita_server] prefer_ipv4: wrote %s (IPv4 preferred for dual-stack)", path)
 }
 
 // extractUsers builds mita user objects.

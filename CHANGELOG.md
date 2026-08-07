@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.5.28
+
+### 出口默认优先 IPv4
+- 出口 / hybrid 应用 `mita_server` 时，自动写入 `/etc/gai.conf`：`precedence :ffff:0:0/96  100`。
+- 双栈 VPS 解析目标站时优先选 IPv4，不再默认先走 IPv6。
+- **不关闭** IPv6；仅调整地址选择顺序。升级 agent 后点「重建配置」或重启 agent 生效。
+
 ## v0.5.27
 
 ### 查询页下载区位置
