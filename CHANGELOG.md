@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.5.32
+
+### 全局防泄漏配置（小火箭 / INS·TK）
+- 新增订阅：`/sub/:token/global.yaml`（及 `/api/sub/...`）。
+- 与分流版 `mihomo.yaml` 分离：**无** `GEOSITE/GEOIP CN → DIRECT`；`mode: global`；DNS 仅 `1.1.1.1` / `8.8.8.8` + `respect-rules`；`proxy-server-nameserver` 用于解析国内前置；`ipv6: false`。
+- 查询页新增「全局防泄漏」区块：复制链接 / 复制 YAML / 下载。
+- 原 `mihomo.yaml` 仍为国内直连分流，给日常 Clash 用。
+
 ## v0.5.31
 
 ### 出口默认仅 IPv4

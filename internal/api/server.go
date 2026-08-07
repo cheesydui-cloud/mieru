@@ -280,6 +280,9 @@ func (s *Server) Router() *gin.Engine {
 	// Mihomo / Clash Meta: import as remote config or download file
 	r.GET("/sub/:token/mihomo.yaml", s.subscriptionMihomo)
 	r.GET("/api/sub/:token/mihomo.yaml", s.subscriptionMihomo)
+	// Global anti-leak profile (no CN DIRECT; overseas DNS only)
+	r.GET("/sub/:token/global.yaml", s.subscriptionMihomoGlobal)
+	r.GET("/api/sub/:token/global.yaml", s.subscriptionMihomoGlobal)
 	// Public user info page (read-only; no password) — shareable link from admin「更多」
 	r.GET("/api/u/:token", s.publicUserInfo)
 	// Public announcements for user query page (no auth)
@@ -651,7 +654,7 @@ func (s *Server) listNodes(c *gin.Context) {
 		PanelURLPending  bool   `json:"panel_url_pending,omitempty"`
 		AgentPanelURL    string `json:"agent_panel_url,omitempty"`    // last reported by agent
 		PanelURLMismatch bool   `json:"panel_url_mismatch,omitempty"` // agent URL != settings
-		PanelURLFixCmd   string `json:"panel_url_fix_cmd,omitempty"` // offline one-liner
+		PanelURLFixCmd   string `json:"panel_url_fix_cmd,omitempty"`  // offline one-liner
 		PanelVersion     string `json:"panel_version,omitempty"`
 		AgentConfigVer   int64  `json:"agent_config_version,omitempty"` // last reported applied version
 		ConfigStale      bool   `json:"config_stale,omitempty"`         // desired > agent applied
@@ -2461,6 +2464,7 @@ func (s *Server) createUser(c *gin.Context) {
 		"entries":         share["entries"],
 		"mihomo_yaml":     share["mihomo_yaml"],
 		"mihomo_url":      base + "/sub/" + u.SubToken + "/mihomo.yaml",
+		"global_url":      base + "/sub/" + u.SubToken + "/global.yaml",
 		"clash_verge_url": base + "/sub/" + u.SubToken + "/mihomo.yaml",
 	})
 }
@@ -2484,6 +2488,7 @@ func (s *Server) getUser(c *gin.Context) {
 		"entries":         share["entries"],
 		"mihomo_yaml":     share["mihomo_yaml"],
 		"mihomo_url":      base + "/sub/" + u.SubToken + "/mihomo.yaml",
+		"global_url":      base + "/sub/" + u.SubToken + "/global.yaml",
 		"clash_verge_url": base + "/sub/" + u.SubToken + "/mihomo.yaml",
 	})
 }
@@ -2603,6 +2608,7 @@ func (s *Server) resetUserSub(c *gin.Context) {
 		"subscription":    base + "/sub/" + tok,
 		"info_url":        base + "/u/" + tok,
 		"mihomo_url":      base + "/sub/" + tok + "/mihomo.yaml",
+		"global_url":      base + "/sub/" + tok + "/global.yaml",
 		"clash_verge_url": base + "/sub/" + tok + "/mihomo.yaml",
 	})
 }
@@ -3292,9 +3298,9 @@ func (s *Server) publicUserInfo(c *gin.Context) {
 		"panel_name_zh":    brandName,
 		"panel_name_en":    brandNameEN,
 		"user_info_locale": locale,
-		"username":   u.Username,
-		"status":     u.Status,
-		"expire_at":  expireStr,
+		"username":         u.Username,
+		"status":           u.Status,
+		"expire_at":        expireStr,
 		// scaled for display
 		"traffic_used_bytes": dispUsed,
 		// real quota (not scaled)
@@ -3310,12 +3316,14 @@ func (s *Server) publicUserInfo(c *gin.Context) {
 		"info_url":        base + "/u/" + tok,
 		"subscription":    base + "/sub/" + tok,
 		"mihomo_url":      base + "/sub/" + tok + "/mihomo.yaml",
+		"global_url":      base + "/sub/" + tok + "/global.yaml",
 		"clash_verge_url": base + "/sub/" + tok + "/mihomo.yaml",
 		// same payload as admin share modal (QR / YAML) — no standalone password field
 		"share_url":   share["share_url"],
 		"share_urls":  share["share_urls"],
 		"entries":     share["entries"],
 		"mihomo_yaml": share["mihomo_yaml"],
+		"global_yaml": share["global_yaml"],
 	})
 }
 
@@ -4116,6 +4124,7 @@ func (s *Server) userSharePayload(u *model.User) gin.H {
 		joined = strings.Join(parts, "\n")
 	}
 	yamlBody := buildMihomoYAML(u, endpoints)
+	globalBody := buildMihomoGlobalYAML(u, endpoints)
 	return gin.H{
 		"username":       u.Username,
 		"proxy_password": u.ProxyPassword,
@@ -4125,6 +4134,7 @@ func (s *Server) userSharePayload(u *model.User) gin.H {
 		"sub_token":      u.SubToken,
 		"protocol":       "mieru",
 		"mihomo_yaml":    yamlBody,
+		"global_yaml":    globalBody,
 	}
 }
 
@@ -4246,6 +4256,110 @@ func buildMihomoYAML(u *model.User, endpoints []shareEndpoint) string {
 	return b.String()
 }
 
+// buildMihomoGlobalYAML is a full-tunnel / anti-leak profile for Shadowrocket-style use
+// (also Clash Meta / Stash / Verge in Global or this rule set):
+//   - no GEOSITE/GEOIP CN → DIRECT (everything foreign goes PROXY)
+//   - DNS only overseas resolvers; respect-rules so lookups follow proxy
+//   - proxy-server-nameserver still allows resolving the CN front entry host
+//   - ipv6 disabled
+//
+// Existing buildMihomoYAML stays the split-tunnel (CN direct) profile.
+func buildMihomoGlobalYAML(u *model.User, endpoints []shareEndpoint) string {
+	var b strings.Builder
+	b.WriteString("# Mihomo / Clash Meta — GLOBAL anti-leak (mieru-panel)\n")
+	b.WriteString("# user: " + u.Username + "\n")
+	b.WriteString("# purpose: full tunnel for INS/TK — no China DIRECT split\n")
+	b.WriteString("# client: prefer Global mode; or Rule mode with rules below\n")
+	b.WriteString("# Shadowrocket: import as Clash config if supported, else use plain mierus:// + DNS via proxy\n")
+	b.WriteString("#\n")
+	b.WriteString("mixed-port: 7890\n")
+	b.WriteString("allow-lan: false\n")
+	b.WriteString("mode: global\n")
+	b.WriteString("log-level: info\n")
+	b.WriteString("ipv6: false\n")
+	b.WriteString("\n")
+	b.WriteString("dns:\n")
+	b.WriteString("  enable: true\n")
+	b.WriteString("  listen: 0.0.0.0:1053\n")
+	b.WriteString("  ipv6: false\n")
+	b.WriteString("  enhanced-mode: fake-ip\n")
+	b.WriteString("  fake-ip-range: 198.18.0.1/16\n")
+	b.WriteString("  # DNS answers for remote sites follow proxy rules (anti-leak)\n")
+	b.WriteString("  respect-rules: true\n")
+	b.WriteString("  fake-ip-filter:\n")
+	b.WriteString("    - '*.lan'\n")
+	b.WriteString("    - '*.local'\n")
+	b.WriteString("    - localhost\n")
+	b.WriteString("    - '+.msftconnecttest.com'\n")
+	b.WriteString("    - '+.msftncsi.com'\n")
+	b.WriteString("    - 'time.*.com'\n")
+	b.WriteString("    - 'time.*.gov'\n")
+	b.WriteString("    - 'time.*.apple.com'\n")
+	b.WriteString("    - 'ntp.*.com'\n")
+	b.WriteString("  # Destination DNS: overseas only (no doh.pub / 223 for app domains)\n")
+	b.WriteString("  nameserver:\n")
+	b.WriteString("    - https://1.1.1.1/dns-query\n")
+	b.WriteString("    - https://8.8.8.8/dns-query\n")
+	b.WriteString("    - 1.1.1.1\n")
+	b.WriteString("    - 8.8.8.8\n")
+	b.WriteString("  # Resolve proxy node host (often CN front) without needing tunnel first\n")
+	b.WriteString("  proxy-server-nameserver:\n")
+	b.WriteString("    - https://dns.alidns.com/dns-query\n")
+	b.WriteString("    - 223.5.5.5\n")
+	b.WriteString("    - 8.8.8.8\n")
+	b.WriteString("\n")
+	b.WriteString("proxies:\n")
+
+	names := make([]string, 0, len(endpoints))
+	if len(endpoints) == 0 {
+		b.WriteString("  # no endpoint — bind route + set front entry, then rebuild\n")
+	}
+	for i, e := range endpoints {
+		name := e.Name
+		if name == "" {
+			name = fmt.Sprintf("%s-%d", u.Username, i+1)
+		}
+		name = strings.ReplaceAll(name, "\n", " ")
+		name = strings.ReplaceAll(name, `"`, "'")
+		// mark global profile in node name so users can tell configs apart
+		if !strings.Contains(name, "全局") && !strings.Contains(strings.ToLower(name), "global") {
+			name = name + "-全局"
+		}
+		names = append(names, name)
+		proto := strings.ToUpper(e.Protocol)
+		if proto != "UDP" {
+			proto = "TCP"
+		}
+		b.WriteString("  - name: " + yamlQuote(name) + "\n")
+		b.WriteString("    type: mieru\n")
+		b.WriteString("    server: " + yamlQuote(e.Host) + "\n")
+		b.WriteString("    port: " + strconv.Itoa(e.Port) + "\n")
+		b.WriteString("    username: " + yamlQuote(u.Username) + "\n")
+		b.WriteString("    password: " + yamlQuote(u.ProxyPassword) + "\n")
+		b.WriteString("    transport: " + proto + "\n")
+		b.WriteString("    multiplexing: MULTIPLEXING_OFF\n")
+		b.WriteString("\n")
+	}
+
+	b.WriteString("proxy-groups:\n")
+	b.WriteString("  - name: " + yamlQuote("PROXY") + "\n")
+	b.WriteString("    type: select\n")
+	b.WriteString("    proxies:\n")
+	if len(names) == 0 {
+		b.WriteString("      - DIRECT\n")
+	} else {
+		for _, n := range names {
+			b.WriteString("      - " + yamlQuote(n) + "\n")
+		}
+	}
+	b.WriteString("\n")
+	// Even in global mode some clients still read rules; keep LAN direct only.
+	b.WriteString("rules:\n")
+	b.WriteString("  - GEOIP,PRIVATE,DIRECT,no-resolve\n")
+	b.WriteString("  - MATCH,PROXY\n")
+	return b.String()
+}
+
 func (s *Server) getUserShare(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	u, err := s.store.GetUser(id)
@@ -4258,6 +4372,8 @@ func (s *Server) getUserShare(c *gin.Context) {
 	payload["mihomo_url"] = base + "/sub/" + u.SubToken + "/mihomo.yaml"
 	payload["clash_verge_url"] = base + "/sub/" + u.SubToken + "/mihomo.yaml"
 	payload["mihomo_download"] = base + "/api/admin/users/" + strconv.FormatInt(u.ID, 10) + "/mihomo.yaml"
+	payload["global_url"] = base + "/sub/" + u.SubToken + "/global.yaml"
+	payload["global_yaml"] = buildMihomoGlobalYAML(u, s.resolveUserMitaEndpoints(u))
 	c.JSON(http.StatusOK, payload)
 }
 
@@ -4332,6 +4448,37 @@ func (s *Server) subscriptionMihomo(c *gin.Context) {
 	c.Header("Content-Disposition", "inline; filename="+fname)
 	c.Header("Profile-Update-Interval", "24")
 	c.Header("Profile-Title", "base64:"+base64.StdEncoding.EncodeToString([]byte(u.Username)))
+	expire := int64(0)
+	if u.ExpireAt != nil && !u.ExpireAt.IsZero() {
+		expire = u.ExpireAt.Unix()
+	}
+	c.Header("Subscription-Userinfo", fmt.Sprintf(
+		"upload=%d; download=%d; total=%d; expire=%d",
+		0, u.TrafficUsedBytes, u.TrafficLimitBytes, expire,
+	))
+	c.Data(http.StatusOK, "text/yaml; charset=utf-8", []byte(body))
+}
+
+func (s *Server) subscriptionMihomoGlobal(c *gin.Context) {
+	u, err := s.store.GetUserBySubToken(c.Param("token"))
+	if err != nil {
+		c.String(http.StatusNotFound, "not found")
+		return
+	}
+	_ = s.store.RefreshUserStatuses()
+	if u2, err := s.store.GetUser(u.ID); err == nil {
+		u = u2
+	}
+	if u.Status != model.StatusActive {
+		c.String(http.StatusForbidden, "account not active: "+u.Status)
+		return
+	}
+	endpoints := s.resolveUserMitaEndpoints(u)
+	body := buildMihomoGlobalYAML(u, endpoints)
+	fname := "global-" + u.Username + ".yaml"
+	c.Header("Content-Disposition", "inline; filename="+fname)
+	c.Header("Profile-Update-Interval", "24")
+	c.Header("Profile-Title", "base64:"+base64.StdEncoding.EncodeToString([]byte(u.Username+"-global")))
 	expire := int64(0)
 	if u.ExpireAt != nil && !u.ExpireAt.IsZero() {
 		expire = u.ExpireAt.Unix()
@@ -4998,12 +5145,12 @@ func (s *Server) initClientFileUpload(c *gin.Context) {
 	s.uploadMu.Unlock()
 
 	c.JSON(http.StatusOK, gin.H{
-		"upload_id":   id,
-		"chunk_size":  maxClientFileChunk,
-		"max_size":    maxClientFileSize,
-		"filename":    name,
-		"title":       title,
-		"size":        req.Size,
+		"upload_id":  id,
+		"chunk_size": maxClientFileChunk,
+		"max_size":   maxClientFileSize,
+		"filename":   name,
+		"title":      title,
+		"size":       req.Size,
 	})
 }
 

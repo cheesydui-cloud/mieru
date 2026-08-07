@@ -150,18 +150,24 @@ const UI_I18N = {
     nodeLink: '节点链接（扫码内容 · mierus://）',
     allEntries: '全部入口',
     copy: '复制',
-    mihomoYaml: 'Mihomo / Clash Meta YAML',
+    mihomoYaml: 'Mihomo / Clash Meta YAML（分流）',
     copyYaml: '复制 YAML',
     downloadYaml: '下载 YAML',
-    clashSub: 'Clash Verge / Mihomo 订阅',
-    copyClash: '复制 Clash Verge 链接',
+    clashSub: 'Clash 分流订阅（国内直连）',
+    copyClash: '复制 Clash 分流链接',
     copyMihomo: '复制 Mihomo URL',
     clashHelp:
-      'Clash Verge / Windows / Mac：把上面整段粘贴到客户端「订阅 → 订阅文件链接」。必须是 .../mihomo.yaml 结尾；不要用下方的普通订阅链接。',
-    plainSub: '普通订阅（mierus://）',
+      'Clash Verge / Windows / Mac 分流用：国内站直连、国外走节点。链接须以 .../mihomo.yaml 结尾。INS/TK 防泄漏请用下方「全局防泄漏」。',
+    globalSub: '全局防泄漏（小火箭 / INS·TK）',
+    copyGlobal: '复制全局链接',
+    copyGlobalYaml: '复制全局 YAML',
+    downloadGlobal: '下载全局 YAML',
+    globalHelp:
+      '专为小火箭全局、INS/TK 防泄漏：无国内直连分流；DNS 仅 1.1.1.1/8.8.8.8 且随代理；关闭 IPv6。Clash 也可订 .../global.yaml 并选全局模式。小火箭若只支持节点列表，请用最下方普通订阅 + 客户端「DNS 经代理」。',
+    plainSub: '普通订阅（mierus:// 节点列表）',
     copySub: '复制订阅',
     plainHelp:
-      '内容为 mierus:// 节点列表，给支持原生 mieru 的客户端/扫码用。Clash Verge 请用上方链接。请勿公开转发；泄露可让管理员「重置订阅」。',
+      '仅 mierus:// 节点，无 DNS/规则。给小火箭原生订阅/扫码。Clash 请用上方 YAML 链接。请勿公开转发；泄露可让管理员「重置订阅」。',
     close: '关闭',
     autoClose: 's 后自动关闭',
     gotIt: '我知道了',
@@ -202,18 +208,24 @@ const UI_I18N = {
     nodeLink: 'Node link (QR content · mierus://)',
     allEntries: 'All entries',
     copy: 'Copy',
-    mihomoYaml: 'Mihomo / Clash Meta YAML',
+    mihomoYaml: 'Mihomo / Clash Meta YAML (split)',
     copyYaml: 'Copy YAML',
     downloadYaml: 'Download YAML',
-    clashSub: 'Clash Verge / Mihomo subscription',
-    copyClash: 'Copy Clash Verge URL',
+    clashSub: 'Clash split subscription (CN direct)',
+    copyClash: 'Copy Clash split URL',
     copyMihomo: 'Copy Mihomo URL',
     clashHelp:
-      'Clash Verge / Windows / Mac: paste the URL into “Subscriptions → File URL”. It must end with /mihomo.yaml. Do not use the plain subscription link below.',
-    plainSub: 'Plain subscription (mierus://)',
+      'For Clash Verge split tunnel (CN direct). URL must end with /mihomo.yaml. For INS/TK anti-leak use Global below.',
+    globalSub: 'Global anti-leak (Shadowrocket / INS·TK)',
+    copyGlobal: 'Copy global URL',
+    copyGlobalYaml: 'Copy global YAML',
+    downloadGlobal: 'Download global YAML',
+    globalHelp:
+      'Full tunnel: no CN DIRECT rules; DNS is 1.1.1.1/8.8.8.8 with respect-rules; IPv6 off. Clash: subscribe .../global.yaml and use Global mode. Shadowrocket node-only clients: use plain mierus:// below + DNS via proxy.',
+    plainSub: 'Plain subscription (mierus:// nodes)',
     copySub: 'Copy subscription',
     plainHelp:
-      'Contains a mierus:// node list for native mieru clients / QR. Use the Clash Verge link above for Clash. Do not share publicly; ask admin to reset subscription if leaked.',
+      'mierus:// nodes only (no DNS/rules). For Shadowrocket native sub / QR. Clash should use YAML links above. Do not share publicly.',
     close: 'Close',
     autoClose: 's auto-close',
     gotIt: 'Got it',
@@ -257,11 +269,14 @@ const panelTitle = computed(() => info.value?.panel_name || brand.name || 'Mieru
 
 const shareURL = computed(() => info.value?.share_url || '')
 const mihomoYAML = computed(() => info.value?.mihomo_yaml || '')
+const globalYAML = computed(() => info.value?.global_yaml || '')
 const entries = computed(() => (Array.isArray(info.value?.entries) ? info.value.entries : []))
 /** Clash Verge / Mihomo remote profile URL (must end with /mihomo.yaml) */
 const clashVergeURL = computed(
   () => info.value?.clash_verge_url || info.value?.mihomo_url || '',
 )
+/** Full-tunnel anti-leak profile (.../global.yaml) */
+const globalURL = computed(() => info.value?.global_url || '')
 
 /** Query page: host only, never show :port */
 function entryHostOnly(raw) {
@@ -374,6 +389,28 @@ function downloadYAML() {
     return
   }
   const name = `mihomo-${info.value?.username || 'user'}.yaml`
+  const blob = new Blob([body], { type: 'application/x-yaml' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = name
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(a.href)
+  flash.ok(`${t.value.downloaded} ${name}`)
+}
+
+function downloadGlobalYAML() {
+  const body = globalYAML.value
+  if (!body) {
+    if (globalURL.value) {
+      window.open(globalURL.value, '_blank')
+      return
+    }
+    flash.err(t.value.noYaml)
+    return
+  }
+  const name = `global-${info.value?.username || 'user'}.yaml`
   const blob = new Blob([body], { type: 'application/x-yaml' })
   const a = document.createElement('a')
   a.href = URL.createObjectURL(blob)
@@ -577,6 +614,43 @@ onUnmounted(() => {
             </div>
             <p class="muted" style="margin: 10px 0 0; font-size: 12px; line-height: 1.5">
               {{ t.clashHelp }}
+            </p>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-hd">
+            <h2>{{ t.globalSub }}</h2>
+            <div class="row-actions">
+              <button class="btn btn-primary btn-sm" :disabled="!globalURL" @click="copy(globalURL)">
+                {{ t.copyGlobal }}
+              </button>
+              <button class="btn btn-ghost btn-sm" :disabled="!globalYAML" @click="copy(globalYAML)">
+                {{ t.copyGlobalYaml }}
+              </button>
+              <button
+                class="btn btn-ghost btn-sm"
+                :disabled="!globalYAML && !globalURL"
+                @click="downloadGlobalYAML"
+              >
+                {{ t.downloadGlobal }}
+              </button>
+            </div>
+          </div>
+          <div class="panel-bd" style="padding: 14px 18px">
+            <div class="mono" style="word-break: break-all; color: var(--text-secondary); font-size: 12.5px">
+              {{ globalURL || '—' }}
+            </div>
+            <textarea
+              v-if="globalYAML"
+              readonly
+              rows="8"
+              class="mono share-ta"
+              style="margin-top: 10px"
+              :value="globalYAML"
+            />
+            <p class="muted" style="margin: 10px 0 0; font-size: 12px; line-height: 1.5">
+              {{ t.globalHelp }}
             </p>
           </div>
         </div>
