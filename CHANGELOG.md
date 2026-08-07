@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.5.31
+
+### 出口默认仅 IPv4
+- 出口 / hybrid 的 `mita_server` **默认 `ipv4_only=true`**：agent 写入 `/etc/sysctl.d/99-mieru-ipv4-only.conf` 并 `sysctl` 关闭 IPv6，迫使 mita 只能走 IPv4 落地。
+- **不再**使用 v0.5.29 的 nft/ip6tables DROP（仍会自动清理遗留规则）。
+- 关闭方式：desired 配置里设 `ipv4_only=false` 后重建（会删 sysctl 文件并恢复 IPv6）。
+- 前提：出口机必须有可用 **IPv4**；若商家只给 IPv6 管理面，请先确认 SSH 走 IPv4 再升级。
+
+
 ## v0.5.30
 
 ### 紧急恢复：撤销 IPv6 出站拦截

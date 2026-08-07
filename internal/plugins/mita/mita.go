@@ -62,10 +62,22 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 		return err
 	}
 
-// v0.5.29 installed hard IPv6 egress DROP and broke dual-stack exits.
-		// Always clear leftovers; keep only soft gai.conf preference (no DROP).
-		clearIPv6EgressBlock()
-		ensureGAIPreferIPv4()
+	// Egress IP family (exit/hybrid only — this plugin is mita_server):
+	// 1) Always clear v0.5.29 nft/ip6tables DROP leftovers (those broke dual-stack).
+	// 2) Default ipv4_only=true: sysctl-disable IPv6 so Go mita dials IPv4 only.
+	//    Safer than filtering OUTPUT; still requires a working IPv4 on the VPS.
+	// 3) Soft gai.conf preference as belt-and-suspenders for non-Go tools.
+	clearIPv6EgressBlock()
+	ipv4Only := true
+	if v, ok := cfg["ipv4_only"].(bool); ok {
+		ipv4Only = v
+	}
+	if ipv4Only {
+		ensureIPv4OnlySysctl()
+	} else {
+		clearIPv4OnlySysctl()
+	}
+	ensureGAIPreferIPv4()
 
 	port := toInt(cfg["listen_port"])
 	if port <= 0 {
@@ -146,28 +158,34 @@ func (p *Plugin) Apply(ctx context.Context, cfg map[string]interface{}) error {
 		return fmt.Errorf("mita daemon: %w", err)
 	}
 
-// If desired config bytes match last apply and mita is already RUNNING,
-		// do not stop/start — that drops every live client session.
-		// Still clear any leftover IPv6 DROP rules from older agents.
-		if prev, err := os.ReadFile(cfgPath); err == nil && string(prev) == string(raw) {
-			status, _ := rt.MitaCmd("status")
-			if strings.Contains(strings.ToUpper(strings.TrimSpace(status)), "RUNNING") {
-				clearIPv6EgressBlock()
-				return nil
+	// If desired config bytes match last apply and mita is already RUNNING,
+	// do not stop/start — that drops every live client session.
+	// Still re-apply egress IP family policy (sysctl / clear nft leftovers).
+	if prev, err := os.ReadFile(cfgPath); err == nil && string(prev) == string(raw) {
+		status, _ := rt.MitaCmd("status")
+		if strings.Contains(strings.ToUpper(strings.TrimSpace(status)), "RUNNING") {
+			clearIPv6EgressBlock()
+			if ipv4Only {
+				ensureIPv4OnlySysctl()
+			} else {
+				clearIPv4OnlySysctl()
 			}
-			// Config same but not running — just start.
-			if _, startErr := rt.MitaCmd("start"); startErr == nil {
-				for i := 0; i < 10; i++ {
-					time.Sleep(500 * time.Millisecond)
-					status, _ = rt.MitaCmd("status")
-					if strings.Contains(strings.ToUpper(strings.TrimSpace(status)), "RUNNING") {
-						return nil
-					}
-					_, _ = rt.MitaCmd("start")
-				}
-			}
-			// fall through to full apply path
+			ensureGAIPreferIPv4()
+			return nil
 		}
+		// Config same but not running — just start.
+		if _, startErr := rt.MitaCmd("start"); startErr == nil {
+			for i := 0; i < 10; i++ {
+				time.Sleep(500 * time.Millisecond)
+				status, _ = rt.MitaCmd("status")
+				if strings.Contains(strings.ToUpper(strings.TrimSpace(status)), "RUNNING") {
+					return nil
+				}
+				_, _ = rt.MitaCmd("start")
+			}
+		}
+		// fall through to full apply path
+	}
 
 	if err := os.WriteFile(cfgPath, raw, 0o600); err != nil {
 		return err
@@ -342,6 +360,49 @@ func clearIPv6EgressBlock() {
 		if exec.Command("ip6tables", "-X", "MIERU_IPV4_EGRESS").Run() == nil {
 			log.Printf("[mita_server] cleared ip6tables chain MIERU_IPV4_EGRESS")
 		}
+	}
+}
+
+const ipv4OnlySysctlPath = "/etc/sysctl.d/99-mieru-ipv4-only.conf"
+const ipv4OnlySysctlBody = `# managed by mieru-panel agent — IPv4-only egress for dual-stack exits
+# Disables IPv6 stack so Go mita cannot dial AAAA. Requires working IPv4.
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+`
+
+// ensureIPv4OnlySysctl turns off IPv6 via sysctl (persistent + runtime).
+// Unlike nft OUTPUT DROP this does not leave half-broken dual-stack dials.
+func ensureIPv4OnlySysctl() {
+	want := ipv4OnlySysctlBody
+	if b, err := os.ReadFile(ipv4OnlySysctlPath); err != nil || string(b) != want {
+		if err := os.WriteFile(ipv4OnlySysctlPath, []byte(want), 0o644); err != nil {
+			log.Printf("[mita_server] ipv4_only: write %s: %v", ipv4OnlySysctlPath, err)
+		} else {
+			log.Printf("[mita_server] ipv4_only: wrote %s", ipv4OnlySysctlPath)
+		}
+	}
+	// runtime apply (best-effort; ignore if kernel/sysctl rejects)
+	for _, kv := range [][2]string{
+		{"net.ipv6.conf.all.disable_ipv6", "1"},
+		{"net.ipv6.conf.default.disable_ipv6", "1"},
+	} {
+		if out, err := exec.Command("sysctl", "-w", kv[0]+"="+kv[1]).CombinedOutput(); err != nil {
+			log.Printf("[mita_server] ipv4_only: sysctl %s=%s: %v (%s)", kv[0], kv[1], err, strings.TrimSpace(string(out)))
+		}
+	}
+	log.Printf("[mita_server] ipv4_only: IPv6 disabled via sysctl (egress IPv4-only)")
+}
+
+// clearIPv4OnlySysctl undoes panel-managed IPv4-only when operator sets ipv4_only=false.
+func clearIPv4OnlySysctl() {
+	if err := os.Remove(ipv4OnlySysctlPath); err == nil {
+		log.Printf("[mita_server] ipv4_only: removed %s", ipv4OnlySysctlPath)
+	}
+	for _, kv := range [][2]string{
+		{"net.ipv6.conf.all.disable_ipv6", "0"},
+		{"net.ipv6.conf.default.disable_ipv6", "0"},
+	} {
+		_ = exec.Command("sysctl", "-w", kv[0]+"="+kv[1]).Run()
 	}
 }
 

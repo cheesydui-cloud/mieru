@@ -13,8 +13,8 @@ import (
 	"github.com/cheesydui-cloud/mieru/internal/config"
 )
 
-// set by -ldflags "-X main.Version=v0.5.30"
-var Version = "v0.5.30"
+// set by -ldflags "-X main.Version=v0.5.31"
+var Version = "v0.5.31"
 
 func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")

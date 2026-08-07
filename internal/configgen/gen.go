@@ -105,6 +105,8 @@ func (b *Builder) RebuildAll() error {
 					"listen_port": listen,
 					"port_min":    pmin,
 					"port_max":    pmax,
+					// Dual-stack exits often land on IPv6; force IPv4-only via agent sysctl.
+					"ipv4_only": true,
 				},
 			})
 
@@ -126,6 +128,7 @@ func (b *Builder) RebuildAll() error {
 					"listen_port": mitaPort,
 					"port_min":    mitaPort,
 					"port_max":    mitaPort,
+					"ipv4_only":   true,
 				},
 			})
 			cfg.Plugins = append(cfg.Plugins, map[string]interface{}{
