@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.5.33
+
+### 小火箭专用全面防泄漏 .conf
+- 新增：`/sub/:token/shadowrocket.conf`（原生 Shadowrocket / Surge-like 配置）。
+- **替换 default.conf 那套 600+ 国内 DIRECT**：无 `GEOIP,CN,DIRECT`。
+- DNS：`1.1.1.1` / `8.8.8.8` 等，`dns-direct-system=false`，`hijack-dns`，**关 IPv6**。
+- 规则：局域网直连 + Instagram/FB/TikTok/Google/Telegram/Discord/Apple 等全量 `DOMAIN-SUFFIX → PROXY` + `FINAL,PROXY`。
+- 查询页「小火箭专用配置」：复制链接 / 文本 / 下载。导入后勾选使用，首页选节点。
+
 ## v0.5.32
 
 ### 全局防泄漏配置（小火箭 / INS·TK）

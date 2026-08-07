@@ -163,7 +163,13 @@ const UI_I18N = {
     copyGlobalYaml: '复制全局 YAML',
     downloadGlobal: '下载全局 YAML',
     globalHelp:
-      '专为小火箭全局、INS/TK 防泄漏：无国内直连分流；DNS 仅 1.1.1.1/8.8.8.8 且随代理；关闭 IPv6。Clash 也可订 .../global.yaml 并选全局模式。小火箭若只支持节点列表，请用最下方普通订阅 + 客户端「DNS 经代理」。',
+      'Clash 全局防泄漏 YAML：无国内直连；DNS 1.1.1.1/8.8.8.8 + respect-rules；关 IPv6。电脑 Clash Verge 用这个。',
+    srSub: '小火箭专用配置（全面防泄漏 .conf）',
+    copySr: '复制小火箭链接',
+    copySrConf: '复制 .conf 文本',
+    downloadSr: '下载 .conf',
+    srHelp:
+      '原生 Shadowrocket 配置，用来替换 default.conf：无 GEOIP,CN 直连；DNS 强制 1.1.1.1/8.8.8.8 且不走系统；关 IPv6；INS/FB/TK/Google/Telegram 等全量走代理；仅局域网直连；FINAL 全部代理。导入：配置 → 从 URL 下载此链接 → 勾选使用 → 首页再选节点并开「配置/全局」。若导入后无节点，用下方普通 mierus 订阅加节点。',
     plainSub: '普通订阅（mierus:// 节点列表）',
     copySub: '复制订阅',
     plainHelp:
@@ -221,7 +227,13 @@ const UI_I18N = {
     copyGlobalYaml: 'Copy global YAML',
     downloadGlobal: 'Download global YAML',
     globalHelp:
-      'Full tunnel: no CN DIRECT rules; DNS is 1.1.1.1/8.8.8.8 with respect-rules; IPv6 off. Clash: subscribe .../global.yaml and use Global mode. Shadowrocket node-only clients: use plain mierus:// below + DNS via proxy.',
+      'Clash full-tunnel YAML for Verge/Meta. For Shadowrocket use the native .conf section below.',
+    srSub: 'Shadowrocket anti-leak .conf',
+    copySr: 'Copy SR URL',
+    copySrConf: 'Copy .conf text',
+    downloadSr: 'Download .conf',
+    srHelp:
+      'Native Shadowrocket profile to replace default.conf: no CN DIRECT; forced overseas DNS; IPv6 off; full domain lists for INS/FB/TK/Google/etc → PROXY; LAN only DIRECT; FINAL PROXY. Import via Config → Download from URL, enable it, pick node on Home.',
     plainSub: 'Plain subscription (mierus:// nodes)',
     copySub: 'Copy subscription',
     plainHelp:
@@ -277,6 +289,9 @@ const clashVergeURL = computed(
 )
 /** Full-tunnel anti-leak profile (.../global.yaml) */
 const globalURL = computed(() => info.value?.global_url || '')
+/** Shadowrocket native comprehensive anti-leak .conf */
+const shadowrocketURL = computed(() => info.value?.shadowrocket_url || '')
+const shadowrocketConf = computed(() => info.value?.shadowrocket_conf || '')
 
 /** Query page: host only, never show :port */
 function entryHostOnly(raw) {
@@ -412,6 +427,28 @@ function downloadGlobalYAML() {
   }
   const name = `global-${info.value?.username || 'user'}.yaml`
   const blob = new Blob([body], { type: 'application/x-yaml' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = name
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(a.href)
+  flash.ok(`${t.value.downloaded} ${name}`)
+}
+
+function downloadShadowrocketConf() {
+  const body = shadowrocketConf.value
+  if (!body) {
+    if (shadowrocketURL.value) {
+      window.open(shadowrocketURL.value, '_blank')
+      return
+    }
+    flash.err(t.value.noYaml)
+    return
+  }
+  const name = `shadowrocket-${info.value?.username || 'user'}.conf`
+  const blob = new Blob([body], { type: 'text/plain;charset=utf-8' })
   const a = document.createElement('a')
   a.href = URL.createObjectURL(blob)
   a.download = name
@@ -651,6 +688,44 @@ onUnmounted(() => {
             />
             <p class="muted" style="margin: 10px 0 0; font-size: 12px; line-height: 1.5">
               {{ t.globalHelp }}
+            </p>
+          </div>
+        </div>
+
+
+        <div class="panel">
+          <div class="panel-hd">
+            <h2>{{ t.srSub }}</h2>
+            <div class="row-actions">
+              <button class="btn btn-primary btn-sm" :disabled="!shadowrocketURL" @click="copy(shadowrocketURL)">
+                {{ t.copySr }}
+              </button>
+              <button class="btn btn-ghost btn-sm" :disabled="!shadowrocketConf" @click="copy(shadowrocketConf)">
+                {{ t.copySrConf }}
+              </button>
+              <button
+                class="btn btn-ghost btn-sm"
+                :disabled="!shadowrocketConf && !shadowrocketURL"
+                @click="downloadShadowrocketConf"
+              >
+                {{ t.downloadSr }}
+              </button>
+            </div>
+          </div>
+          <div class="panel-bd" style="padding: 14px 18px">
+            <div class="mono" style="word-break: break-all; color: var(--text-secondary); font-size: 12.5px">
+              {{ shadowrocketURL || '—' }}
+            </div>
+            <textarea
+              v-if="shadowrocketConf"
+              readonly
+              rows="10"
+              class="mono share-ta"
+              style="margin-top: 10px"
+              :value="shadowrocketConf"
+            />
+            <p class="muted" style="margin: 10px 0 0; font-size: 12px; line-height: 1.5">
+              {{ t.srHelp }}
             </p>
           </div>
         </div>

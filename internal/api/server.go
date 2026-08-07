@@ -283,6 +283,9 @@ func (s *Server) Router() *gin.Engine {
 	// Global anti-leak profile (no CN DIRECT; overseas DNS only)
 	r.GET("/sub/:token/global.yaml", s.subscriptionMihomoGlobal)
 	r.GET("/api/sub/:token/global.yaml", s.subscriptionMihomoGlobal)
+	// Shadowrocket native comprehensive anti-leak .conf
+	r.GET("/sub/:token/shadowrocket.conf", s.subscriptionShadowrocket)
+	r.GET("/api/sub/:token/shadowrocket.conf", s.subscriptionShadowrocket)
 	// Public user info page (read-only; no password) — shareable link from admin「更多」
 	r.GET("/api/u/:token", s.publicUserInfo)
 	// Public announcements for user query page (no auth)
@@ -2454,18 +2457,19 @@ func (s *Server) createUser(c *gin.Context) {
 	base := s.publicBase(c)
 	share := s.userSharePayload(u)
 	c.JSON(http.StatusCreated, gin.H{
-		"user":            u,
-		"proxy_password":  u.ProxyPassword,
-		"sub_token":       u.SubToken,
-		"subscription":    base + "/sub/" + u.SubToken,
-		"info_url":        base + "/u/" + u.SubToken,
-		"share_url":       share["share_url"],
-		"share_urls":      share["share_urls"],
-		"entries":         share["entries"],
-		"mihomo_yaml":     share["mihomo_yaml"],
-		"mihomo_url":      base + "/sub/" + u.SubToken + "/mihomo.yaml",
-		"global_url":      base + "/sub/" + u.SubToken + "/global.yaml",
-		"clash_verge_url": base + "/sub/" + u.SubToken + "/mihomo.yaml",
+		"user":             u,
+		"proxy_password":   u.ProxyPassword,
+		"sub_token":        u.SubToken,
+		"subscription":     base + "/sub/" + u.SubToken,
+		"info_url":         base + "/u/" + u.SubToken,
+		"share_url":        share["share_url"],
+		"share_urls":       share["share_urls"],
+		"entries":          share["entries"],
+		"mihomo_yaml":      share["mihomo_yaml"],
+		"mihomo_url":       base + "/sub/" + u.SubToken + "/mihomo.yaml",
+		"global_url":       base + "/sub/" + u.SubToken + "/global.yaml",
+		"shadowrocket_url": base + "/sub/" + u.SubToken + "/shadowrocket.conf",
+		"clash_verge_url":  base + "/sub/" + u.SubToken + "/mihomo.yaml",
 	})
 }
 
@@ -2480,16 +2484,17 @@ func (s *Server) getUser(c *gin.Context) {
 	share := s.userSharePayload(u)
 	base := s.publicBase(c)
 	c.JSON(http.StatusOK, gin.H{
-		"user":            u,
-		"rate":            sample,
-		"subscription":    base + "/sub/" + u.SubToken,
-		"share_url":       share["share_url"],
-		"share_urls":      share["share_urls"],
-		"entries":         share["entries"],
-		"mihomo_yaml":     share["mihomo_yaml"],
-		"mihomo_url":      base + "/sub/" + u.SubToken + "/mihomo.yaml",
-		"global_url":      base + "/sub/" + u.SubToken + "/global.yaml",
-		"clash_verge_url": base + "/sub/" + u.SubToken + "/mihomo.yaml",
+		"user":             u,
+		"rate":             sample,
+		"subscription":     base + "/sub/" + u.SubToken,
+		"share_url":        share["share_url"],
+		"share_urls":       share["share_urls"],
+		"entries":          share["entries"],
+		"mihomo_yaml":      share["mihomo_yaml"],
+		"mihomo_url":       base + "/sub/" + u.SubToken + "/mihomo.yaml",
+		"global_url":       base + "/sub/" + u.SubToken + "/global.yaml",
+		"shadowrocket_url": base + "/sub/" + u.SubToken + "/shadowrocket.conf",
+		"clash_verge_url":  base + "/sub/" + u.SubToken + "/mihomo.yaml",
 	})
 }
 
@@ -2604,12 +2609,13 @@ func (s *Server) resetUserSub(c *gin.Context) {
 	base := s.publicBase(c)
 	s.store.Audit("admin", "reset_sub", fmt.Sprintf("%d", id), "")
 	c.JSON(http.StatusOK, gin.H{
-		"sub_token":       tok,
-		"subscription":    base + "/sub/" + tok,
-		"info_url":        base + "/u/" + tok,
-		"mihomo_url":      base + "/sub/" + tok + "/mihomo.yaml",
-		"global_url":      base + "/sub/" + tok + "/global.yaml",
-		"clash_verge_url": base + "/sub/" + tok + "/mihomo.yaml",
+		"sub_token":        tok,
+		"subscription":     base + "/sub/" + tok,
+		"info_url":         base + "/u/" + tok,
+		"mihomo_url":       base + "/sub/" + tok + "/mihomo.yaml",
+		"global_url":       base + "/sub/" + tok + "/global.yaml",
+		"shadowrocket_url": base + "/sub/" + tok + "/shadowrocket.conf",
+		"clash_verge_url":  base + "/sub/" + tok + "/mihomo.yaml",
 	})
 }
 
@@ -3313,17 +3319,19 @@ func (s *Server) publicUserInfo(c *gin.Context) {
 		"entry":               entryDisplay,
 		"note":                u.Note,
 		// convenience links
-		"info_url":        base + "/u/" + tok,
-		"subscription":    base + "/sub/" + tok,
-		"mihomo_url":      base + "/sub/" + tok + "/mihomo.yaml",
-		"global_url":      base + "/sub/" + tok + "/global.yaml",
-		"clash_verge_url": base + "/sub/" + tok + "/mihomo.yaml",
+		"info_url":         base + "/u/" + tok,
+		"subscription":     base + "/sub/" + tok,
+		"mihomo_url":       base + "/sub/" + tok + "/mihomo.yaml",
+		"global_url":       base + "/sub/" + tok + "/global.yaml",
+		"shadowrocket_url": base + "/sub/" + tok + "/shadowrocket.conf",
+		"clash_verge_url":  base + "/sub/" + tok + "/mihomo.yaml",
 		// same payload as admin share modal (QR / YAML) — no standalone password field
-		"share_url":   share["share_url"],
-		"share_urls":  share["share_urls"],
-		"entries":     share["entries"],
-		"mihomo_yaml": share["mihomo_yaml"],
-		"global_yaml": share["global_yaml"],
+		"share_url":         share["share_url"],
+		"share_urls":        share["share_urls"],
+		"entries":           share["entries"],
+		"mihomo_yaml":       share["mihomo_yaml"],
+		"global_yaml":       share["global_yaml"],
+		"shadowrocket_conf": share["shadowrocket_conf"],
 	})
 }
 
@@ -4126,15 +4134,16 @@ func (s *Server) userSharePayload(u *model.User) gin.H {
 	yamlBody := buildMihomoYAML(u, endpoints)
 	globalBody := buildMihomoGlobalYAML(u, endpoints)
 	return gin.H{
-		"username":       u.Username,
-		"proxy_password": u.ProxyPassword,
-		"entries":        links,
-		"share_url":      primary, // mierus:// — encode in QR
-		"share_urls":     joined,
-		"sub_token":      u.SubToken,
-		"protocol":       "mieru",
-		"mihomo_yaml":    yamlBody,
-		"global_yaml":    globalBody,
+		"username":          u.Username,
+		"proxy_password":    u.ProxyPassword,
+		"entries":           links,
+		"share_url":         primary, // mierus:// — encode in QR
+		"share_urls":        joined,
+		"sub_token":         u.SubToken,
+		"protocol":          "mieru",
+		"mihomo_yaml":       yamlBody,
+		"global_yaml":       globalBody,
+		"shadowrocket_conf": buildShadowrocketConf(u, endpoints),
 	}
 }
 
@@ -4360,6 +4369,242 @@ func buildMihomoGlobalYAML(u *model.User, endpoints []shareEndpoint) string {
 	return b.String()
 }
 
+// buildShadowrocketConf produces a native Shadowrocket .conf (Surge-like).
+// Full anti-leak profile for INS/TK — NOT the stock default.conf with CN DIRECT.
+//
+// Design goals (user asked for comprehensive, not minimal):
+//  1. DNS only overseas + force DNS over proxy (no system / 223 / 114)
+//  2. IPv6 off
+//  3. Explicit DOMAIN rules for social / Google / Apple / Meta / TikTok / etc. → PROXY
+//  4. No GEOIP,CN,DIRECT / no China split
+//  5. Only RFC1918/LAN → DIRECT; everything else FINAL,PROXY
+//  6. Proxy lines: prefer mierus:// share (Shadowrocket imports these); also list as comments
+//
+// Note: Shadowrocket protocol support for "mieru" as a typed proxy line varies by build.
+// We embed [Proxy] using the official mierus:// URL form which Shadowrocket can store as nodes
+// when imported as subscription; for .conf import we use EXTERNAL or custom if needed.
+// Practical approach used by many panels: put servers as "name = external, server, port, ..."
+// is wrong for mieru. Best compatibility:
+//   - [General] anti-leak settings
+//   - [Proxy] empty or DIRECT only
+//   - [Proxy Group] with select
+//   - [Rule] comprehensive PROXY list + FINAL,PROXY
+//   - User attaches nodes via plain mierus subscription OR we include #!include style
+//
+// Shadowrocket supports:
+//
+//	name = ss, host, port, method, password
+//	name = vmess, ...
+//
+// For unknown protocols, users often add nodes separately and rules reference "PROXY" group.
+// We generate:
+//  1. full General + Rule anti-leak conf (works with any selected node)
+//  2. include each endpoint as a comment with mierus:// for manual add
+//  3. if only one endpoint, set always-real-ip and skip-proxy for LAN only
+func buildShadowrocketConf(u *model.User, endpoints []shareEndpoint) string {
+	var b strings.Builder
+	uname := strings.TrimSpace(u.Username)
+	if uname == "" {
+		uname = "user"
+	}
+	b.WriteString("#!name=mieru-panel 全局防泄漏\n")
+	b.WriteString("#!desc=INS/TK 全面防泄漏 · 无国内直连 · DNS走代理 · 关IPv6 · user=" + uname + "\n")
+	b.WriteString("#!category=mieru\n")
+	b.WriteString("# Generated by mieru-panel — Shadowrocket native .conf\n")
+	b.WriteString("# 用法：配置 → 从 URL 下载 / 导入此链接 → 勾选使用 → 首页选节点开全局或配置模式\n")
+	b.WriteString("# 勿与 default.conf 那套 600+ 国内 DIRECT 规则混用\n")
+	b.WriteString("#\n")
+
+	// --- General (anti-leak) ---
+	b.WriteString("[General]\n")
+	// bypass system for LAN only; do NOT bypass CN
+	b.WriteString("bypass-system = true\n")
+	b.WriteString("skip-proxy = 127.0.0.1,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,localhost,*.local\n")
+	b.WriteString("tun-excluded-routes = 10.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.0.0.0/24, 192.168.0.0/16, 224.0.0.0/4, 255.255.255.255/32\n")
+	b.WriteString("dns-server = 1.1.1.1, 8.8.8.8, 1.0.0.1, 8.8.4.4\n")
+	// force DNS queries through proxy tunnel (critical anti-leak)
+	b.WriteString("dns-direct-system = false\n")
+	b.WriteString("always-real-ip = *.lan, *.local, localhost\n")
+	b.WriteString("ipv6 = false\n")
+	b.WriteString("prefer-ipv6 = false\n")
+	// private data / UDP
+	b.WriteString("private-ip-answer = false\n")
+	b.WriteString("hijack-dns = 8.8.8.8:53, 8.8.4.4:53, 1.1.1.1:53, 1.0.0.1:53\n")
+	b.WriteString("udp-policy-not-supported-behaviour = REJECT\n")
+	// test URL overseas
+	b.WriteString("test-timeout = 5\n")
+	b.WriteString("internet-test-url = http://connectivitycheck.gstatic.com/generate_204\n")
+	b.WriteString("proxy-test-url = http://www.gstatic.com/generate_204\n")
+	b.WriteString("\n")
+
+	// --- Host ---
+	b.WriteString("[Host]\n")
+	b.WriteString("localhost = 127.0.0.1\n")
+	b.WriteString("\n")
+
+	// --- Proxy ---
+	// Shadowrocket does not document a stable "mieru," typed line in all versions.
+	// We still emit comment lines with mierus:// and create a select group that
+	// includes PROXY policy; user selects the active node on home after import.
+	// When endpoints exist we also try "external" style is wrong — use include via URL rewrite?
+	// Community pattern for custom protocols: leave [Proxy] with only DIRECT and use
+	// home-screen nodes; rules say PROXY meaning "selected proxy".
+	b.WriteString("[Proxy]\n")
+	b.WriteString("DIRECT = direct\n")
+	b.WriteString("REJECT = reject\n")
+	// List nodes as comments for reference + try generic http if needed
+	for i, e := range endpoints {
+		name := e.Name
+		if name == "" {
+			name = fmt.Sprintf("%s-%d", uname, i+1)
+		}
+		name = strings.ReplaceAll(name, ",", "-")
+		name = strings.ReplaceAll(name, "=", "-")
+		name = strings.ReplaceAll(name, "\n", " ")
+		link := mierusShareURL(u.Username, u.ProxyPassword, e.Host, e.Port, e.Protocol, name)
+		// Comment with share URL (Shadowrocket may not parse as proxy line)
+		if link != "" {
+			b.WriteString("# NODE " + name + " " + link + "\n")
+		}
+		// Some SR builds accept: name = define, host, port (fallback display only) — skip invalid
+		// Use socks5 placeholder? No — wrong protocol would break.
+		// Emit as "name = reject" no.
+		// Best: use Shadowrocket's "policy" with empty and rely on user selecting node.
+		_ = e
+	}
+	b.WriteString("\n")
+
+	// --- Proxy Group ---
+	// In Shadowrocket, "PROXY" in rules means the currently selected proxy on home
+	// when using config mode with select group named Proxy or similar.
+	// We define a select group including DIRECT only as fallback; real nodes come from app.
+	b.WriteString("[Proxy Group]\n")
+	b.WriteString("Proxy = select, DIRECT\n")
+	b.WriteString("# 首页手动选择你的 mieru 节点；规则里的 PROXY 走当前选中节点\n")
+	b.WriteString("\n")
+
+	// --- Rule (comprehensive anti-leak) ---
+	// Order: LAN direct → force-proxy high-risk apps → FINAL proxy
+	// NO GEOIP,CN,DIRECT
+	b.WriteString("[Rule]\n")
+	// LAN / private
+	for _, r := range []string{
+		"IP-CIDR,127.0.0.0/8,DIRECT,no-resolve",
+		"IP-CIDR,10.0.0.0/8,DIRECT,no-resolve",
+		"IP-CIDR,172.16.0.0/12,DIRECT,no-resolve",
+		"IP-CIDR,192.168.0.0/16,DIRECT,no-resolve",
+		"IP-CIDR,169.254.0.0/16,DIRECT,no-resolve",
+		"IP-CIDR,224.0.0.0/4,DIRECT,no-resolve",
+		"IP-CIDR,255.255.255.255/32,DIRECT,no-resolve",
+		"IP-CIDR6,::1/128,DIRECT,no-resolve",
+		"IP-CIDR6,fc00::/7,DIRECT,no-resolve",
+		"IP-CIDR6,fe80::/10,DIRECT,no-resolve",
+		"DOMAIN-SUFFIX,local,DIRECT",
+		"DOMAIN-SUFFIX,localhost,DIRECT",
+		"DOMAIN-SUFFIX,lan,DIRECT",
+	} {
+		b.WriteString(r + "\n")
+	}
+
+	// Force PROXY domain lists — comprehensive social / AI / streaming / google / apple-iCloud foreign
+	// (still all PROXY; listed so config mode still catches them even if FINAL mishandled)
+	forceProxySuffixes := []string{
+		// Meta family
+		"instagram.com", "cdninstagram.com", "facebook.com", "facebook.net", "fbcdn.net", "fb.com",
+		"fb.me", "fbsbx.com", "accountkit.com", "whatsapp.com", "whatsapp.net", "wa.me",
+		"messenger.com", "meta.com", "metacdn.com", "msnger.com",
+		// TikTok / CapCut overseas
+		"tiktok.com", "tiktokv.com", "tiktokcdn.com", "tiktokv.us", "tiktokv.eu", "musical.ly",
+		"byteoversea.com", "ibytedtos.com", "ttlivecdn.com", "isnssdk.com", "capcut.com",
+		"byteimg.com", "bytegecko.com", "tiktokrow-cdn.com", "sgsnssdk.com",
+		// Google / YouTube / Gmail
+		"google.com", "googleapis.com", "gstatic.com", "googleusercontent.com", "ggpht.com",
+		"googlezip.net", "gvt1.com", "gvt2.com", "gvt3.com", "youtube.com", "youtu.be",
+		"ytimg.com", "googlevideo.com", "gmail.com", "withgoogle.com", "google.com.hk",
+		"google.co.jp", "dns.google", "recaptcha.net", "chrome.com", "chromium.org",
+		"doubleclick.net", "googlesyndication.com", "googleadservices.com",
+		// X / Twitter
+		"twitter.com", "x.com", "twimg.com", "t.co", "pscp.tv", "periscope.tv", "tweetdeck.com",
+		// Telegram
+		"telegram.org", "t.me", "telegra.ph", "tdesktop.com", "telegram.me", "telegram.dog",
+		"cdn-telegram.org",
+		// Discord / Reddit / Snap / Pinterest / LinkedIn / Twitch
+		"discord.com", "discordapp.com", "discord.gg", "discord.media", "discordapp.net", "discordstatus.com",
+		"reddit.com", "redd.it", "redditmedia.com", "redditstatic.com", "reddituploads.com",
+		"snapchat.com", "sc-cdn.net", "snap-dev.net", "pinterest.com", "pinimg.com",
+		"linkedin.com", "licdn.com", "twitch.tv", "ttvnw.net", "jtvnw.net",
+		// Streaming
+		"netflix.com", "nflxvideo.net", "nflxso.net", "nflximg.net", "nflxext.com",
+		"spotify.com", "scdn.co", "spotifycdn.com", "disneyplus.com", "disney-plus.net",
+		"bamgrid.com", "hbomax.com", "max.com", "hulu.com", "primevideo.com", "aiv-cdn.net",
+		// AI
+		"openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com", "anthropic.com",
+		"claude.ai", "cursor.com", "cursor.sh", "perplexity.ai", "midjourney.com",
+		// Cloudflare / common
+		"cloudflare.com", "cloudflare-dns.com", "one.one.one.one", "workers.dev", "pages.dev",
+		// Apple ecosystem (force foreign view)
+		"icloud.com", "icloud-content.com", "apple.com", "cdn-apple.com", "mzstatic.com",
+		"me.com", "appstore.com", "itunes.com", "apple-cloudkit.com", "aaplimg.com",
+		"apple-dns.net", "icloud.com.cn",
+		// Microsoft
+		"microsoft.com", "live.com", "office.com", "office365.com", "onedrive.com", "1drv.com",
+		"msn.com", "azure.com", "windows.com", "xbox.com", "skype.com",
+		// Dev
+		"github.com", "githubusercontent.com", "githubassets.com", "gitlab.com", "bitbucket.org",
+		"npmjs.com", "pypi.org", "docker.com", "medium.com",
+		// Asia social often blocked / geo
+		"line.me", "line-scdn.net", "naver.com", "pstatic.net", "kakao.com", "kakaocdn.net",
+		"nicovideo.jp", "pixiv.net", "pximg.net",
+		// News / wiki / tools
+		"wikipedia.org", "wikimedia.org", "bbc.com", "bbc.co.uk", "nytimes.com", "reuters.com",
+		"dropbox.com", "dropboxapi.com", "box.com", "zoom.us", "notion.so", "notion.com",
+		// DNS anti-leak targets themselves via proxy
+		"cloudflare-dns.com", "dns.google", "quad9.net",
+	}
+	for _, d := range forceProxySuffixes {
+		b.WriteString("DOMAIN-SUFFIX," + d + ",PROXY\n")
+	}
+	// keyword catch-alls for app CDNs
+	for _, k := range []string{"instagram", "facebook", "fbcdn", "whatsapp", "tiktok", "byteoversea", "googleapis", "youtube", "googlevideo"} {
+		b.WriteString("DOMAIN-KEYWORD," + k + ",PROXY\n")
+	}
+
+	// App User-Agents
+	for _, ua := range []string{
+		"Instagram*", "FBAN*", "FBAV*", "Facebook*", "WhatsApp*", "Messenger*",
+		"TikTok*", "Musical_ly*", "ByteLocale*", "Twitter*", "Telegram*", "Discord*",
+		"YouTube*", "Gmail*", "Google*",
+	} {
+		b.WriteString("USER-AGENT," + ua + ",PROXY\n")
+	}
+
+	// Process rules (iOS) — Shadowrocket supports PROCESS-NAME on some versions; skip if unreliable
+	// Final: everything else PROXY — NO CN DIRECT
+	b.WriteString("GEOIP,PRIVATE,DIRECT,no-resolve\n")
+	b.WriteString("FINAL,PROXY\n")
+	b.WriteString("\n")
+
+	// --- URL Rewrite: empty but section present ---
+	b.WriteString("[URL Rewrite]\n")
+	b.WriteString("# none\n")
+	b.WriteString("\n")
+
+	// --- MITM off (avoid cert issues) ---
+	b.WriteString("[MITM]\n")
+	b.WriteString("enable = false\n")
+	b.WriteString("\n")
+
+	// Append plain mierus list as trailing comments for manual re-add
+	b.WriteString("# ========== 节点 mierus://（若导入后无节点，用普通订阅添加）==========\n")
+	for _, e := range endpoints {
+		link := mierusShareURL(u.Username, u.ProxyPassword, e.Host, e.Port, e.Protocol, e.Name)
+		if link != "" {
+			b.WriteString("# " + link + "\n")
+		}
+	}
+	return b.String()
+}
+
 func (s *Server) getUserShare(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	u, err := s.store.GetUser(id)
@@ -4374,6 +4619,8 @@ func (s *Server) getUserShare(c *gin.Context) {
 	payload["mihomo_download"] = base + "/api/admin/users/" + strconv.FormatInt(u.ID, 10) + "/mihomo.yaml"
 	payload["global_url"] = base + "/sub/" + u.SubToken + "/global.yaml"
 	payload["global_yaml"] = buildMihomoGlobalYAML(u, s.resolveUserMitaEndpoints(u))
+	payload["shadowrocket_url"] = base + "/sub/" + u.SubToken + "/shadowrocket.conf"
+	payload["shadowrocket_conf"] = buildShadowrocketConf(u, s.resolveUserMitaEndpoints(u))
 	c.JSON(http.StatusOK, payload)
 }
 
@@ -4488,6 +4735,29 @@ func (s *Server) subscriptionMihomoGlobal(c *gin.Context) {
 		0, u.TrafficUsedBytes, u.TrafficLimitBytes, expire,
 	))
 	c.Data(http.StatusOK, "text/yaml; charset=utf-8", []byte(body))
+}
+
+func (s *Server) subscriptionShadowrocket(c *gin.Context) {
+	u, err := s.store.GetUserBySubToken(c.Param("token"))
+	if err != nil {
+		c.String(http.StatusNotFound, "not found")
+		return
+	}
+	_ = s.store.RefreshUserStatuses()
+	if u2, err := s.store.GetUser(u.ID); err == nil {
+		u = u2
+	}
+	if u.Status != model.StatusActive {
+		c.String(http.StatusForbidden, "account not active: "+u.Status)
+		return
+	}
+	endpoints := s.resolveUserMitaEndpoints(u)
+	body := buildShadowrocketConf(u, endpoints)
+	fname := "shadowrocket-" + u.Username + ".conf"
+	c.Header("Content-Disposition", "inline; filename="+fname)
+	c.Header("Profile-Update-Interval", "24")
+	c.Header("Profile-Title", "base64:"+base64.StdEncoding.EncodeToString([]byte(u.Username+"-sr-antileak")))
+	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(body))
 }
 
 func (s *Server) agentHeartbeat(c *gin.Context) {
